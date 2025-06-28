@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Development API Service
+  api-dev:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-api-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+      - ./storage:/app/storage
+      - ./temp:/app/temp
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=development
+      - DEBUG=true
+    depends_on:
+      - redis-dev
+    networks:
+      - dev-network
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Redis สำหรับ development
+  redis-dev:
+    image: redis:7-alpine
+    container_name: transcription-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    networks:
+      - dev-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # PostgreSQL สำหรับ development (optional)
+  postgres-dev:
+    image: postgres:15-alpine
+    container_name: transcription-db-dev
+    environment:
+      POSTGRES_DB: transcription_dev
+      POSTGRES_USER: transcription_user
+      POSTGRES_PASSWORD: transcription_password
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - dev-network
+    restart: unless-stopped
+    profiles:
+      - db
+
+volumes:
+  redis_dev_data:
+  postgres_dev_data:
+
+networks:
+  dev-network:
+    driver: bridge 
