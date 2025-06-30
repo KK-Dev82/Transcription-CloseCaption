@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     container_name: transcription-api-dev
     ports:
-      - "8000:8000"
+      - "8001:8001"
     volumes:
       - .:/app
       - ./uploads:/app/uploads
@@ -24,7 +24,7 @@ services:
     networks:
       - dev-network
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
   # Redis สำหรับ development
   redis-dev:

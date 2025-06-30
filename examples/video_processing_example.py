@@ -1,37 +1,36 @@
 #!/usr/bin/env python3
 """
-ตัวอย่างการใช้งาน Video Processing API
+ตัวอย่างการใช้งาน Video Processing กับ RabbitMQ
 """
 
+import asyncio
+import time
 import requests
 import json
-import time
-import os
 from pathlib import Path
 
-# ตั้งค่า API URL
-BASE_URL = "http://localhost:8000"
-VIDEO_API_URL = f"{BASE_URL}/video"
+# API Base URL
+API_BASE_URL = "http://localhost:8001"
 
-def upload_video(file_path: str) -> dict:
+def upload_video(file_path: str) -> str:
     """อัปโหลดไฟล์วิดีโอ"""
     print(f"กำลังอัปโหลดไฟล์: {file_path}")
     
     with open(file_path, 'rb') as f:
-        files = {'file': (os.path.basename(file_path), f, 'video/mp4')}
-        response = requests.post(f"{VIDEO_API_URL}/upload", files=files)
+        files = {'file': (Path(file_path).name, f, 'video/mp4')}
+        response = requests.post(f"{API_BASE_URL}/upload", files=files)
     
     if response.status_code == 200:
         result = response.json()
         print(f"อัปโหลดสำเร็จ: {result['file_path']}")
-        return result
+        return result['file_path']
     else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
+        print(f"เกิดข้อผิดพลาดในการอัปโหลด: {response.text}")
         return None
 
 def trim_video(input_file: str, start_time: float, end_time: float) -> str:
     """ตัดวิดีโอ"""
-    print(f"กำลังตัดวิดีโอ: {start_time}s - {end_time}s")
+    print(f"ส่งคำขอตัดวิดีโอ: {start_time}s - {end_time}s")
     
     data = {
         'input_file': input_file,
@@ -41,11 +40,31 @@ def trim_video(input_file: str, start_time: float, end_time: float) -> str:
         'quality': 'medium'
     }
     
-    response = requests.post(f"{VIDEO_API_URL}/trim", data=data)
+    response = requests.post(f"{API_BASE_URL}/video/trim", data=data)
     
     if response.status_code == 200:
         result = response.json()
-        print(f"เริ่มการตัดวิดีโอ: {result['task_id']}")
+        print(f"ส่งคำขอสำเร็จ: {result['task_id']}")
+        return result['task_id']
+    else:
+        print(f"เกิดข้อผิดพลาด: {response.text}")
+        return None
+
+def merge_videos(input_files: list) -> str:
+    """รวมวิดีโอ"""
+    print(f"ส่งคำขอรวมวิดีโอ: {len(input_files)} ไฟล์")
+    
+    data = {
+        'input_files': input_files,
+        'output_format': 'mp4',
+        'quality': 'high'
+    }
+    
+    response = requests.post(f"{API_BASE_URL}/video/merge", data=data)
+    
+    if response.status_code == 200:
+        result = response.json()
+        print(f"ส่งคำขอสำเร็จ: {result['task_id']}")
         return result['task_id']
     else:
         print(f"เกิดข้อผิดพลาด: {response.text}")
@@ -53,7 +72,7 @@ def trim_video(input_file: str, start_time: float, end_time: float) -> str:
 
 def convert_format(input_file: str, output_format: str) -> str:
     """แปลงรูปแบบไฟล์"""
-    print(f"กำลังแปลงรูปแบบเป็น: {output_format}")
+    print(f"ส่งคำขอแปลงรูปแบบ: {output_format}")
     
     data = {
         'input_file': input_file,
@@ -61,11 +80,11 @@ def convert_format(input_file: str, output_format: str) -> str:
         'quality': 'medium'
     }
     
-    response = requests.post(f"{VIDEO_API_URL}/convert", data=data)
+    response = requests.post(f"{API_BASE_URL}/video/convert", data=data)
     
     if response.status_code == 200:
         result = response.json()
-        print(f"เริ่มการแปลงรูปแบบ: {result['task_id']}")
+        print(f"ส่งคำขอสำเร็จ: {result['task_id']}")
         return result['task_id']
     else:
         print(f"เกิดข้อผิดพลาด: {response.text}")
@@ -73,196 +92,132 @@ def convert_format(input_file: str, output_format: str) -> str:
 
 def resize_video(input_file: str, width: int, height: int) -> str:
     """ปรับขนาดวิดีโอ"""
-    print(f"กำลังปรับขนาดเป็น: {width}x{height}")
+    print(f"ส่งคำขอปรับขนาด: {width}x{height}")
     
     data = {
         'input_file': input_file,
         'width': width,
         'height': height,
         'output_format': 'mp4',
-        'quality': 'medium'
+        'quality': 'high'
     }
     
-    response = requests.post(f"{VIDEO_API_URL}/resize", data=data)
+    response = requests.post(f"{API_BASE_URL}/video/resize", data=data)
     
     if response.status_code == 200:
         result = response.json()
-        print(f"เริ่มการปรับขนาด: {result['task_id']}")
-        return result['task_id']
-    else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
-        return None
-
-def merge_videos(input_files: list) -> str:
-    """รวมวิดีโอหลายไฟล์"""
-    print(f"กำลังรวมวิดีโอ {len(input_files)} ไฟล์")
-    
-    data = {
-        'input_files': input_files,
-        'output_format': 'mp4',
-        'quality': 'medium'
-    }
-    
-    response = requests.post(f"{VIDEO_API_URL}/merge", data=data)
-    
-    if response.status_code == 200:
-        result = response.json()
-        print(f"เริ่มการรวมวิดีโอ: {result['task_id']}")
-        return result['task_id']
-    else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
-        return None
-
-def batch_process(operations: list) -> str:
-    """ประมวลผลแบบ batch"""
-    print(f"กำลังประมวลผลแบบ batch: {len(operations)} operations")
-    
-    response = requests.post(f"{VIDEO_API_URL}/batch", json=operations)
-    
-    if response.status_code == 200:
-        result = response.json()
-        print(f"เริ่มการประมวลผลแบบ batch: {result['task_id']}")
+        print(f"ส่งคำขอสำเร็จ: {result['task_id']}")
         return result['task_id']
     else:
         print(f"เกิดข้อผิดพลาด: {response.text}")
         return None
 
 def get_task_status(task_id: str) -> dict:
-    """ดึงสถานะของ task"""
-    response = requests.get(f"{VIDEO_API_URL}/status/{task_id}")
+    """ตรวจสอบสถานะ task"""
+    response = requests.get(f"{API_BASE_URL}/video/status/{task_id}")
     
     if response.status_code == 200:
         return response.json()
     else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
+        print(f"เกิดข้อผิดพลาดในการตรวจสอบสถานะ: {response.text}")
         return None
 
-def wait_for_completion(task_id: str, timeout: int = 300) -> bool:
+def wait_for_task_completion(task_id: str, timeout: int = 300) -> dict:
     """รอให้ task เสร็จสิ้น"""
-    print(f"รอให้ task {task_id} เสร็จสิ้น...")
+    print(f"รอให้ task เสร็จสิ้น: {task_id}")
     
     start_time = time.time()
     while time.time() - start_time < timeout:
         status = get_task_status(task_id)
+        if status:
+            task_status = status.get('status')
+            print(f"สถานะ: {task_status}")
+            
+            if task_status == 'completed':
+                print(f"Task เสร็จสิ้น: {status.get('output_file')}")
+                return status
+            elif task_status == 'failed':
+                print(f"Task ล้มเหลว: {status.get('error_message')}")
+                return status
         
-        if not status:
-            return False
-        
-        print(f"สถานะ: {status['status']}")
-        
-        if status['status'] == 'completed':
-            print("เสร็จสิ้น!")
-            return True
-        elif status['status'] == 'failed':
-            print(f"ล้มเหลว: {status.get('error_message', 'Unknown error')}")
-            return False
-        
-        time.sleep(5)
+        time.sleep(5)  # รอ 5 วินาที
     
-    print("หมดเวลา")
-    return False
+    print(f"หมดเวลาในการรอ task: {task_id}")
+    return None
 
-def download_result(task_id: str, output_path: str):
-    """ดาวน์โหลดผลลัพธ์"""
-    print(f"กำลังดาวน์โหลดผลลัพธ์: {output_path}")
-    
-    response = requests.get(f"{VIDEO_API_URL}/download/{task_id}")
+def get_queue_info():
+    """ดึงข้อมูล queue"""
+    response = requests.get(f"{API_BASE_URL}/queue/info")
     
     if response.status_code == 200:
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
-        print(f"ดาวน์โหลดสำเร็จ: {output_path}")
-        return True
+        result = response.json()
+        print("ข้อมูล Queue:")
+        for queue_name, info in result['queues'].items():
+            print(f"  {queue_name}: {info['message_count']} messages, {info['consumer_count']} consumers")
+        return result
     else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
-        return False
-
-def get_video_info(file_path: str) -> dict:
-    """ดึงข้อมูลวิดีโอ"""
-    response = requests.get(f"{VIDEO_API_URL}/info/{file_path}")
-    
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"เกิดข้อผิดพลาด: {response.text}")
+        print(f"เกิดข้อผิดพลาดในการดึงข้อมูล queue: {response.text}")
         return None
 
 def main():
-    """ตัวอย่างการใช้งานหลัก"""
-    print("=== ตัวอย่างการใช้งาน Video Processing API ===\n")
+    """ตัวอย่างการใช้งาน"""
+    print("=== ตัวอย่างการใช้งาน Video Processing กับ RabbitMQ ===\n")
     
-    # 1. อัปโหลดไฟล์วิดีโอ
-    video_file = "sample_video.mp4"  # เปลี่ยนเป็นไฟล์ที่มีอยู่จริง
-    if not os.path.exists(video_file):
-        print(f"ไม่พบไฟล์: {video_file}")
-        print("กรุณาเตรียมไฟล์วิดีโอสำหรับทดสอบ")
-        return
+    # ตรวจสอบสถานะ queue
+    print("1. ตรวจสอบสถานะ Queue")
+    get_queue_info()
+    print()
     
-    upload_result = upload_video(video_file)
-    if not upload_result:
-        return
+    # สมมติว่ามีไฟล์วิดีโออยู่แล้ว
+    video_file = "uploads/sample_video.mp4"
     
-    input_file = upload_result['file_path']
-    
-    # 2. ดึงข้อมูลวิดีโอ
-    print("\n--- ข้อมูลวิดีโอ ---")
-    video_info = get_video_info(input_file)
-    if video_info:
-        print(json.dumps(video_info, indent=2, ensure_ascii=False))
-    
-    # 3. ตัดวิดีโอ
-    print("\n--- ตัดวิดีโอ ---")
-    trim_task_id = trim_video(input_file, 10.0, 30.0)  # ตัดช่วง 10-30 วินาที
+    # ตัวอย่าง 1: ตัดวิดีโอ
+    print("2. ตัวอย่างการตัดวิดีโอ")
+    trim_task_id = trim_video(video_file, 10.0, 30.0)
     if trim_task_id:
-        if wait_for_completion(trim_task_id):
-            download_result(trim_task_id, "trimmed_video.mp4")
+        result = wait_for_task_completion(trim_task_id)
+        if result and result.get('status') == 'completed':
+            trimmed_file = result.get('output_file')
+            print(f"ไฟล์ที่ตัดแล้ว: {trimmed_file}")
+    print()
     
-    # 4. แปลงรูปแบบ
-    print("\n--- แปลงรูปแบบ ---")
-    convert_task_id = convert_format(input_file, "avi")
+    # ตัวอย่าง 2: แปลงรูปแบบ
+    print("3. ตัวอย่างการแปลงรูปแบบ")
+    convert_task_id = convert_format(video_file, "avi")
     if convert_task_id:
-        if wait_for_completion(convert_task_id):
-            download_result(convert_task_id, "converted_video.avi")
+        result = wait_for_task_completion(convert_task_id)
+        if result and result.get('status') == 'completed':
+            converted_file = result.get('output_file')
+            print(f"ไฟล์ที่แปลงแล้ว: {converted_file}")
+    print()
     
-    # 5. ปรับขนาด
-    print("\n--- ปรับขนาด ---")
-    resize_task_id = resize_video(input_file, 640, 480)
+    # ตัวอย่าง 3: ปรับขนาดวิดีโอ
+    print("4. ตัวอย่างการปรับขนาดวิดีโอ")
+    resize_task_id = resize_video(video_file, 1280, 720)
     if resize_task_id:
-        if wait_for_completion(resize_task_id):
-            download_result(resize_task_id, "resized_video.mp4")
+        result = wait_for_task_completion(resize_task_id)
+        if result and result.get('status') == 'completed':
+            resized_file = result.get('output_file')
+            print(f"ไฟล์ที่ปรับขนาดแล้ว: {resized_file}")
+    print()
     
-    # 6. Batch processing
-    print("\n--- Batch Processing ---")
-    operations = [
-        {
-            "type": "trim",
-            "input_file": input_file,
-            "start_time": 0.0,
-            "end_time": 15.0,
-            "output_format": "mp4",
-            "quality": "medium"
-        },
-        {
-            "type": "convert",
-            "input_file": input_file,
-            "output_format": "mov",
-            "quality": "medium"
-        }
-    ]
+    # ตัวอย่าง 4: รวมวิดีโอ (สมมติว่ามีไฟล์หลายไฟล์)
+    print("5. ตัวอย่างการรวมวิดีโอ")
+    video_files = ["uploads/video1.mp4", "uploads/video2.mp4"]
+    merge_task_id = merge_videos(video_files)
+    if merge_task_id:
+        result = wait_for_task_completion(merge_task_id)
+        if result and result.get('status') == 'completed':
+            merged_file = result.get('output_file')
+            print(f"ไฟล์ที่รวมแล้ว: {merged_file}")
+    print()
     
-    batch_task_id = batch_process(operations)
-    if batch_task_id:
-        if wait_for_completion(batch_task_id):
-            print("Batch processing เสร็จสิ้น")
+    # ตรวจสอบสถานะ queue อีกครั้ง
+    print("6. ตรวจสอบสถานะ Queue หลังการประมวลผล")
+    get_queue_info()
+    print()
     
-    # 7. ดึงรายการ tasks ทั้งหมด
-    print("\n--- รายการ Tasks ทั้งหมด ---")
-    response = requests.get(f"{VIDEO_API_URL}/tasks")
-    if response.status_code == 200:
-        tasks = response.json()
-        print(f"จำนวน tasks ทั้งหมด: {tasks['total']}")
-        for task in tasks['tasks'][:5]:  # แสดง 5 tasks ล่าสุด
-            print(f"- {task['task_id']}: {task['type']} ({task['status']})")
+    print("=== เสร็จสิ้นการทดสอบ ===")
 
 if __name__ == "__main__":
     main() 

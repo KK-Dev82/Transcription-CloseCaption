@@ -6,7 +6,7 @@ services:
     build: .
     container_name: transcription-api
     ports:
-      - "8000:8000"
+      - "8001:8001"
     volumes:
       - ./uploads:/app/uploads
       - ./storage:/app/storage
@@ -15,17 +15,69 @@ services:
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=production
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
     depends_on:
       - redis
+      - rabbitmq
     networks:
       - app-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Video Processing Worker
+  video-worker:
+    build: .
+    container_name: video-worker
+    command: python -m app.workers.video_worker
+    volumes:
+      - ./uploads:/app/uploads
+      - ./storage:/app/storage
+      - ./temp:/app/temp
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  # RabbitMQ สำหรับ message queue
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: transcription-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # Redis สำหรับ caching และ queue
   redis:
@@ -79,6 +131,7 @@ services:
 volumes:
   redis_data:
   postgres_data:
+  rabbitmq_data:
 
 networks:
   app-network:

@@ -1,6 +1,6 @@
 # 🎬 Transcription & Close Caption Service
 
-บริการ API สำหรับการแปลงเสียงเป็นข้อความและสร้าง close caption แบบ real-time พร้อมระบบ Video Processing ที่ครบครัน
+บริการ API สำหรับการแปลงเสียงเป็นข้อความและสร้าง close caption แบบ real-time พร้อมระบบ Video Processing ที่ครบครันด้วย RabbitMQ
 
 ## ✨ Features
 
@@ -20,7 +20,9 @@
 - **Quality Control**: ตั้งค่าคุณภาพ (High, Medium, Low)
 
 ### 🔧 Technical Features
-- **Async Processing**: ประมวลผลแบบ asynchronous
+- **Async Processing**: ประมวลผลแบบ asynchronous ด้วย RabbitMQ
+- **Message Queue**: ใช้ RabbitMQ สำหรับจัดการ video processing tasks
+- **Video Worker**: Worker process สำหรับประมวลผลวิดีโอ
 - **WebSocket Support**: Real-time status updates
 - **File Management**: จัดการไฟล์อัปโหลดและผลลัพธ์
 - **JSON Storage**: เก็บข้อมูลในรูปแบบ JSON
@@ -31,21 +33,39 @@
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   FastAPI       │    │   FFmpeg        │
-│   (React/Vue)   │◄──►│   Backend       │◄──►│   Processing    │
+│   Frontend      │    │   FastAPI       │    │   RabbitMQ      │
+│   (React/Vue)   │◄──►│   Backend       │◄──►│   Message Queue │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-                              │
-                              ▼
-                       ┌─────────────────┐
-                       │   Whisper.cpp   │
-                       │   Transcription │
-                       └─────────────────┘
-                              │
-                              ▼
-                       ┌─────────────────┐
-                       │   JSON Storage  │
-                       │   (File-based)  │
-                       └─────────────────┘
+                              │                        │
+                              ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │   Whisper.cpp   │    │   Video Worker  │
+                       │   Transcription │    │   (FFmpeg)      │
+                       └─────────────────┘    └─────────────────┘
+                              │                        │
+                              ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │   JSON Storage  │    │   Processed     │
+                       │   (File-based)  │    │   Video Files   │
+                       └─────────────────┘    └─────────────────┘
+```
+
+### Queue Architecture
+```
+API Service → RabbitMQ Queues → Video Workers
+     │              │              │
+     │              ▼              ▼
+     │        ┌─────────────┐  ┌─────────────┐
+     │        │ Trim Queue  │  │ Worker 1    │
+     │        ├─────────────┤  ├─────────────┤
+     │        │ Merge Queue │  │ Worker 2    │
+     │        ├─────────────┤  ├─────────────┤
+     │        │Convert Queue│  │ Worker N    │
+     │        ├─────────────┤  └─────────────┘
+     │        │Resize Queue │
+     │        └─────────────┘
+     ▼
+JSON Storage ← Task Status Updates
 ```
 
 ## 📦 Installation
@@ -53,6 +73,7 @@
 ### Prerequisites
 - Python 3.11+
 - FFmpeg
+- RabbitMQ
 - Redis (optional)
 
 ### 1. Clone Repository
@@ -79,7 +100,21 @@ brew install ffmpeg
 # ดาวน์โหลดจาก https://ffmpeg.org/download.html
 ```
 
-### 4. Create Directories
+### 4. Install RabbitMQ
+```bash
+# Ubuntu/Debian
+sudo apt-get install rabbitmq-server
+
+# macOS
+brew install rabbitmq
+
+# เริ่มต้น RabbitMQ
+sudo systemctl start rabbitmq-server
+# หรือ
+brew services start rabbitmq
+```
+
+### 5. Create Directories
 ```bash
 mkdir -p uploads temp storage models
 ```
@@ -88,29 +123,34 @@ mkdir -p uploads temp storage models
 
 ### Development Mode
 ```bash
-# รันด้วย uvicorn
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# รัน API Service
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 
-# หรือรันด้วย Python
-python main.py
+# รัน Video Worker (ใน terminal อื่น)
+python run_worker.py
+
+# หรือรันหลาย workers
+python run_worker.py &
+python run_worker.py &
 ```
 
-### Docker Mode
+### Docker Mode (แนะนำ)
 ```bash
-# Development
-docker-compose -f docker-compose.dev.yml up --build
-
-# Production
+# รันระบบทั้งหมด (API + RabbitMQ + Workers)
 docker-compose up --build
+
+# ดู logs
+docker-compose logs -f video-worker
+docker-compose logs -f rabbitmq
 ```
 
-### Access API Documentation
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+### Access Services
+- API Documentation: http://localhost:8001/docs
+- RabbitMQ Management: http://localhost:15672 (admin/admin123)
 
 ## 📚 API Usage
 
-### Video Processing
+### Video Processing with RabbitMQ
 
 #### 1. อัปโหลดไฟล์วิดีโอ
 ```python
@@ -119,13 +159,13 @@ import requests
 # อัปโหลดไฟล์
 with open('video.mp4', 'rb') as f:
     files = {'file': ('video.mp4', f, 'video/mp4')}
-    response = requests.post('http://localhost:8000/video/upload', files=files)
+    response = requests.post('http://localhost:8001/upload', files=files)
     
 result = response.json()
 file_path = result['file_path']
 ```
 
-#### 2. ตัดวิดีโอ
+#### 2. ตัดวิดีโอ (ส่งไปยัง RabbitMQ)
 ```python
 # ตัดวิดีโอช่วง 10-30 วินาที
 data = {
@@ -136,353 +176,190 @@ data = {
     'quality': 'medium'
 }
 
-response = requests.post('http://localhost:8000/video/trim', data=data)
+response = requests.post('http://localhost:8001/video/trim', data=data)
 task_id = response.json()['task_id']
+print(f"Task ID: {task_id}")  # ส่งไปยัง RabbitMQ queue
 ```
 
-#### 3. แปลงรูปแบบ
-```python
-# แปลงเป็น AVI
-data = {
-    'input_file': file_path,
-    'output_format': 'avi',
-    'quality': 'high'
-}
-
-response = requests.post('http://localhost:8000/video/convert', data=data)
-task_id = response.json()['task_id']
-```
-
-#### 4. ปรับขนาด
-```python
-# ปรับเป็น 640x480
-data = {
-    'input_file': file_path,
-    'width': 640,
-    'height': 480,
-    'output_format': 'mp4',
-    'quality': 'medium'
-}
-
-response = requests.post('http://localhost:8000/video/resize', data=data)
-task_id = response.json()['task_id']
-```
-
-#### 5. Batch Processing
-```python
-operations = [
-    {
-        "type": "trim",
-        "input_file": file_path,
-        "start_time": 0.0,
-        "end_time": 15.0,
-        "output_format": "mp4"
-    },
-    {
-        "type": "convert",
-        "input_file": file_path,
-        "output_format": "mov"
-    }
-]
-
-response = requests.post('http://localhost:8000/video/batch', json=operations)
-task_id = response.json()['task_id']
-```
-
-#### 6. ตรวจสอบสถานะ
+#### 3. ตรวจสอบสถานะ
 ```python
 # ตรวจสอบสถานะ task
-response = requests.get(f'http://localhost:8000/video/status/{task_id}')
+response = requests.get(f'http://localhost:8001/video/status/{task_id}')
 status = response.json()
 print(f"สถานะ: {status['status']}")
+
+# รอให้เสร็จสิ้น
+while status['status'] == 'pending':
+    time.sleep(5)
+    response = requests.get(f'http://localhost:8001/video/status/{task_id}')
+    status = response.json()
+    print(f"สถานะ: {status['status']}")
 ```
 
-#### 7. ดาวน์โหลดผลลัพธ์
+#### 4. Queue Management
 ```python
-# ดาวน์โหลดไฟล์ผลลัพธ์
-response = requests.get(f'http://localhost:8000/video/download/{task_id}')
-with open('output.mp4', 'wb') as f:
-    f.write(response.content)
+# ตรวจสอบสถานะ queue
+response = requests.get('http://localhost:8001/queue/info')
+queues = response.json()
+print("Queue Status:", queues)
+
+# ตรวจสอบสุขภาพ RabbitMQ
+response = requests.get('http://localhost:8001/queue/health')
+health = response.json()
+print("RabbitMQ Health:", health)
 ```
 
-### Transcription & Caption
+### Queue Operations
 
-#### 1. อัปโหลดไฟล์เสียง/วิดีโอ
-```python
-with open('audio.mp3', 'rb') as f:
-    files = {'file': ('audio.mp3', f, 'audio/mpeg')}
-    response = requests.post('http://localhost:8000/upload', files=files)
-    
-result = response.json()
-file_path = result['file_path']
+#### ตรวจสอบ Queue Status
+```bash
+# ผ่าน API
+curl http://localhost:8001/queue/info
+
+# ผ่าน RabbitMQ Management UI
+# เข้าไปที่ http://localhost:15672
 ```
 
-#### 2. สร้าง Transcription
-```python
-data = {
-    'file_path': file_path,
-    'language': 'th',
-    'chunk_size': 30
-}
-
-response = requests.post('http://localhost:8000/transcription/create', json=data)
-task_id = response.json()['task_id']
-```
-
-#### 3. สร้าง Caption
-```python
-data = {
-    'file_path': file_path,
-    'language': 'th',
-    'subtitle_format': 'srt'
-}
-
-response = requests.post('http://localhost:8000/caption/create', json=data)
-task_id = response.json()['task_id']
-```
-
-#### 4. ค้นหาข้อความ
-```python
-# ค้นหาใน transcription
-response = requests.get(f'http://localhost:8000/transcription/search/{task_id}?query=คำค้นหา')
-results = response.json()
-
-# ค้นหาในทุก transcription
-response = requests.get('http://localhost:8000/transcription/search?query=คำค้นหา')
-results = response.json()
+#### ลบ Messages ใน Queue
+```bash
+curl -X POST http://localhost:8001/queue/purge/video_trim_queue
 ```
 
 ## 🔧 Configuration
 
 ### Environment Variables
 ```bash
+# RabbitMQ Configuration
+RABBITMQ_HOST=localhost
+RABBITMQ_PORT=5672
+RABBITMQ_USER=admin
+RABBITMQ_PASSWORD=admin123
+
 # API Configuration
-ENVIRONMENT=development
-DEBUG=true
-HOST=0.0.0.0
-PORT=8000
-
-# File Storage
-UPLOAD_DIR=uploads
-TEMP_DIR=temp
-STORAGE_DIR=storage
-
-# Whisper Configuration
-WHISPER_MODEL=base
-WHISPER_LANGUAGE=th
-CHUNK_SIZE=30
-
-# Redis Configuration (optional)
-REDIS_URL=redis://localhost:6379
+ENVIRONMENT=production
+PYTHONPATH=/app
 ```
 
-### Quality Settings
-- **High**: CRF 18, preset slow (คุณภาพสูง, ประมวลผลช้า)
-- **Medium**: CRF 23, preset medium (คุณภาพปานกลาง, ประมวลผลปานกลาง)
-- **Low**: CRF 28, preset fast (คุณภาพต่ำ, ประมวลผลเร็ว)
-
-## 📁 Project Structure
-
-```
-transcription-close-caption-service/
-├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI application
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── transcription.py    # Transcription API
-│   │   ├── caption.py          # Caption API
-│   │   ├── upload.py           # Upload API
-│   │   ├── video.py            # Video Processing API
-│   │   └── websocket.py        # WebSocket API
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── transcription_service.py
-│   │   ├── caption_service.py
-│   │   ├── video_service.py    # Video processing logic
-│   │   ├── file_service.py
-│   │   └── whisper_service.py
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   └── json_storage.py
-│   └── models/
-├── uploads/                     # อัปโหลดไฟล์
-├── temp/                       # ไฟล์ชั่วคราว
-├── storage/                    # ข้อมูล JSON
-├── models/                     # Whisper models
-├── examples/
-│   ├── example_usage.py
-│   └── video_processing_example.py
-├── docker-compose.yml          # Production Docker
-├── docker-compose.dev.yml      # Development Docker
-├── Dockerfile
-├── requirements.txt
-└── README.md
+### Docker Configuration
+```yaml
+# docker-compose.yml
+services:
+  api:
+    ports:
+      - "8001:8001"
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+  
+  video-worker:
+    deploy:
+      replicas: 2  # รัน 2 workers
+  
+  rabbitmq:
+    ports:
+      - "5672:5672"
+      - "15672:15672"
 ```
 
-## 🐳 Docker Deployment
+## 📊 Monitoring
 
-### Development
+### Queue Monitoring
+```python
+# ตรวจสอบสถิติ queue
+response = requests.get('http://localhost:8001/queue/stats')
+stats = response.json()
+print("Queue Statistics:", stats)
+```
+
+### Worker Monitoring
 ```bash
-# รัน development environment
-docker-compose -f docker-compose.dev.yml up --build
+# ดู worker logs
+docker-compose logs -f video-worker
 
-# รันพร้อม database
-docker-compose -f docker-compose.dev.yml --profile db up --build
+# ตรวจสอบ worker processes
+ps aux | grep video_worker
 ```
 
-### Production
+### Health Checks
 ```bash
-# รัน production environment
-docker-compose up --build
+# API Health
+curl http://localhost:8001/health
 
-# รันพร้อม nginx และ database
-docker-compose --profile production up --build
+# Queue Health
+curl http://localhost:8001/queue/health
 ```
 
-### Docker Commands
+## 🚀 Scaling
+
+### เพิ่ม Workers
 ```bash
-# Build image
-docker build -t transcription-service .
+# ใน docker-compose.yml
+video-worker:
+  deploy:
+    replicas: 5  # เพิ่มเป็น 5 workers
 
-# Run container
-docker run -p 8000:8000 -v $(pwd)/uploads:/app/uploads transcription-service
-
-# View logs
-docker-compose logs -f api
-
-# Stop services
-docker-compose down
+# หรือรัน workers แยก
+python run_worker.py &
+python run_worker.py &
+python run_worker.py &
 ```
 
-## 🔍 Monitoring & Health
+### Load Balancing
+```yaml
+# ใช้ nginx สำหรับ load balancing
+nginx:
+  ports:
+    - "80:80"
+  depends_on:
+    - api
+```
 
-### Health Check
+## 🔍 Troubleshooting
+
+### RabbitMQ Issues
 ```bash
-curl http://localhost:8000/health
+# ตรวจสอบสถานะ RabbitMQ
+sudo systemctl status rabbitmq-server
+
+# เริ่มต้นใหม่
+sudo systemctl restart rabbitmq-server
+
+# ตรวจสอบ queue
+rabbitmqctl list_queues
 ```
 
-### System Stats
+### Worker Issues
 ```bash
-curl http://localhost:8000/stats
+# ตรวจสอบ worker logs
+docker-compose logs video-worker
+
+# ตรวจสอบ queue messages
+curl http://localhost:8001/queue/info
 ```
 
-### WebSocket Monitoring
-```javascript
-const ws = new WebSocket('ws://localhost:8000/ws');
-
-ws.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log('Task update:', data);
-};
-
-// Subscribe to task updates
-ws.send(JSON.stringify({
-    type: 'subscribe_task',
-    task_id: 'your-task-id',
-    task_type: 'video'
-}));
-```
-
-## 🧪 Testing
-
-### Run Tests
+### Performance Issues
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio
+# ตรวจสอบ CPU/Memory usage
+docker stats
 
-# Run tests
-pytest
-
-# Run with coverage
-pytest --cov=app
+# ตรวจสอบ queue backlog
+curl http://localhost:8001/queue/stats
 ```
 
-### Example Usage
-```bash
-# รันตัวอย่าง video processing
-python examples/video_processing_example.py
+## 📖 Documentation
 
-# รันตัวอย่าง transcription
-python examples/example_usage.py
-```
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-1. **FFmpeg not found**
-   ```bash
-   # Ubuntu/Debian
-   sudo apt install ffmpeg
-   
-   # macOS
-   brew install ffmpeg
-   ```
-
-2. **Permission denied**
-   ```bash
-   chmod +x main.py
-   chmod -R 755 uploads temp storage
-   ```
-
-3. **Port already in use**
-   ```bash
-   # เปลี่ยน port
-   uvicorn app.main:app --port 8001
-   
-   # หรือ kill process
-   lsof -ti:8000 | xargs kill -9
-   ```
-
-4. **Memory issues**
-   ```bash
-   # ลด chunk size
-   export CHUNK_SIZE=15
-   
-   # เพิ่ม swap space
-   sudo fallocate -l 2G /swapfile
-   sudo chmod 600 /swapfile
-   sudo mkswap /swapfile
-   sudo swapon /swapfile
-   ```
-
-## 📈 Performance Optimization
-
-### สำหรับไฟล์ขนาดใหญ่
-- ใช้ chunk processing
-- ตั้งค่า quality เป็น "low" สำหรับการประมวลผลเร็ว
-- ใช้ batch processing สำหรับหลายไฟล์
-
-### สำหรับ Real-time
-- ใช้ WebSocket สำหรับ status updates
-- ตั้งค่า chunk size เล็ก (10-15 วินาที)
-- ใช้ async processing
-
-### สำหรับ Production
-- ใช้ Redis สำหรับ caching
-- ตั้งค่า nginx สำหรับ load balancing
-- ใช้ PostgreSQL สำหรับ metadata
+- [RabbitMQ Setup Guide](RABBITMQ_SETUP.md)
+- [API Documentation](http://localhost:8001/docs)
+- [Video Processing Examples](examples/video_processing_example.py)
 
 ## 🤝 Contributing
 
-1. Fork repository
-2. Create feature branch
-3. Commit changes
-4. Push to branch
-5. Create Pull Request
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## 📄 License
 
-MIT License - see LICENSE file for details
-
-## 🆘 Support
-
-- 📧 Email: support@example.com
-- 📖 Documentation: `/docs`
-- 🐛 Issues: GitHub Issues
-- 💬 Discussions: GitHub Discussions
-
----
-
-**Made with ❤️ for the Thai developer community** 
+This project is licensed under the MIT License - see the LICENSE file for details. 

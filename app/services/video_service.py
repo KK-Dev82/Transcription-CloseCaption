@@ -8,6 +8,7 @@ import ffmpeg
 import json
 
 from .file_service import FileService
+from .rabbitmq_service import RabbitMQService
 from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
@@ -16,11 +17,12 @@ class VideoService:
     def __init__(self):
         self.file_service = FileService()
         self.json_storage = JSONStorage()
+        self.rabbitmq_service = RabbitMQService()
         self.tasks: Dict[str, Dict] = {}
     
     async def trim_video(self, input_file: str, start_time: float, end_time: float,
                         output_format: str = "mp4", quality: str = "medium") -> str:
-        """ตัดวิดีโอตามช่วงเวลา"""
+        """ตัดวิดีโอตามช่วงเวลา - ส่งไปยัง RabbitMQ queue"""
         task_id = str(uuid.uuid4())
         
         task = {
@@ -31,79 +33,36 @@ class VideoService:
             "start_time": start_time,
             "end_time": end_time,
             "output_format": output_format,
+            "quality": quality,
             "created_at": datetime.now().isoformat()
         }
         
         self.tasks[task_id] = task
         
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_trim_video(task_id))
+        # บันทึกลง JSON storage
+        self.json_storage.save_video_task(task_id, task)
+        
+        # ส่งไปยัง RabbitMQ queue
+        try:
+            self.rabbitmq_service.send_trim_task(
+                input_file=input_file,
+                start_time=start_time,
+                end_time=end_time,
+                output_format=output_format,
+                quality=quality
+            )
+            logger.info(f"ส่ง trim task ไปยัง queue: {task_id}")
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
+            task["status"] = "failed"
+            task["error_message"] = str(e)
+            self.json_storage.save_video_task(task_id, task)
         
         return task_id
     
-    async def _process_trim_video(self, task_id: str):
-        """ประมวลผลการตัดวิดีโอ"""
-        task = self.tasks[task_id]
-        task["status"] = "processing"
-        
-        try:
-            input_path = Path(task["input_file"])
-            if not input_path.exists():
-                raise FileNotFoundError(f"ไม่พบไฟล์: {task['input_file']}")
-            
-            # สร้างชื่อไฟล์ output
-            output_filename = f"trimmed_{task_id}.{task['output_format']}"
-            output_path = self.file_service.upload_dir / output_filename
-            
-            # ตั้งค่า FFmpeg parameters
-            duration = task["end_time"] - task["start_time"]
-            
-            # ใช้ FFmpeg ตัดวิดีโอ
-            stream = ffmpeg.input(
-                str(input_path), 
-                ss=task["start_time"], 
-                t=duration
-            )
-            
-            # ตั้งค่า quality
-            if task["output_format"] == "mp4":
-                if task["quality"] == "high":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=18, preset='slow')
-                elif task["quality"] == "medium":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=23, preset='medium')
-                else:  # low
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=28, preset='fast')
-            else:
-                stream = ffmpeg.output(stream, str(output_path))
-            
-            # รัน FFmpeg
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-            # อัปเดต task
-            task["status"] = "completed"
-            task["output_file"] = str(output_path)
-            task["completed_at"] = datetime.now().isoformat()
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"ตัดวิดีโอเสร็จสิ้น: {task_id}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการตัดวิดีโอ {task_id}: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            task["completed_at"] = datetime.now().isoformat()
-    
     async def merge_videos(self, input_files: List[str], output_format: str = "mp4",
                           quality: str = "medium") -> str:
-        """รวมวิดีโอหลายไฟล์"""
+        """รวมวิดีโอหลายไฟล์ - ส่งไปยัง RabbitMQ queue"""
         task_id = str(uuid.uuid4())
         
         task = {
@@ -112,82 +71,34 @@ class VideoService:
             "status": "pending",
             "input_files": input_files,
             "output_format": output_format,
+            "quality": quality,
             "created_at": datetime.now().isoformat()
         }
         
         self.tasks[task_id] = task
         
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_merge_videos(task_id))
+        # บันทึกลง JSON storage
+        self.json_storage.save_video_task(task_id, task)
+        
+        # ส่งไปยัง RabbitMQ queue
+        try:
+            self.rabbitmq_service.send_merge_task(
+                input_files=input_files,
+                output_format=output_format,
+                quality=quality
+            )
+            logger.info(f"ส่ง merge task ไปยัง queue: {task_id}")
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
+            task["status"] = "failed"
+            task["error_message"] = str(e)
+            self.json_storage.save_video_task(task_id, task)
         
         return task_id
     
-    async def _process_merge_videos(self, task_id: str):
-        """ประมวลผลการรวมวิดีโอ"""
-        task = self.tasks[task_id]
-        task["status"] = "processing"
-        
-        try:
-            # ตรวจสอบไฟล์ input
-            for input_file in task["input_files"]:
-                if not Path(input_file).exists():
-                    raise FileNotFoundError(f"ไม่พบไฟล์: {input_file}")
-            
-            # สร้างไฟล์ list สำหรับ FFmpeg
-            list_file = self.file_service.temp_dir / f"merge_list_{task_id}.txt"
-            with open(list_file, 'w', encoding='utf-8') as f:
-                for input_file in task["input_files"]:
-                    f.write(f"file '{input_file}'\n")
-            
-            # สร้างชื่อไฟล์ output
-            output_filename = f"merged_{task_id}.{task['output_format']}"
-            output_path = self.file_service.upload_dir / output_filename
-            
-            # ใช้ FFmpeg รวมวิดีโอ
-            stream = ffmpeg.input(str(list_file), f='concat', safe=0)
-            
-            # ตั้งค่า quality
-            if task["output_format"] == "mp4":
-                if task["quality"] == "high":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=18, preset='slow')
-                elif task["quality"] == "medium":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=23, preset='medium')
-                else:  # low
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=28, preset='fast')
-            else:
-                stream = ffmpeg.output(stream, str(output_path))
-            
-            # รัน FFmpeg
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-            # ลบไฟล์ list
-            list_file.unlink(missing_ok=True)
-            
-            # อัปเดต task
-            task["status"] = "completed"
-            task["output_file"] = str(output_path)
-            task["completed_at"] = datetime.now().isoformat()
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"รวมวิดีโอเสร็จสิ้น: {task_id}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการรวมวิดีโอ {task_id}: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            task["completed_at"] = datetime.now().isoformat()
-    
     async def convert_format(self, input_file: str, output_format: str,
                            quality: str = "medium") -> str:
-        """แปลงรูปแบบไฟล์"""
+        """แปลงรูปแบบไฟล์ - ส่งไปยัง RabbitMQ queue"""
         task_id = str(uuid.uuid4())
         
         task = {
@@ -196,78 +107,34 @@ class VideoService:
             "status": "pending",
             "input_file": input_file,
             "output_format": output_format,
+            "quality": quality,
             "created_at": datetime.now().isoformat()
         }
         
         self.tasks[task_id] = task
         
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_convert_format(task_id))
+        # บันทึกลง JSON storage
+        self.json_storage.save_video_task(task_id, task)
+        
+        # ส่งไปยัง RabbitMQ queue
+        try:
+            self.rabbitmq_service.send_convert_task(
+                input_file=input_file,
+                output_format=output_format,
+                quality=quality
+            )
+            logger.info(f"ส่ง convert task ไปยัง queue: {task_id}")
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
+            task["status"] = "failed"
+            task["error_message"] = str(e)
+            self.json_storage.save_video_task(task_id, task)
         
         return task_id
     
-    async def _process_convert_format(self, task_id: str):
-        """ประมวลผลการแปลงรูปแบบ"""
-        task = self.tasks[task_id]
-        task["status"] = "processing"
-        
-        try:
-            input_path = Path(task["input_file"])
-            if not input_path.exists():
-                raise FileNotFoundError(f"ไม่พบไฟล์: {task['input_file']}")
-            
-            # สร้างชื่อไฟล์ output
-            output_filename = f"converted_{task_id}.{task['output_format']}"
-            output_path = self.file_service.upload_dir / output_filename
-            
-            # ใช้ FFmpeg แปลงรูปแบบ
-            stream = ffmpeg.input(str(input_path))
-            
-            # ตั้งค่า quality ตาม output format
-            if task["output_format"] == "mp4":
-                if task["quality"] == "high":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=18, preset='slow')
-                elif task["quality"] == "medium":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=23, preset='medium')
-                else:  # low
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=28, preset='fast')
-            elif task["output_format"] == "avi":
-                stream = ffmpeg.output(stream, str(output_path), 
-                                     vcodec='libx264', acodec='mp3')
-            elif task["output_format"] == "mov":
-                stream = ffmpeg.output(stream, str(output_path), 
-                                     vcodec='libx264', acodec='aac')
-            else:
-                stream = ffmpeg.output(stream, str(output_path))
-            
-            # รัน FFmpeg
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-            # อัปเดต task
-            task["status"] = "completed"
-            task["output_file"] = str(output_path)
-            task["completed_at"] = datetime.now().isoformat()
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"แปลงรูปแบบเสร็จสิ้น: {task_id}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการแปลงรูปแบบ {task_id}: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            task["completed_at"] = datetime.now().isoformat()
-    
     async def resize_video(self, input_file: str, width: int, height: int,
                           output_format: str = "mp4", quality: str = "medium") -> str:
-        """ปรับขนาดวิดีโอ"""
+        """ปรับขนาดวิดีโอ - ส่งไปยัง RabbitMQ queue"""
         task_id = str(uuid.uuid4())
         
         task = {
@@ -278,70 +145,32 @@ class VideoService:
             "width": width,
             "height": height,
             "output_format": output_format,
+            "quality": quality,
             "created_at": datetime.now().isoformat()
         }
         
         self.tasks[task_id] = task
         
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_resize_video(task_id))
+        # บันทึกลง JSON storage
+        self.json_storage.save_video_task(task_id, task)
         
-        return task_id
-    
-    async def _process_resize_video(self, task_id: str):
-        """ประมวลผลการปรับขนาดวิดีโอ"""
-        task = self.tasks[task_id]
-        task["status"] = "processing"
-        
+        # ส่งไปยัง RabbitMQ queue
         try:
-            input_path = Path(task["input_file"])
-            if not input_path.exists():
-                raise FileNotFoundError(f"ไม่พบไฟล์: {task['input_file']}")
-            
-            # สร้างชื่อไฟล์ output
-            output_filename = f"resized_{task_id}.{task['output_format']}"
-            output_path = self.file_service.upload_dir / output_filename
-            
-            # ใช้ FFmpeg ปรับขนาดวิดีโอ
-            stream = ffmpeg.input(str(input_path))
-            stream = ffmpeg.filter(stream, 'scale', 
-                                 task["width"], task["height"])
-            
-            # ตั้งค่า quality
-            if task["output_format"] == "mp4":
-                if task["quality"] == "high":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=18, preset='slow')
-                elif task["quality"] == "medium":
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=23, preset='medium')
-                else:  # low
-                    stream = ffmpeg.output(stream, str(output_path), 
-                                         vcodec='libx264', acodec='aac',
-                                         crf=28, preset='fast')
-            else:
-                stream = ffmpeg.output(stream, str(output_path))
-            
-            # รัน FFmpeg
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-            # อัปเดต task
-            task["status"] = "completed"
-            task["output_file"] = str(output_path)
-            task["completed_at"] = datetime.now().isoformat()
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"ปรับขนาดวิดีโอเสร็จสิ้น: {task_id}")
-            
+            self.rabbitmq_service.send_resize_task(
+                input_file=input_file,
+                width=width,
+                height=height,
+                output_format=output_format,
+                quality=quality
+            )
+            logger.info(f"ส่ง resize task ไปยัง queue: {task_id}")
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการปรับขนาดวิดีโอ {task_id}: {e}")
+            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
             task["status"] = "failed"
             task["error_message"] = str(e)
-            task["completed_at"] = datetime.now().isoformat()
+            self.json_storage.save_video_task(task_id, task)
+        
+        return task_id
     
     async def batch_process(self, operations: List[Dict]) -> str:
         """ประมวลผลหลายไฟล์พร้อมกัน"""

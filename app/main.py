@@ -6,7 +6,7 @@ import json
 from typing import List, Dict
 import asyncio
 
-from .api import transcription, caption, upload, websocket, video
+from .api import transcription, caption, upload, websocket, video, queue
 from .services.transcription_service import TranscriptionService
 from .services.caption_service import CaptionService
 from .services.video_service import VideoService
@@ -52,6 +52,7 @@ app.include_router(caption.router)
 app.include_router(upload.router)
 app.include_router(websocket.router)
 app.include_router(video.router)
+app.include_router(queue.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
