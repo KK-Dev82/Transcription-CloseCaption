@@ -19,50 +19,145 @@ class JSONStorage:
         (self.storage_dir / "metadata").mkdir(exist_ok=True)
     
     def save_transcription(self, task_id: str, transcription_data: Dict) -> str:
-        """บันทึกข้อมูล transcription"""
-        file_path = self.storage_dir / "transcriptions" / f"{task_id}.json"
+        """บันทึกข้อมูล transcription แบบโฟลเดอร์แยก"""
+        # สร้างโฟลเดอร์สำหรับ task นี้
+        task_dir = self.storage_dir / "transcriptions" / task_id
+        task_dir.mkdir(exist_ok=True)
         
-        # เพิ่ม metadata
+        # บันทึกไฟล์หลัก metadata.json
+        metadata_path = task_dir / "metadata.json"
+        
+        # ตรวจสอบไฟล์เดิม เพื่อเก็บข้อมูลเดิมไว้
+        existing_data = {}
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except:
+                pass
+        
+        # รวมข้อมูลเดิมกับข้อมูลใหม่
         data = {
             "task_id": task_id,
-            "created_at": datetime.now().isoformat(),
+            "created_at": existing_data.get("created_at", datetime.now().isoformat()),
             "updated_at": datetime.now().isoformat(),
-            "file_path": transcription_data.get("file_path"),
-            "language": transcription_data.get("language"),
-            "total_duration": transcription_data.get("total_duration"),
-            "chunks": transcription_data.get("chunks", []),
-            "full_text": transcription_data.get("full_text", ""),
-            "status": transcription_data.get("status", "completed")
+            "file_path": transcription_data.get("file_path", existing_data.get("file_path")),
+            "language": transcription_data.get("language", existing_data.get("language")),
+            "total_duration": transcription_data.get("total_duration", existing_data.get("total_duration")),
+            "chunks": transcription_data.get("chunks", existing_data.get("chunks", [])),
+            "full_text": transcription_data.get("full_text", existing_data.get("full_text", "")),
+            "status": transcription_data.get("status", existing_data.get("status", "pending")),
+            "progress": transcription_data.get("progress", existing_data.get("progress", 0)),
+            "error_message": transcription_data.get("error_message", existing_data.get("error_message")),
+            "completed_at": transcription_data.get("completed_at", existing_data.get("completed_at"))
         }
         
-        with open(file_path, 'w', encoding='utf-8') as f:
+        # บันทึก metadata.json
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"บันทึก transcription: {file_path}")
-        return str(file_path)
+        # บันทึกไฟล์ข้อความเต็ม (ถ้ามี)
+        if data.get("full_text"):
+            full_text_path = task_dir / "full_text.txt"
+            with open(full_text_path, 'w', encoding='utf-8') as f:
+                f.write(data["full_text"])
+        
+        # บันทึก chunks แยกไฟล์ (ถ้ามี)
+        chunks = data.get("chunks", [])
+        if chunks:
+            chunks_dir = task_dir / "chunks"
+            chunks_dir.mkdir(exist_ok=True)
+            
+            # บันทึกไฟล์ full_text.json พร้อม timestamps
+            full_json_path = task_dir / "full_text.json"
+            with open(full_json_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "task_id": task_id,
+                    "language": data.get("language"),
+                    "total_duration": data.get("total_duration"),
+                    "segments": chunks,
+                    "full_text": data.get("full_text")
+                }, f, ensure_ascii=False, indent=2)
+            
+            # บันทึกแต่ละ chunk แยกไฟล์
+            for i, chunk in enumerate(chunks):
+                chunk_path = chunks_dir / f"chunk_{i+1:02d}.json"
+                with open(chunk_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        "chunk_id": i + 1,
+                        "start_time": chunk.get("start_time"),
+                        "end_time": chunk.get("end_time"),
+                        "text": chunk.get("text", ""),
+                        "confidence": chunk.get("confidence")
+                    }, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"บันทึก transcription: {task_dir}")
+        return str(metadata_path)
     
     def save_caption(self, task_id: str, caption_data: Dict) -> str:
-        """บันทึกข้อมูล caption"""
-        file_path = self.storage_dir / "captions" / f"{task_id}.json"
+        """บันทึกข้อมูล caption แบบโฟลเดอร์แยก"""
+        # สร้างโฟลเดอร์สำหรับ task นี้
+        task_dir = self.storage_dir / "captions" / task_id
+        task_dir.mkdir(exist_ok=True)
         
-        # เพิ่ม metadata
+        # บันทึกไฟล์หลัก metadata.json
+        metadata_path = task_dir / "metadata.json"
+        
+        # ตรวจสอบไฟล์เดิม
+        existing_data = {}
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except:
+                pass
+        
+        # รวมข้อมูลเดิมกับข้อมูลใหม่
         data = {
             "task_id": task_id,
-            "created_at": datetime.now().isoformat(),
+            "created_at": existing_data.get("created_at", datetime.now().isoformat()),
             "updated_at": datetime.now().isoformat(),
-            "file_path": caption_data.get("file_path"),
-            "language": caption_data.get("language"),
-            "subtitle_format": caption_data.get("subtitle_format"),
-            "segments": caption_data.get("segments", []),
-            "subtitle_content": caption_data.get("subtitle_content", ""),
-            "status": caption_data.get("status", "completed")
+            "file_path": caption_data.get("file_path", existing_data.get("file_path")),
+            "language": caption_data.get("language", existing_data.get("language")),
+            "subtitle_format": caption_data.get("subtitle_format", existing_data.get("subtitle_format")),
+            "segments": caption_data.get("segments", existing_data.get("segments", [])),
+            "subtitle_content": caption_data.get("subtitle_content", existing_data.get("subtitle_content", "")),
+            "status": caption_data.get("status", existing_data.get("status", "pending"))
         }
         
-        with open(file_path, 'w', encoding='utf-8') as f:
+        # บันทึก metadata.json
+        with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"บันทึก caption: {file_path}")
-        return str(file_path)
+        # บันทึกไฟล์ subtitle ตามรูปแบบ
+        subtitle_content = data.get("subtitle_content", "")
+        subtitle_format = data.get("subtitle_format", "srt")
+        
+        if subtitle_content:
+            if subtitle_format.lower() == "srt":
+                subtitle_path = task_dir / "subtitles.srt"
+            elif subtitle_format.lower() == "vtt":
+                subtitle_path = task_dir / "subtitles.vtt"
+            else:
+                subtitle_path = task_dir / f"subtitles.{subtitle_format}"
+            
+            with open(subtitle_path, 'w', encoding='utf-8') as f:
+                f.write(subtitle_content)
+        
+        # บันทึก segments แยกไฟล์
+        segments = data.get("segments", [])
+        if segments:
+            segments_path = task_dir / "segments.json"
+            with open(segments_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "task_id": task_id,
+                    "language": data.get("language"),
+                    "subtitle_format": data.get("subtitle_format"),
+                    "segments": segments
+                }, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"บันทึก caption: {task_dir}")
+        return str(metadata_path)
     
     def save_video_task(self, task_id: str, video_data: Dict) -> str:
         """บันทึกข้อมูล video task"""
@@ -98,17 +193,27 @@ class JSONStorage:
     
     def load_transcription(self, task_id: str) -> Optional[Dict]:
         """โหลดข้อมูล transcription"""
-        file_path = self.storage_dir / "transcriptions" / f"{task_id}.json"
+        # ลองโหลดจากโฟลเดอร์ใหม่ก่อน
+        task_dir = self.storage_dir / "transcriptions" / task_id
+        metadata_path = task_dir / "metadata.json"
         
-        if not file_path.exists():
-            return None
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"เกิดข้อผิดพลาดในการโหลด transcription {task_id}: {e}")
         
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการโหลด transcription {task_id}: {e}")
-            return None
+        # ถ้าไม่มี ลองโหลดจากไฟล์เดิม (backward compatibility)
+        old_file_path = self.storage_dir / "transcriptions" / f"{task_id}.json"
+        if old_file_path.exists():
+            try:
+                with open(old_file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"เกิดข้อผิดพลาดในการโหลด transcription {task_id}: {e}")
+        
+        return None
     
     def load_caption(self, task_id: str) -> Optional[Dict]:
         """โหลดข้อมูล caption"""
@@ -222,6 +327,34 @@ class JSONStorage:
         
         return highlighted
     
+    def get_transcription(self, task_id: str) -> Optional[Dict]:
+        """ดึงข้อมูล transcription แบบเต็ม (รองรับ folder structure)"""
+        # วิธีใหม่: อ่านจาก folder structure
+        task_dir = self.storage_dir / "transcriptions" / task_id
+        metadata_file = task_dir / "metadata.json"
+        
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # เพิ่ม task_id ถ้าไม่มี
+                    if 'task_id' not in data:
+                        data['task_id'] = task_id
+                    return data
+            except Exception as e:
+                logger.warning(f"ไม่สามารถอ่าน metadata.json สำหรับ {task_id}: {e}")
+        
+        # วิธีเก่า: อ่านจาก .json file โดยตรง
+        file_path = self.storage_dir / "transcriptions" / f"{task_id}.json"
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"ไม่สามารถอ่านไฟล์ {file_path}: {e}")
+        
+        return None
+
     def get_transcription_stats(self, task_id: str) -> Dict:
         """ดึงสถิติของ transcription"""
         transcription = self.load_transcription(task_id)
@@ -264,10 +397,28 @@ class JSONStorage:
         }
     
     def list_all_transcriptions(self) -> List[Dict]:
-        """ดึงรายการ transcription ทั้งหมด"""
+        """ดึงรายการ transcription ทั้งหมด (รองรับ folder structure ใหม่)"""
         transcriptions = []
         transcription_dir = self.storage_dir / "transcriptions"
         
+        # วิธีใหม่: หา folders แล้วอ่าน metadata.json
+        for task_folder in transcription_dir.iterdir():
+            if task_folder.is_dir():
+                task_id = task_folder.name
+                metadata_file = task_folder / "metadata.json"
+                
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            # เพิ่ม task_id ถ้าไม่มี
+                            if 'task_id' not in data:
+                                data['task_id'] = task_id
+                            transcriptions.append(data)
+                    except Exception as e:
+                        logger.warning(f"ไม่สามารถอ่าน metadata.json สำหรับ {task_id}: {e}")
+        
+        # วิธีเก่า: หา .json files โดยตรง (สำหรับ backward compatibility)
         for json_file in transcription_dir.glob("*.json"):
             task_id = json_file.stem
             stats = self.get_transcription_stats(task_id)

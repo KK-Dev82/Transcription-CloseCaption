@@ -67,7 +67,13 @@ class FileService:
             start_time = i * chunk_duration
             end_time = min((i + 1) * chunk_duration, duration)
             
-            chunk_path = self.temp_dir / f"chunk_{i}_{Path(file_path).name}"
+            # สร้าง temp directory แยกตาม timestamp
+            import time
+            task_folder = f"task_{int(time.time())}_{Path(file_path).stem}"
+            temp_task_dir = self.temp_dir / task_folder
+            temp_task_dir.mkdir(parents=True, exist_ok=True)
+            
+            chunk_path = temp_task_dir / f"chunk_{i}_{Path(file_path).name}"
             
             try:
                 # ใช้ FFmpeg ตัดไฟล์
@@ -84,7 +90,13 @@ class FileService:
     
     def extract_audio(self, video_path: str) -> str:
         """แยกเสียงจากวิดีโอ"""
-        audio_path = self.temp_dir / f"{Path(video_path).stem}_audio.wav"
+        # สร้าง temp directory แยกตาม timestamp
+        import time
+        task_folder = f"task_{int(time.time())}_{Path(video_path).stem}"
+        temp_task_dir = self.temp_dir / task_folder
+        temp_task_dir.mkdir(parents=True, exist_ok=True)
+        
+        audio_path = temp_task_dir / f"{Path(video_path).stem}_audio.wav"
         
         try:
             stream = ffmpeg.input(video_path)
@@ -101,8 +113,50 @@ class FileService:
         for file_path in file_paths:
             try:
                 Path(file_path).unlink(missing_ok=True)
+                logger.info(f"ลบไฟล์ temp: {file_path}")
             except Exception as e:
                 logger.warning(f"ไม่สามารถลบไฟล์ {file_path}: {e}")
+    
+    def cleanup_temp_folder(self, folder_path: str):
+        """ลบ temp folder ทั้งหมด"""
+        try:
+            folder = Path(folder_path)
+            if folder.exists() and folder.is_dir():
+                import shutil
+                shutil.rmtree(folder)
+                logger.info(f"ลบ temp folder: {folder_path}")
+        except Exception as e:
+            logger.warning(f"ไม่สามารถลบ temp folder {folder_path}: {e}")
+    
+    def cleanup_old_temp_folders(self, max_age_hours: int = 24):
+        """ลบ temp folders ที่เก่าเกิน max_age_hours"""
+        try:
+            temp_dir = Path("temp")
+            if not temp_dir.exists():
+                return
+            
+            import time
+            current_time = time.time()
+            
+            for folder in temp_dir.iterdir():
+                if folder.is_dir() and folder.name.startswith("task_"):
+                    try:
+                        # แยก timestamp จากชื่อ folder
+                        timestamp_str = folder.name.split("_")[1]
+                        folder_time = float(timestamp_str)
+                        
+                        # ตรวจสอบอายุ
+                        age_hours = (current_time - folder_time) / 3600
+                        
+                        if age_hours > max_age_hours:
+                            import shutil
+                            shutil.rmtree(folder)
+                            logger.info(f"ลบ temp folder เก่า: {folder} (อายุ: {age_hours:.1f} ชั่วโมง)")
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"ไม่สามารถแยก timestamp จาก folder {folder.name}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการลบ temp folders เก่า: {e}")
     
     def is_video_file(self, file_path: str) -> bool:
         """ตรวจสอบว่าเป็นไฟล์วิดีโอหรือไม่"""

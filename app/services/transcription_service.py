@@ -1,13 +1,19 @@
 import asyncio
 import uuid
 import logging
+import os
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
+import aiohttp
+import json
 
 from .file_service import FileService
 from .whisper_service import WhisperService
 from .video_service import VideoService
+from .rabbitmq_service import RabbitMQService
+from .webhook_service import webhook_service
+from .websocket_service import websocket_manager
 from ..models.transcription import TranscriptionChunk, TranscriptionResponse
 from ..utils.json_storage import JSONStorage
 
@@ -18,37 +24,94 @@ class TranscriptionService:
         self.file_service = FileService()
         self.whisper_service = WhisperService()
         self.video_service = VideoService()
+        self.rabbitmq_service = RabbitMQService()
+        self.webhook_service = webhook_service
         self.json_storage = JSONStorage()
         self.tasks: Dict[str, TranscriptionResponse] = {}
+        
+        # API server URL สำหรับ notifications
+        # ใช้ environment variable หรือ default ตาม environment
+        environment = os.getenv('ENVIRONMENT', 'development')
+        if environment == 'development':
+            self.api_server_url = "http://transcription-api-dev:8001"
+        elif environment == 'staging':
+            self.api_server_url = "http://transcription-api-staging:8001"
+        else:  # production
+            self.api_server_url = "http://transcription-api:8001"
     
     async def start_transcription(self, file_path: str, language: str = "th",
                                 model_size: str = "base", chunk_duration: int = 30) -> str:
-        """เริ่มการแปลงเสียงเป็นข้อความ"""
-        task_id = str(uuid.uuid4())
+        """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
-        # สร้าง task response
-        task = TranscriptionResponse(
-            task_id=task_id,
-            status="pending",
-            file_path=file_path,
-            language=language,
-            created_at=datetime.now()
-        )
-        
-        self.tasks[task_id] = task
-        
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_transcription(
-            task_id, file_path, language, model_size, chunk_duration
-        ))
-        
-        return task_id
+        # ส่งไปยัง RabbitMQ queue และรับ task_id
+        try:
+            task_id = self.rabbitmq_service.send_transcription_task(
+                file_path=file_path,
+                language=language,
+                model_size=model_size,
+                chunk_duration=chunk_duration
+            )
+            
+            # สร้าง task response
+            task = TranscriptionResponse(
+                task_id=task_id,
+                status="pending",
+                file_path=file_path,
+                language=language,
+                created_at=datetime.now()
+            )
+            
+            self.tasks[task_id] = task
+            
+            logger.info(f"ส่ง transcription task ไปยัง queue: {task_id}")
+            return task_id
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
+            # สร้าง task_id ใหม่สำหรับ error case
+            task_id = str(uuid.uuid4())
+            task = TranscriptionResponse(
+                task_id=task_id,
+                status="failed",
+                file_path=file_path,
+                language=language,
+                created_at=datetime.now(),
+                error_message=str(e)
+            )
+            self.tasks[task_id] = task
+            
+            # บันทึกลง storage ด้วย
+            try:
+                task_data = {
+                    "task_id": task_id,
+                    "task_type": "transcription",
+                    "file_path": file_path,
+                    "language": language,
+                    "status": "failed",
+                    "error_message": str(e),
+                    "created_at": datetime.now().timestamp()
+                }
+                self.json_storage.save_transcription(task_id, task_data)
+            except Exception as storage_error:
+                logger.error(f"ไม่สามารถบันทึก task ลง storage: {storage_error}")
+            
+            return task_id
     
     async def _process_transcription(self, task_id: str, file_path: str,
                                    language: str, model_size: str, chunk_duration: int):
         """ประมวลผลการแปลงเสียง"""
         task = self.tasks[task_id]
         task.status = "processing"
+        
+        # 🌐 WebSocket: แจ้งเตือนเริ่มต้น (HTTP call to API server)
+        try:
+            await self._notify_api_server("started", task_id, {
+                "file_path": file_path,
+                "language": language,
+                "status": "started"
+            })
+        except Exception as e:
+            logger.warning(f"WebSocket notification failed (started): {e}")
         
         try:
             # ตรวจสอบไฟล์
@@ -86,6 +149,17 @@ class TranscriptionService:
                     task.status = f"processing_chunk_{i+1}_of_{total_chunks}"
                     self.json_storage.save_transcription(task_id, task.__dict__)
                     
+                    # 🌐 WebSocket: แจ้งเตือน progress (ทุก 25% หรือ chunk สุดท้าย)
+                    if progress % 25 == 0 or i == total_chunks - 1:
+                        try:
+                            await self._notify_api_server("progress", task_id, {
+                                "progress": progress,
+                                "status": task.status,
+                                "stage": f"processing_chunk_{i+1}_of_{total_chunks}"
+                            })
+                        except Exception as e:
+                            logger.warning(f"WebSocket notification failed (progress): {e}")
+                    
                     logger.info(f"เสร็จ chunk {i+1}/{total_chunks} - Progress: {progress}%")
                     
                 except Exception as e:
@@ -117,23 +191,67 @@ class TranscriptionService:
             task.full_text = merged_result.get("text", "")
             task.progress = 95
             task.status = "finalizing"
-            self.json_storage.save_transcription(task_id, task.__dict__)
+            task.updated_at = datetime.now()
+            
+            # แปลง task เป็น dict ที่ JSON serializable ได้
+            task_data = {
+                "task_id": task.task_id,
+                "status": task.status,
+                "file_path": task.file_path,
+                "total_duration": task.total_duration,
+                "chunks": [chunk.dict() for chunk in task.chunks] if task.chunks else [],
+                "full_text": task.full_text,
+                "language": task.language,
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                "error_message": task.error_message,
+                "progress": task.progress
+            }
+            self.json_storage.save_transcription(task_id, task_data)
             
             task.status = "completed"
             task.progress = 100
             task.completed_at = datetime.now()
             
-            # บันทึกลง JSON storage
-            logger.info("กำลังบันทึกข้อมูลลง JSON...")
-            transcription_data = {
+            # 🧹 ลบ temp files หลังเสร็จสิ้น
+            try:
+                self.file_service.cleanup_temp_files(chunks)
+                logger.info(f"ลบ temp files สำเร็จ: {len(chunks)} files")
+            except Exception as e:
+                logger.warning(f"ไม่สามารถลบ temp files: {e}")
+            
+            # 🌐 WebSocket: แจ้งเตือนเสร็จสิ้น (HTTP call to API server)
+            try:
+                await self._notify_api_server("completed", task_id, {
+                    "status": "completed",
+                    "progress": 100,
+                    "results_summary": {
+                        "text": task.full_text,
+                        "chunks_count": len(task.chunks) if task.chunks else 0,
+                        "duration": task.total_duration
+                    }
+                })
+            except Exception as e:
+                logger.warning(f"WebSocket notification failed (completed): {e}")
+            
+            # บันทึกข้อมูลสุดท้าย - ครั้งเดียวเท่านั้น
+            logger.info("กำลังบันทึกผลลัพธ์สุดท้าย...")
+            final_data = {
+                "task_id": task.task_id,
+                "status": task.status,
                 "file_path": task.file_path,
-                "language": task.language,
                 "total_duration": task.total_duration,
-                "chunks": [chunk.dict() for chunk in task.chunks],
+                "chunks": [chunk.dict() for chunk in task.chunks] if task.chunks else [],
                 "full_text": task.full_text,
-                "status": task.status
+                "language": task.language,
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                "error_message": task.error_message,
+                "progress": task.progress
             }
-            self.json_storage.save_transcription(task_id, transcription_data)
+            self.json_storage.save_transcription(task_id, final_data)
             
             logger.info(f"แปลงเสียงเสร็จสิ้น: {task_id}")
             
@@ -146,6 +264,15 @@ class TranscriptionService:
             task.status = "failed"
             task.error_message = str(e)
             task.completed_at = datetime.now()
+            
+            # 🌐 WebSocket: แจ้งเตือนเมื่อล้มเหลว (HTTP call to API server)
+            try:
+                await self._notify_api_server("failed", task_id, {
+                    "status": "failed",
+                    "error": str(e)
+                })
+            except Exception as websocket_error:
+                logger.warning(f"WebSocket notification failed (error): {websocket_error}")
             
             # ลบไฟล์ชั่วคราวในกรณีเกิดข้อผิดพลาด (ปิดไว้เพื่อ debug)
             # if 'chunks' in locals():
@@ -210,4 +337,28 @@ class TranscriptionService:
             del self.tasks[task_id]
         
         # ลบจาก JSON storage
-        return self.json_storage.delete_transcription(task_id) 
+        return self.json_storage.delete_transcription(task_id)
+    
+    async def _notify_api_server(self, event_type: str, task_id: str, data: dict):
+        """ส่ง notification ไปยัง API server เพื่อ broadcast ผ่าน WebSocket"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "type": f"transcription.{event_type}",
+                    "task_id": task_id,
+                    "timestamp": datetime.now().isoformat(),
+                    **data
+                }
+                
+                async with session.post(
+                    f"{self.api_server_url}/internal/websocket-broadcast",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ WebSocket notification sent: {event_type} for task {task_id}")
+                    else:
+                        logger.warning(f"⚠️ WebSocket notification failed: {response.status}")
+                        
+        except Exception as e:
+            logger.error(f"❌ Failed to send WebSocket notification: {e}") 

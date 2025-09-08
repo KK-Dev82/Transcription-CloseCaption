@@ -24,9 +24,14 @@ class WhisperService:
     
     def _check_whisper_installation(self):
         """ตรวจสอบการติดตั้ง Whisper.cpp"""
-        main_executable = self.whisper_cpp_path / "main"
-        if not main_executable.exists():
-            logger.warning("ไม่พบ Whisper.cpp executable. กรุณาติดตั้งตาม README.md")
+        if not self.use_docker:
+            # เฉพาะเมื่อไม่ใช้ Docker ถึงจะตรวจสอบ local whisper.cpp
+            main_executable = self.whisper_cpp_path / "main"
+            if not main_executable.exists():
+                logger.warning("ไม่พบ Whisper.cpp executable. กรุณาติดตั้งตาม README.md")
+        else:
+            # ใช้ Docker service - ไม่ต้องตรวจสอบ local installation
+            logger.info("ใช้ Whisper Docker service - ไม่ต้องติดตั้ง local whisper.cpp")
     
     def download_model(self, model_size: str = "base") -> str:
         """ดาวน์โหลด Whisper model"""
@@ -92,10 +97,18 @@ class WhisperService:
                 whisper_api_url = "http://transcription-whisper-dev:8002"
                 
                 # แปลง path ให้ตรงกับ Whisper container
-                # API container: temp/chunk_X_xxx.wav
-                # Whisper container: /app/temp/chunk_X_xxx.wav (เพราะ mount temp เป็น /app/temp)
-                audio_filename = Path(audio_path).name
-                whisper_audio_path = f"/app/temp/{audio_filename}"
+                # API container: temp/task_xxx/chunk_X_xxx.wav  
+                # Whisper container: /app/temp/task_xxx/chunk_X_xxx.wav (เพราะ mount temp เป็น /app/temp)
+                
+                # แปลง path จาก temp/task_xxx/chunk_xxx.wav -> /app/temp/task_xxx/chunk_xxx.wav
+                audio_path_obj = Path(audio_path)
+                if audio_path_obj.is_absolute():
+                    # ถ้าเป็น absolute path ให้แปลงเป็น relative จาก project root
+                    relative_path = audio_path_obj.relative_to(Path.cwd())
+                    whisper_audio_path = f"/app/{relative_path}"
+                else:
+                    # ถ้าเป็น relative path แล้ว
+                    whisper_audio_path = f"/app/{audio_path}"
                 
                 # ส่งคำขอไปยัง Whisper API
                 request_data = {

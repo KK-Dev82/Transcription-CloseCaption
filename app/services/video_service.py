@@ -649,8 +649,10 @@ class VideoService:
             logger.info(f"เริ่มแปลงวิดีโอเป็น audio chunks: {video_path} (duration: {duration}s)")
             
             chunk_paths = []
-            temp_dir = Path("temp")
-            temp_dir.mkdir(exist_ok=True)
+            # สร้าง temp directory แยกตาม task_id หรือใช้ timestamp
+            task_folder = f"task_{int(time.time())}_{video_path.stem}"
+            temp_dir = Path("temp") / task_folder
+            temp_dir.mkdir(parents=True, exist_ok=True)
             
             # สร้าง chunks
             for i, start_time in enumerate(range(0, int(duration), chunk_duration - overlap)):

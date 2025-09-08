@@ -33,6 +33,7 @@ class RabbitMQService:
         self.trim_queue = 'video_trim_queue'
         self.merge_queue = 'video_merge_queue'
         self.convert_queue = 'video_convert_queue'
+        self.transcription_queue = 'transcription_queue'
         self.resize_queue = 'video_resize_queue'
     
     def _connect(self):
@@ -55,6 +56,7 @@ class RabbitMQService:
             self.channel.queue_declare(queue=self.merge_queue, durable=True)
             self.channel.queue_declare(queue=self.convert_queue, durable=True)
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
+            self.channel.queue_declare(queue=self.transcription_queue, durable=True)
             
             logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
             
@@ -67,6 +69,18 @@ class RabbitMQService:
         if not self.connection or self.connection.is_closed:
             logger.info("เชื่อมต่อ RabbitMQ ใหม่...")
             self._connect()
+    
+    def _reset_connection(self):
+        """รีเซ็ตการเชื่อมต่อ RabbitMQ"""
+        try:
+            if self.connection and not self.connection.is_closed:
+                self.connection.close()
+        except Exception as e:
+            logger.warning(f"Error closing connection: {e}")
+        
+        self.connection = None
+        self.channel = None
+        logger.info("รีเซ็ตการเชื่อมต่อ RabbitMQ")
     
     def send_trim_task(self, input_file: str, start_time: float, end_time: float, 
                       output_format: str = "mp4", quality: str = "medium", 
@@ -106,6 +120,62 @@ class RabbitMQService:
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการส่งงานตัดวิดีโอ: {e}")
             raise
+    
+    def send_transcription_task(self, file_path: str, language: str = "th",
+                               model_size: str = "base", chunk_duration: int = 30) -> str:
+        """ส่งงาน transcription ไปยัง queue พร้อม retry mechanism"""
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # เชื่อมต่อ RabbitMQ ก่อนใช้งาน
+                self._ensure_connection()
+                
+                task_id = str(uuid.uuid4())
+                task_data = {
+                    "task_id": task_id,
+                    "task_type": "transcription",
+                    "file_path": file_path,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "status": "pending",
+                    "created_at": time.time()
+                }
+                
+                # บันทึก task ลง storage ก่อน
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # ส่งไปยัง queue
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=self.transcription_queue,
+                    body=json.dumps(task_data),
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # ทำให้ message persistent
+                    )
+                )
+                
+                logger.info(f"ส่งงาน transcription ไปยัง queue: {task_id}")
+                return task_id
+                
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    # Reset connection และ retry
+                    self._reset_connection()
+                    time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                else:
+                    # ถ้า retry หมดแล้ว ให้บันทึก task เป็น failed
+                    logger.error(f"เกิดข้อผิดพลาดในการส่งงาน transcription หลังจาก retry {max_retries} ครั้ง: {e}")
+                    if 'task_id' in locals():
+                        # อัปเดต status เป็น failed
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = str(e)
+                        self.json_storage.save_transcription(task_id, task_data)
+                    raise
     
     def send_merge_task(self, input_files: list, output_format: str = "mp4",
                        quality: str = "medium") -> str:
@@ -269,7 +339,7 @@ class RabbitMQService:
             
             # ตรวจสอบแต่ละ queue
             for queue_name in [self.trim_queue, self.merge_queue, 
-                             self.convert_queue, self.resize_queue]:
+                             self.convert_queue, self.resize_queue, self.transcription_queue]:
                 method = self.channel.queue_declare(queue=queue_name, passive=True)
                 queue_info[queue_name] = {
                     'name': queue_name,

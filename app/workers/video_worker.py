@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from app.services.video_service import VideoService
+from app.services.transcription_service import TranscriptionService
 from app.utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 class VideoWorker:
     def __init__(self):
         self.video_service = VideoService()
+        self.transcription_service = TranscriptionService()
         self.json_storage = JSONStorage()
         self.connection = None
         self.channel = None
@@ -42,6 +44,7 @@ class VideoWorker:
         self.merge_queue = 'video_merge_queue'
         self.convert_queue = 'video_convert_queue'
         self.resize_queue = 'video_resize_queue'
+        self.transcription_queue = 'transcription_queue'
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -74,6 +77,7 @@ class VideoWorker:
             self.channel.queue_declare(queue=self.merge_queue, durable=True)
             self.channel.queue_declare(queue=self.convert_queue, durable=True)
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
+            self.channel.queue_declare(queue=self.transcription_queue, durable=True)
             
             # ตั้งค่า QoS
             self.channel.basic_qos(prefetch_count=1)
@@ -112,6 +116,13 @@ class VideoWorker:
         self.channel.basic_consume(
             queue=self.resize_queue,
             on_message_callback=self._process_resize_task,
+            auto_ack=False
+        )
+        
+        # Transcription consumer
+        self.channel.basic_consume(
+            queue=self.transcription_queue,
+            on_message_callback=self._process_transcription_task,
             auto_ack=False
         )
         
@@ -200,6 +211,27 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล resize task: {e}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+    
+    def _process_transcription_task(self, ch, method, properties, body):
+        """ประมวลผล transcription task"""
+        try:
+            task_data = json.loads(body.decode('utf-8'))
+            logger.info(f"เริ่มประมวลผล transcription task: {task_data.get('task_id')}")
+            
+            # อัปเดตสถานะเป็น processing
+            task_data['status'] = 'processing'
+            self.json_storage.save_transcription(task_data['task_id'], task_data)
+            
+            # ประมวลผล transcription
+            asyncio.run(self._execute_transcription_task(task_data))
+            
+            # Acknowledge message
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            logger.info(f"transcription task เสร็จสิ้น: {task_data.get('task_id')}")
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}")
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
     
     async def _execute_trim_task(self, task_data: Dict[str, Any]):
@@ -471,6 +503,50 @@ class VideoWorker:
             task_data['error_message'] = str(e)
             task_data['completed_at'] = asyncio.get_event_loop().time()
             self.json_storage.save_video_task(task_data['task_id'], task_data)
+    
+    async def _execute_transcription_task(self, task_data: Dict[str, Any]):
+        """ดำเนินการ transcription"""
+        try:
+            file_path = task_data['file_path']
+            language = task_data.get('language', 'th')
+            model_size = task_data.get('model_size', 'base')
+            chunk_duration = task_data.get('chunk_duration', 30)
+            
+            logger.info(f"เริ่ม transcription: {file_path}")
+            
+            # สร้าง task object สำหรับ transcription service
+            from app.models.transcription import TranscriptionResponse
+            from datetime import datetime
+            
+            task = TranscriptionResponse(
+                task_id=task_data['task_id'],
+                status="processing",
+                file_path=file_path,
+                language=language,
+                created_at=datetime.now()
+            )
+            
+            # เพิ่ม task เข้าไปใน transcription service
+            self.transcription_service.tasks[task_data['task_id']] = task
+            
+            # เรียกใช้ transcription service
+            await self.transcription_service._process_transcription(
+                task_data['task_id'], file_path, language, model_size, chunk_duration
+            )
+            
+            # อัปเดต task
+            task_data['status'] = 'completed'
+            task_data['completed_at'] = asyncio.get_event_loop().time()
+            
+            # บันทึกลง JSON storage
+            self.json_storage.save_transcription(task_data['task_id'], task_data)
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการ transcription: {e}")
+            task_data['status'] = 'failed'
+            task_data['error_message'] = str(e)
+            task_data['completed_at'] = asyncio.get_event_loop().time()
+            self.json_storage.save_transcription(task_data['task_id'], task_data)
     
     def run(self):
         """เริ่มต้น worker"""

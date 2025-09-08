@@ -8,6 +8,7 @@ from pathlib import Path
 from .file_service import FileService
 from .whisper_service import WhisperService
 from ..models.caption import CaptionSegment, CaptionResponse
+from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class CaptionService:
     def __init__(self):
         self.file_service = FileService()
         self.whisper_service = WhisperService()
+        self.json_storage = JSONStorage()
         self.tasks: Dict[str, CaptionResponse] = {}
     
     async def start_caption_generation(self, file_path: str, language: str = "th",
@@ -40,6 +42,14 @@ class CaptionService:
         ))
         
         return task_id
+    
+    def get_task_status(self, task_id: str) -> Optional[CaptionResponse]:
+        """ดึงสถานะ task"""
+        return self.tasks.get(task_id)
+    
+    def get_all_tasks(self) -> List[CaptionResponse]:
+        """ดึง tasks ทั้งหมด"""
+        return list(self.tasks.values())
     
     async def _process_caption(self, task_id: str, file_path: str,
                              language: str, model_size: str, subtitle_format: str):
@@ -100,6 +110,21 @@ class CaptionService:
             
             task.status = "completed"
             task.completed_at = datetime.now()
+            
+            # บันทึกผลลัพธ์ลง storage
+            caption_data = {
+                "task_id": task.task_id,
+                "status": task.status,
+                "file_path": task.file_path,
+                "language": task.language,
+                "subtitle_format": task.subtitle_format,
+                "subtitle_content": task.subtitle_content,
+                "segments": [segment.dict() for segment in task.segments] if task.segments else [],
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "error_message": task.error_message
+            }
+            self.json_storage.save_caption(task_id, caption_data)
             
             logger.info(f"สร้าง close caption เสร็จสิ้น: {task_id}")
             

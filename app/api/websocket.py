@@ -1,170 +1,142 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import JSONResponse
+"""
+WebSocket API Endpoints สำหรับ Real-time Transcription Updates
+"""
+
 import logging
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from typing import Optional
 import json
 import asyncio
-from typing import Dict, Set
+from datetime import datetime
 
-from ..services.transcription_service import TranscriptionService
-from ..services.caption_service import CaptionService
+from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["websocket"])
+router = APIRouter()
 
-# เก็บ WebSocket connections
-transcription_connections: Dict[str, Set[WebSocket]] = {}
-caption_connections: Dict[str, Set[WebSocket]] = {}
-
-transcription_service = TranscriptionService()
-caption_service = CaptionService()
-
-@router.websocket("/ws/transcription/{task_id}")
-async def websocket_transcription_progress(websocket: WebSocket, task_id: str):
-    """WebSocket สำหรับติดตามความคืบหน้าของ transcription"""
+@router.websocket("/ws/transcription/{user_id}")
+async def websocket_transcription_endpoint(
+    websocket: WebSocket, 
+    user_id: str,
+    task_id: Optional[str] = Query(None)
+):
+    """
+    WebSocket endpoint สำหรับ real-time transcription updates
     
-    await websocket.accept()
-    
-    # เพิ่ม connection
-    if task_id not in transcription_connections:
-        transcription_connections[task_id] = set()
-    transcription_connections[task_id].add(websocket)
-    
+    Usage:
+    - ws://localhost:8001/ws/transcription/{user_id}
+    - ws://localhost:8001/ws/transcription/{user_id}?task_id={task_id}
+    """
     try:
-        # ส่งสถานะเริ่มต้น
-        task = transcription_service.get_task_status(task_id)
-        if task:
-            await websocket.send_text(json.dumps({
-                "type": "status",
-                "task_id": task_id,
-                "status": task.status,
-                "progress": 0
-            }, ensure_ascii=False))
+        # เชื่อมต่อ user
+        await websocket_manager.connect_user(websocket, user_id)
         
-        # ติดตามความคืบหน้า
-        while True:
-            await asyncio.sleep(1)  # ตรวจสอบทุก 1 วินาที
-            
-            task = transcription_service.get_task_status(task_id)
-            if task:
-                # คำนวณความคืบหน้า (ประมาณการ)
-                progress = 0
-                if task.status == "pending":
-                    progress = 0
-                elif task.status == "processing":
-                    progress = 50  # ประมาณการ
-                elif task.status == "completed":
-                    progress = 100
-                elif task.status == "failed":
-                    progress = -1
-                
-                await websocket.send_text(json.dumps({
-                    "type": "status",
-                    "task_id": task_id,
-                    "status": task.status,
-                    "progress": progress,
-                    "error_message": task.error_message if task.error_message else None
-                }, ensure_ascii=False))
-                
-                # ถ้าเสร็จสิ้นแล้ว ให้ปิด connection
-                if task.status in ["completed", "failed", "cancelled"]:
+        # Subscribe task ถ้ามี
+        if task_id:
+            await websocket_manager.subscribe_task(user_id, task_id)
+        
+        # รอรับข้อความจาก client พร้อม keepalive
+        
+        async def heartbeat():
+            """ส่ง ping ทุก 30 วินาที"""
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    await websocket.send_text(json.dumps({
+                        "type": "ping",
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                except Exception:
                     break
-            
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {task_id}")
-    except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดใน WebSocket: {e}")
-    finally:
-        # ลบ connection
-        if task_id in transcription_connections:
-            transcription_connections[task_id].discard(websocket)
-            if not transcription_connections[task_id]:
-                del transcription_connections[task_id]
-
-@router.websocket("/ws/caption/{task_id}")
-async def websocket_caption_progress(websocket: WebSocket, task_id: str):
-    """WebSocket สำหรับติดตามความคืบหน้าของ caption"""
-    
-    await websocket.accept()
-    
-    # เพิ่ม connection
-    if task_id not in caption_connections:
-        caption_connections[task_id] = set()
-    caption_connections[task_id].add(websocket)
-    
-    try:
-        # ส่งสถานะเริ่มต้น
-        task = caption_service.get_task_status(task_id)
-        if task:
-            await websocket.send_text(json.dumps({
-                "type": "status",
-                "task_id": task_id,
-                "status": task.status,
-                "progress": 0
-            }, ensure_ascii=False))
         
-        # ติดตามความคืบหน้า
-        while True:
-            await asyncio.sleep(1)  # ตรวจสอบทุก 1 วินาที
-            
-            task = caption_service.get_task_status(task_id)
-            if task:
-                # คำนวณความคืบหน้า (ประมาณการ)
-                progress = 0
-                if task.status == "pending":
-                    progress = 0
-                elif task.status == "processing":
-                    progress = 50  # ประมาณการ
-                elif task.status == "completed":
-                    progress = 100
-                elif task.status == "failed":
-                    progress = -1
-                
-                await websocket.send_text(json.dumps({
-                    "type": "status",
-                    "task_id": task_id,
-                    "status": task.status,
-                    "progress": progress,
-                    "error_message": task.error_message if task.error_message else None
-                }, ensure_ascii=False))
-                
-                # ถ้าเสร็จสิ้นแล้ว ให้ปิด connection
-                if task.status in ["completed", "failed", "cancelled"]:
+        # เริ่ม heartbeat task
+        heartbeat_task = asyncio.create_task(heartbeat())
+        
+        try:
+            while True:
+                try:
+                    # รอ message หรือ timeout ใน 60 วินาที
+                    data = await asyncio.wait_for(
+                        websocket.receive_text(), 
+                        timeout=60.0
+                    )
+                    message = json.loads(data)
+                    
+                    # Handle different message types
+                    await handle_websocket_message(websocket, user_id, message)
+                    
+                except asyncio.TimeoutError:
+                    # ไม่มี message ใน 60 วินาที - ส่ง ping
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "message": "Connection active"
+                    }))
+                    continue
+                    
+                except json.JSONDecodeError:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Invalid JSON format"
+                    }))
+                except WebSocketDisconnect:
                     break
-            
+        finally:
+            heartbeat_task.cancel()
+                
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {task_id}")
+        logger.info(f"WebSocket disconnected for user {user_id}")
     except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดใน WebSocket: {e}")
+        logger.error(f"WebSocket error for user {user_id}: {e}")
     finally:
-        # ลบ connection
-        if task_id in caption_connections:
-            caption_connections[task_id].discard(websocket)
-            if not caption_connections[task_id]:
-                del caption_connections[task_id]
+        await websocket_manager.disconnect_user(websocket, user_id)
 
-# ฟังก์ชันสำหรับส่งข้อความไปยัง WebSocket connections
-async def broadcast_transcription_update(task_id: str, message: dict):
-    """ส่งข้อความไปยัง transcription WebSocket connections"""
-    if task_id in transcription_connections:
-        disconnected = set()
-        for websocket in transcription_connections[task_id]:
-            try:
-                await websocket.send_text(json.dumps(message, ensure_ascii=False))
-            except:
-                disconnected.add(websocket)
-        
-        # ลบ connections ที่ขาด
-        transcription_connections[task_id] -= disconnected
+async def handle_websocket_message(websocket: WebSocket, user_id: str, message: dict):
+    """จัดการข้อความที่ได้รับจาก WebSocket client"""
+    
+    message_type = message.get("type")
+    
+    if message_type == "subscribe":
+        # Subscribe ใหม่
+        task_id = message.get("task_id")
+        if task_id:
+            await websocket_manager.subscribe_task(user_id, task_id)
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": "task_id required for subscription"
+            }))
+    
+    elif message_type == "unsubscribe":
+        # Unsubscribe
+        task_id = message.get("task_id")
+        if task_id:
+            await websocket_manager.unsubscribe_task(user_id, task_id)
+    
+    elif message_type == "ping":
+        # Health check
+        await websocket.send_text(json.dumps({
+            "type": "pong",
+            "timestamp": message.get("timestamp")
+        }))
+    
+    elif message_type == "get_stats":
+        # ส่งสถิติ (สำหรับ admin)
+        stats = websocket_manager.get_stats()
+        await websocket.send_text(json.dumps({
+            "type": "stats",
+            "data": stats
+        }))
+    
+    else:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": f"Unknown message type: {message_type}"
+        }))
 
-async def broadcast_caption_update(task_id: str, message: dict):
-    """ส่งข้อความไปยัง caption WebSocket connections"""
-    if task_id in caption_connections:
-        disconnected = set()
-        for websocket in caption_connections[task_id]:
-            try:
-                await websocket.send_text(json.dumps(message, ensure_ascii=False))
-            except:
-                disconnected.add(websocket)
-        
-        # ลบ connections ที่ขาด
-        caption_connections[task_id] -= disconnected 
+@router.get("/ws/stats")
+async def get_websocket_stats():
+    """API endpoint สำหรับดู WebSocket statistics"""
+    return {
+        "websocket_stats": websocket_manager.get_stats(),
+        "status": "active"
+    }
