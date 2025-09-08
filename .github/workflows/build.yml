@@ -14,8 +14,11 @@ env:
   VERSION: ${{ github.sha }}
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      main-image: ${{ steps.save-main.outputs.imageid }}
+      whisper-image: ${{ steps.save-whisper.outputs.imageid }}
 
     steps:
       - name: Checkout code
@@ -24,54 +27,41 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Azure Container Registry
-        uses: azure/docker-login@v1
-        with:
-          login-server: ${{ env.REGISTRY }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
-
-      - name: Extract metadata for main app
-        id: meta-main
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest
-
-      - name: Extract metadata for whisper service
-        id: meta-whisper
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:staging-latest
-
-      - name: Build and push main application
+      - name: Build main application
+        id: build-main
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta-main.outputs.tags }}
-          labels: ${{ steps.meta-main.outputs.labels }}
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          outputs: type=registry
 
-      - name: Build and push whisper service
+      - name: Build whisper service
+        id: build-whisper
         uses: docker/build-push-action@v5
         with:
           context: ./whisper-service
           file: ./whisper-service/Dockerfile
-          push: true
-          tags: ${{ steps.meta-whisper.outputs.tags }}
-          labels: ${{ steps.meta-whisper.outputs.labels }}
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          outputs: type=registry
+
+      - name: Save main image ID
+        id: save-main
+        run: |
+          echo "imageid=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_OUTPUT
+
+      - name: Save whisper image ID
+        id: save-whisper
+        run: |
+          echo "imageid=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_OUTPUT
 
       - name: Update docker-compose.staging.yml with image tags
         run: |
@@ -180,15 +170,71 @@ jobs:
           EOF
 
       - name: Upload staging compose file
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: docker-compose-staging-acr
           path: docker-compose.staging.acr.yml
 
-      - name: Output image info
+      - name: Output build info
         run: |
-          echo "✅ Images built and pushed successfully!"
-          echo "Main App Tags: ${{ steps.meta-main.outputs.tags }}"
-          echo "Whisper Tags: ${{ steps.meta-whisper.outputs.tags }}"
+          echo "✅ Images built successfully!"
+          echo "Main App: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}"
+          echo "Whisper: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}"
           echo "Registry: ${{ env.REGISTRY }}"
           echo "Staging Compose File: docker-compose.staging.acr.yml"
+
+  push:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Push main application
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push whisper service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./whisper-service
+          file: ./whisper-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:staging-latest
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output push info
+        run: |
+          echo "✅ Images pushed successfully!"
+          echo "Main App Tags:"
+          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}"
+          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest"
+          echo "Whisper Tags:"
+          echo "  - ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}"
+          echo "  - ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:staging-latest"
+          echo "Registry: ${{ env.REGISTRY }}"
