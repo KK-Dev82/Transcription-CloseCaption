@@ -6,11 +6,11 @@ import json
 from typing import List, Dict
 import asyncio
 
-from .api import transcription, caption, upload, websocket, video, queue
+from .api import transcription, caption, upload, websocket, video, queue, live_streaming, thai_processing, transcription_enhanced, progress
 from .services.transcription_service import TranscriptionService
 from .services.caption_service import CaptionService
 from .services.video_service import VideoService
-from .utils.json_storage import JSONStorage
+from .utils.storage_factory import get_storage, StorageFactory
 
 # ตั้งค่า logging
 logging.basicConfig(
@@ -41,18 +41,22 @@ app.add_middleware(
 transcription_service = TranscriptionService()
 caption_service = CaptionService()
 video_service = VideoService()
-json_storage = JSONStorage()
+storage = get_storage()
 
 # WebSocket connections
 active_connections: List[WebSocket] = []
 
 # รวม API routes
 app.include_router(transcription.router)
+app.include_router(transcription_enhanced.router)
+app.include_router(progress.router)
 app.include_router(caption.router)
 app.include_router(upload.router)
 app.include_router(websocket.router)
 app.include_router(video.router)
 app.include_router(queue.router)
+app.include_router(live_streaming.router)
+app.include_router(thai_processing.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -65,12 +69,17 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "endpoints": {
-            "transcription": "/transcription",
+            "transcription": "/transcribe",
+            "transcription_enhanced": "/transcribe-enhanced",
+            "progress_tracking": "/progress",
             "caption": "/caption", 
             "upload": "/upload",
             "video": "/video",
+            "live_streaming": "/live",
+            "thai_processing": "/thai",
             "websocket": "/ws"
-        }
+        },
+        "storage": StorageFactory.get_storage_info()
     }
 
 @app.get("/health")
@@ -91,10 +100,10 @@ async def get_stats():
     """ดึงสถิติระบบ"""
     try:
         # ดึงสถิติ transcription
-        transcriptions = json_storage.list_all_transcriptions()
+        transcriptions = storage.list_all_transcriptions()
         
         # ดึงสถิติ video tasks
-        video_tasks = json_storage.list_all_video_tasks()
+        video_tasks = storage.list_all_video_tasks()
         
         # คำนวณสถิติ
         total_transcriptions = len(transcriptions)
@@ -126,7 +135,7 @@ async def cleanup_system():
     """ลบไฟล์เก่าในระบบ"""
     try:
         # ลบไฟล์เก่า
-        json_storage.cleanup_old_files(24)  # ลบไฟล์ที่เก่ากว่า 24 ชั่วโมง
+        storage.cleanup_old_files(24)  # ลบไฟล์ที่เก่ากว่า 24 ชั่วโมง
         
         return {
             "message": "ลบไฟล์เก่าเสร็จสิ้น",
@@ -156,11 +165,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # ส่งสถานะปัจจุบัน
                 if task_type == "transcription":
-                    task = json_storage.load_transcription(task_id)
+                    task = storage.load_transcription(task_id)
                 elif task_type == "caption":
-                    task = json_storage.load_caption(task_id)
+                    task = storage.load_caption(task_id)
                 elif task_type == "video":
-                    task = json_storage.load_video_task(task_id)
+                    task = storage.load_video_task(task_id)
                 else:
                     task = None
                 

@@ -216,9 +216,14 @@ class VideoWorker:
             if not input_path.exists():
                 raise FileNotFoundError(f"ไม่พบไฟล์: {input_file}")
             
-            # สร้างชื่อไฟล์ output
-            output_filename = f"trimmed_{task_data['task_id']}.{output_format}"
+            # สร้างชื่อไฟล์ output ด้วยลำดับตอน
+            segment_number = task_data.get('segment_number', 1)
+            output_filename = f"trimmed_{segment_number:02d}_{task_data['task_id']}.{output_format}"
             output_path = Path("uploads") / output_filename
+            
+            # อัปเดต progress เริ่มต้น
+            task_data['progress'] = 0
+            self.json_storage.save_video_task(task_data['task_id'], task_data)
             
             # ตั้งค่า FFmpeg parameters
             duration = end_time - start_time
@@ -247,16 +252,44 @@ class VideoWorker:
             else:
                 stream = ffmpeg.output(stream, str(output_path))
             
-            # รัน FFmpeg
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            # รัน FFmpeg พร้อม progress tracking
+            start_time_process = asyncio.get_event_loop().time()
             
-            # อัปเดต task
-            task_data['status'] = 'completed'
-            task_data['output_file'] = str(output_path)
-            task_data['completed_at'] = asyncio.get_event_loop().time()
+            # สร้าง task สำหรับอัปเดต progress
+            async def update_progress():
+                while True:
+                    await asyncio.sleep(5)  # อัปเดตทุก 5 วินาที
+                    elapsed = asyncio.get_event_loop().time() - start_time_process
+                    # ประมาณ progress จากเวลา (สมมติว่าใช้เวลา 80% ของ duration)
+                    estimated_duration = duration * 0.8
+                    progress = min(int((elapsed / estimated_duration) * 100), 95)
+                    task_data['progress'] = progress
+                    self.json_storage.save_video_task(task_data['task_id'], task_data)
+                    logger.info(f"Trim progress: {progress}%")
             
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_data['task_id'], task_data)
+            # เริ่ม progress tracking
+            progress_task = asyncio.create_task(update_progress())
+            
+            try:
+                # รัน FFmpeg
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
+                # ยกเลิก progress tracking
+                progress_task.cancel()
+                
+                # อัปเดต task เสร็จสิ้น
+                task_data['status'] = 'completed'
+                task_data['progress'] = 100
+                task_data['output_file'] = str(output_path)
+                task_data['completed_at'] = asyncio.get_event_loop().time()
+                
+                # บันทึกลง JSON storage
+                self.json_storage.save_video_task(task_data['task_id'], task_data)
+                
+            except Exception as e:
+                # ยกเลิก progress tracking
+                progress_task.cancel()
+                raise e
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการตัดวิดีโอ: {e}")

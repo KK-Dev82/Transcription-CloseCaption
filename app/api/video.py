@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Body, BackgroundTasks
 from fastapi.responses import FileResponse
 from typing import List, Optional, Dict
 import logging
 from pathlib import Path
+import uuid
 
 from ..services.video_service import VideoService
 from ..services.file_service import FileService
@@ -29,8 +30,10 @@ async def upload_video(file: UploadFile = File(...)):
                 detail=f"ไม่รองรับไฟล์ประเภท {file_extension}. รองรับ: {', '.join(allowed_extensions)}"
             )
         
+        # อ่านไฟล์เป็น bytes
+        file_content = await file.read()
         # บันทึกไฟล์
-        file_path = await file_service.save_upload_file(file)
+        file_path = await file_service.save_uploaded_file(file_content, file.filename)
         
         # ดึงข้อมูลวิดีโอ
         video_info = video_service.get_video_info(str(file_path))
@@ -238,6 +241,7 @@ async def get_task_status(task_id: str):
             "task_id": task_id,
             "status": task.get("status"),
             "type": task.get("type"),
+            "progress": task.get("progress", 0),
             "created_at": task.get("created_at"),
             "completed_at": task.get("completed_at"),
             "output_file": task.get("output_file"),
@@ -377,4 +381,64 @@ async def cleanup_old_files(max_age_hours: int = Query(24, description="อา�
         
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาดในการลบไฟล์เก่า: {e}")
+        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}")
+
+@router.post("/segment")
+async def segment_video(
+    request: dict = Body(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """
+    แบ่งตอนวิดีโอและทำ transcription แบบ batch พร้อมกัน
+    """
+    try:
+        file_path = request.get("file_path")
+        segment_duration = request.get("segment_duration", 600)  # 10 นาที
+        overlap = request.get("overlap", 5)  # 5 วินาที
+        language = request.get("language", "th")
+        model_size = request.get("model_size", "base")
+        
+        if not file_path:
+            raise HTTPException(status_code=400, detail="ต้องระบุ file_path")
+        
+        # สร้าง task ID
+        task_id = str(uuid.uuid4())
+        
+        # ส่งงานไปยัง background task แบบ async
+        background_tasks.add_task(
+            video_service.process_video_segmentation,
+            task_id,
+            file_path,
+            segment_duration,
+            overlap,
+            language,
+            model_size
+        )
+        
+        return {
+            "task_id": task_id,
+            "message": "ส่งงานแบ่งตอนวิดีโอและ transcription พร้อมกันสำเร็จ",
+            "status": "processing",
+            "segments": {
+                "duration": segment_duration,
+                "overlap": overlap,
+                "language": language,
+                "model_size": model_size
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการแบ่งตอนวิดีโอ: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}")
+
+@router.get("/segment/{task_id}")
+async def get_segmentation_status(task_id: str):
+    """
+    ตรวจสอบสถานะการแบ่งตอนวิดีโอ
+    """
+    try:
+        status = video_service.get_segmentation_status(task_id)
+        return status
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการตรวจสอบสถานะ: {str(e)}")
         raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}") 

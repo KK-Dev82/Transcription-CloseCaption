@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Main API Service
   api:
@@ -32,10 +30,10 @@ services:
       retries: 3
       start_period: 40s
 
-  # Video Processing Worker
-  video-worker:
+  # Video Processing Worker 1
+  video-worker-1:
     build: .
-    container_name: video-worker
+    container_name: video-worker-1
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -55,8 +53,30 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    deploy:
-      replicas: 2
+
+  # Video Processing Worker 2
+  video-worker-2:
+    build: .
+    container_name: video-worker-2
+    command: python -m app.workers.video_worker
+    volumes:
+      - ./uploads:/app/uploads
+      - ./storage:/app/storage
+      - ./temp:/app/temp
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
 
   # RabbitMQ สำหรับ message queue
   rabbitmq:
@@ -91,6 +111,24 @@ services:
       - app-network
     restart: unless-stopped
     command: redis-server --appendonly yes
+
+  # Whisper.cpp สำหรับ transcription (Production)
+  whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    container_name: transcription-whisper
+    volumes:
+      - ./uploads:/app/audio
+      - ./models:/app/models
+      - ./temp:/app/output
+    environment:
+      - WHISPER_MODEL_PATH=/app/models
+    networks:
+      - app-network
+    restart: unless-stopped
+    profiles:
+      - production
 
   # Nginx สำหรับ reverse proxy (optional)
   nginx:

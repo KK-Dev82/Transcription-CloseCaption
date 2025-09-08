@@ -31,6 +31,7 @@
 
 ## 🏗️ Architecture
 
+### Development Environment Architecture
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend      │    │   FastAPI       │    │   RabbitMQ      │
@@ -39,8 +40,9 @@
                               │                        │
                               ▼                        ▼
                        ┌─────────────────┐    ┌─────────────────┐
-                       │   Whisper.cpp   │    │   Video Worker  │
-                       │   Transcription │    │   (FFmpeg)      │
+                       │   Whisper API   │    │   Video Worker  │
+                       │   (Container)   │    │   (FFmpeg)      │
+                       │   Port 8002     │    │   (Container)   │
                        └─────────────────┘    └─────────────────┘
                               │                        │
                               ▼                        ▼
@@ -49,6 +51,11 @@
                        │   (File-based)  │    │   Video Files   │
                        └─────────────────┘    └─────────────────┘
 ```
+
+### Container Separation
+- **API Container**: ทำ video processing (FFmpeg) และ audio extraction
+- **Whisper Container**: ทำ transcription เท่านั้น (ไม่มี FFmpeg)
+- **Shared Volumes**: temp, uploads, models, storage
 
 ### Queue Architecture
 ```
@@ -121,7 +128,30 @@ mkdir -p uploads temp storage models
 
 ## 🚀 Quick Start
 
-### Development Mode
+### Development Environment (แนะนำ)
+
+1. **Setup Development Environment:**
+   ```bash
+   ./dev-setup.sh
+   ```
+
+2. **Rebuild และ Start Development Services:**
+   ```bash
+   ./rebuild-dev.sh
+   ```
+
+3. **Start Development Services (ถ้า build แล้ว):**
+   ```bash
+   docker-compose -f docker-compose.dev.yml up -d
+   ```
+
+4. **View Logs:**
+   ```bash
+   docker-compose -f docker-compose.dev.yml logs -f api
+   docker-compose -f docker-compose.dev.yml logs -f whisper
+   ```
+
+### Development Mode (Local)
 ```bash
 # รัน API Service
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
@@ -134,7 +164,7 @@ python run_worker.py &
 python run_worker.py &
 ```
 
-### Docker Mode (แนะนำ)
+### Production Docker Mode
 ```bash
 # รันระบบทั้งหมด (API + RabbitMQ + Workers)
 docker-compose up --build
@@ -146,6 +176,7 @@ docker-compose logs -f rabbitmq
 
 ### Access Services
 - API Documentation: http://localhost:8001/docs
+- Whisper API: http://localhost:8002/health
 - RabbitMQ Management: http://localhost:15672 (admin/admin123)
 
 ## 📚 API Usage

@@ -19,7 +19,12 @@ RUN apt-get update && apt-get install -y \
     g++ \
     make \
     curl \
+    git \
+    cmake \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+
 
 # สร้าง working directory
 WORKDIR /app

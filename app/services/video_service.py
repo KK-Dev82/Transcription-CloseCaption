@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import ffmpeg
 import json
+import os
+import time
 
 from .file_service import FileService
 from .rabbitmq_service import RabbitMQService
@@ -19,46 +21,61 @@ class VideoService:
         self.json_storage = JSONStorage()
         self.rabbitmq_service = RabbitMQService()
         self.tasks: Dict[str, Dict] = {}
+        self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
     
     async def trim_video(self, input_file: str, start_time: float, end_time: float,
                         output_format: str = "mp4", quality: str = "medium") -> str:
         """ตัดวิดีโอตามช่วงเวลา - ส่งไปยัง RabbitMQ queue"""
-        task_id = str(uuid.uuid4())
         
-        task = {
-            "task_id": task_id,
-            "type": "trim",
-            "status": "pending",
-            "input_file": input_file,
-            "start_time": start_time,
-            "end_time": end_time,
-            "output_format": output_format,
-            "quality": quality,
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.tasks[task_id] = task
-        
-        # บันทึกลง JSON storage
-        self.json_storage.save_video_task(task_id, task)
-        
-        # ส่งไปยัง RabbitMQ queue
+        # ส่งไปยัง RabbitMQ queue และรับ task_id
         try:
-            self.rabbitmq_service.send_trim_task(
+            task_id = self.rabbitmq_service.send_trim_task(
                 input_file=input_file,
                 start_time=start_time,
                 end_time=end_time,
                 output_format=output_format,
                 quality=quality
             )
+            
+            task = {
+                "task_id": task_id,
+                "type": "trim",
+                "status": "pending",
+                "input_file": input_file,
+                "start_time": start_time,
+                "end_time": end_time,
+                "output_format": output_format,
+                "quality": quality,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            self.tasks[task_id] = task
+            
+            # บันทึกลง JSON storage
+            self.json_storage.save_video_task(task_id, task)
+            
             logger.info(f"ส่ง trim task ไปยัง queue: {task_id}")
+            return task_id
+            
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
+            # สร้าง task_id ใหม่สำหรับ error case
+            task_id = str(uuid.uuid4())
+            task = {
+                "task_id": task_id,
+                "type": "trim",
+                "status": "failed",
+                "input_file": input_file,
+                "start_time": start_time,
+                "end_time": end_time,
+                "output_format": output_format,
+                "quality": quality,
+                "created_at": datetime.now().isoformat(),
+                "error_message": str(e)
+            }
+            self.tasks[task_id] = task
             self.json_storage.save_video_task(task_id, task)
-        
-        return task_id
+            return task_id
     
     async def merge_videos(self, input_files: List[str], output_format: str = "mp4",
                           quality: str = "medium") -> str:
@@ -302,4 +319,370 @@ class VideoService:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลวิดีโอ: {e}")
-            return {"error": str(e)} 
+            return {"error": str(e)}
+    
+    async def process_video_segmentation(
+        self, 
+        task_id: str, 
+        file_path: str, 
+        segment_duration: int = 600, 
+        overlap: int = 5,
+        language: str = "th",
+        model_size: str = "base"
+    ):
+        """ประมวลผลการแบ่งตอนวิดีโอและทำ transcription แบบ batch"""
+        try:
+            logger.info(f"เริ่มประมวลผล video segmentation: {task_id}")
+            
+            # 1. ดึงข้อมูลวิดีโอ
+            video_info = self.get_video_info(file_path)
+            if "error" in video_info:
+                self.segmentation_tasks[task_id] = {
+                    "task_id": task_id,
+                    "status": "failed",
+                    "error": video_info["error"]
+                }
+                return
+            
+            duration = video_info.get("duration", 0)
+            if duration == 0:
+                self.segmentation_tasks[task_id] = {
+                    "task_id": task_id,
+                    "status": "failed",
+                    "error": "ไม่สามารถดึงความยาววิดีโอได้"
+                }
+                return
+            
+            # 2. สร้าง segments
+            segments = self._create_segments(duration, segment_duration, overlap)
+            
+            # 3. เริ่มต้น task
+            self.segmentation_tasks[task_id] = {
+                "task_id": task_id,
+                "status": "processing",
+                "progress": 0,
+                "current_segment": 0,
+                "total_segments": len(segments),
+                "file_path": file_path,
+                "segments": [],
+                "created_at": datetime.now().isoformat(),
+                "started_at": datetime.now().isoformat()
+            }
+            
+            logger.info(f"เริ่มประมวลผล {len(segments)} segments")
+            
+            # 4. ประมวลผล segments แบบคิวต่อเนื่อง
+            completed_segments = []
+            for i, segment in enumerate(segments):
+                try:
+                    logger.info(f"ประมวลผล segment {i+1}/{len(segments)}")
+                    
+                    # อัปเดต current_segment
+                    self.segmentation_tasks[task_id]["current_segment"] = i + 1
+                    
+                    # 1. ตัด segment
+                    trim_result = await self._trim_segment_async(file_path, segment)
+                    if not trim_result:
+                        logger.error(f"ไม่สามารถตัด segment {i+1} ได้")
+                        continue
+                    
+                    segment_file_path = trim_result.get('output_path')
+                    
+                    # 2. ทำ transcription (คิวต่อเนื่อง)
+                    transcribe_result = await self._transcribe_segment_async(
+                        segment_file_path, language, model_size
+                    )
+                    if not transcribe_result:
+                        logger.error(f"ไม่สามารถทำ transcription segment {i+1} ได้")
+                        continue
+                    
+                    # 3. สร้างผลลัพธ์
+                    segment_result = {
+                        'segment_number': i + 1,
+                        'start_time': segment['start_time'],
+                        'end_time': segment['end_time'],
+                        'segment_file': segment_file_path,
+                        'transcription': transcribe_result
+                    }
+                    
+                    completed_segments.append(segment_result)
+                    
+                    # อัปเดต progress
+                    progress = int((i + 1) / len(segments) * 100)
+                    self.segmentation_tasks[task_id]["progress"] = progress
+                    self.segmentation_tasks[task_id]["segments"] = completed_segments
+                    
+                    logger.info(f"เสร็จสิ้น segment {i+1}, progress: {progress}%")
+                    
+                except Exception as e:
+                    logger.error(f"เกิดข้อผิดพลาดในการประมวลผล segment {i+1}: {str(e)}")
+                    continue
+            
+            # 5. เสร็จสิ้น
+            if len(completed_segments) == len(segments):
+                self.segmentation_tasks[task_id]["status"] = "completed"
+                self.segmentation_tasks[task_id]["completed_at"] = datetime.now().isoformat()
+                logger.info(f"เสร็จสิ้น video segmentation: {task_id}")
+            else:
+                self.segmentation_tasks[task_id]["status"] = "completed_with_errors"
+                self.segmentation_tasks[task_id]["completed_at"] = datetime.now().isoformat()
+                self.segmentation_tasks[task_id]["error"] = f"เสร็จสิ้น {len(completed_segments)}/{len(segments)} segments"
+                logger.warning(f"เสร็จสิ้น video segmentation ด้วยข้อผิดพลาด: {task_id}")
+            
+            # 6. บันทึกผลลัพธ์
+            self._save_segmentation_results(task_id)
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล video segmentation: {str(e)}")
+            self.segmentation_tasks[task_id] = {
+                "task_id": task_id,
+                "status": "failed",
+                "error": str(e)
+            }
+    
+    async def _trim_segment_async(self, file_path: str, segment: Dict) -> Optional[Dict]:
+        """ตัด segment แบบ async"""
+        try:
+            # ส่งงานไปยัง RabbitMQ
+            task_id = self.rabbitmq_service.send_trim_task(
+                input_file=file_path,
+                start_time=segment['start_time'],
+                end_time=segment['end_time'],
+                output_format="mp4",
+                quality="medium",
+                segment_number=segment.get('segment_number', 1)
+            )
+            
+            # รอให้เสร็จสิ้นแบบ async
+            max_wait = 300  # 5 นาที
+            wait_time = 0
+            while wait_time < max_wait:
+                await asyncio.sleep(5)
+                wait_time += 5
+                
+                # ตรวจสอบสถานะจาก storage
+                status = self.json_storage.load_video_task(task_id)
+                if status and status.get('status') == 'completed':
+                    return {
+                        'output_path': status.get('output_file'),
+                        'status': 'completed'
+                    }
+                elif status and status.get('status') == 'failed':
+                    return None
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการตัด segment: {str(e)}")
+            return None
+    
+    async def _transcribe_segment_async(self, file_path: str, language: str, model_size: str) -> Optional[Dict]:
+        """ทำ transcription แบบ async"""
+        try:
+            from .transcription_service import TranscriptionService
+            transcription_service = TranscriptionService()
+            
+            # ส่งงาน transcription
+            task_id = await transcription_service.start_transcription(
+                file_path=file_path,
+                language=language,
+                model_size=model_size
+            )
+            
+            # รอให้เสร็จสิ้นแบบ async
+            max_wait = 300  # 5 นาที
+            wait_time = 0
+            while wait_time < max_wait:
+                await asyncio.sleep(5)
+                wait_time += 5
+                
+                # ตรวจสอบสถานะ
+                status = transcription_service.get_task_status(task_id)
+                if status and status.status == 'completed':
+                    return {
+                        'task_id': task_id,
+                        'text': status.full_text,
+                        'chunks': [chunk.dict() for chunk in status.chunks] if status.chunks else [],
+                        'status': 'completed'
+                    }
+                elif status and status.status == 'failed':
+                    return None
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการทำ transcription: {str(e)}")
+            return None
+    
+    def get_segmentation_status(self, task_id: str) -> Dict:
+        """ตรวจสอบสถานะการแบ่งตอนวิดีโอ"""
+        if task_id not in self.segmentation_tasks:
+            return {
+                "task_id": task_id,
+                "status": "not_found",
+                "message": "ไม่พบ task"
+            }
+        
+        return self.segmentation_tasks[task_id]
+    
+    def _create_segments(self, duration: float, segment_duration: int, overlap: int) -> List[Dict]:
+        """สร้างรายการ segments ตาม overlap"""
+        segments = []
+        start_time = 0
+        segment_number = 1
+        
+        while start_time < duration:
+            end_time = min(start_time + segment_duration, duration)
+            
+            segment = {
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'segment_number': segment_number
+            }
+            segments.append(segment)
+            
+            # เลื่อนไปยัง segment ถัดไป (ลบ overlap)
+            start_time = end_time - overlap
+            segment_number += 1
+            
+            # ถ้าเหลือน้อยกว่า segment_duration ให้หยุด
+            if start_time + segment_duration >= duration:
+                # สร้าง segment สุดท้าย
+                final_end = min(start_time + segment_duration, duration)
+                if final_end > start_time:  # ตรวจสอบว่ามีเนื้อหาเหลือ
+                    final_segment = {
+                        'start_time': start_time,
+                        'end_time': final_end,
+                        'duration': final_end - start_time,
+                        'segment_number': segment_number
+                    }
+                    segments.append(final_segment)
+                break
+        
+        logger.info(f"สร้าง {len(segments)} segments จากวิดีโอความยาว {duration} วินาที")
+        for i, seg in enumerate(segments):
+            logger.info(f"Segment {i+1}: {seg['start_time']:.1f}s - {seg['end_time']:.1f}s (ความยาว: {seg['duration']:.1f}s)")
+        
+        return segments
+    
+    def _save_segmentation_results(self, task_id: str):
+        """บันทึกผลลัพธ์การแบ่งตอน"""
+        try:
+            if task_id not in self.segmentation_tasks:
+                return
+            
+            task_data = self.segmentation_tasks[task_id]
+            
+            # สร้างไฟล์ผลลัพธ์
+            output_file = f"storage/segmentation_{task_id}.json"
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(task_data, f, indent=2, ensure_ascii=False)
+            
+            # สร้างไฟล์ข้อความรวม
+            text_file = f"storage/transcription_{task_id}.txt"
+            with open(text_file, 'w', encoding='utf-8') as f:
+                for segment in task_data.get('segments', []):
+                    transcription = segment.get('transcription', {})
+                    text = transcription.get('text', '')
+                    start_time = segment.get('start_time', 0)
+                    end_time = segment.get('end_time', 0)
+                    f.write(f"[{start_time:.1f}s-{end_time:.1f}s] {text}\n")
+            
+            logger.info(f"บันทึกผลลัพธ์ segmentation: {output_file}")
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการบันทึกผลลัพธ์: {str(e)}")
+
+    def extract_audio_from_video(self, video_path: str, output_path: str = None, 
+                                audio_format: str = "wav", sample_rate: int = 16000) -> str:
+        """แปลงวิดีโอเป็นไฟล์เสียง"""
+        
+        try:
+            video_path = Path(video_path)
+            if not video_path.exists():
+                raise FileNotFoundError(f"ไม่พบไฟล์วิดีโอ: {video_path}")
+            
+            # สร้าง output path ถ้าไม่ระบุ
+            if output_path is None:
+                output_path = video_path.parent / f"{video_path.stem}_audio.{audio_format}"
+            else:
+                output_path = Path(output_path)
+            
+            # สร้างโฟลเดอร์ถ้ายังไม่มี
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"เริ่มแปลงวิดีโอเป็นเสียง: {video_path} → {output_path}")
+            
+            # ใช้ ffmpeg แปลงวิดีโอเป็นเสียงใน format ที่ Whisper รองรับ
+            stream = ffmpeg.input(str(video_path))
+            stream = ffmpeg.output(stream, str(output_path), 
+                                 acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
+                                 ar=16000,            # 16kHz sample rate (Whisper รองรับ)
+                                 ac=1)                # Mono audio (Whisper รองรับ)
+            
+            ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            
+            logger.info(f"แปลงวิดีโอเป็นเสียงสำเร็จ: {output_path}")
+            return str(output_path)
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการแปลงวิดีโอเป็นเสียง: {e}")
+            raise
+
+    def extract_audio_chunks(self, video_path: str, chunk_duration: int = 30, 
+                           overlap: int = 5, audio_format: str = "wav", 
+                           sample_rate: int = 16000) -> List[str]:
+        """แปลงวิดีโอเป็น audio chunks"""
+        
+        try:
+            video_path = Path(video_path)
+            if not video_path.exists():
+                raise FileNotFoundError(f"ไม่พบไฟล์วิดีโอ: {video_path}")
+            
+            # ดึงข้อมูลวิดีโอ
+            probe = ffmpeg.probe(str(video_path))
+            duration = float(probe['format']['duration'])
+            
+            logger.info(f"เริ่มแปลงวิดีโอเป็น audio chunks: {video_path} (duration: {duration}s)")
+            
+            chunk_paths = []
+            temp_dir = Path("temp")
+            temp_dir.mkdir(exist_ok=True)
+            
+            # สร้าง chunks
+            for i, start_time in enumerate(range(0, int(duration), chunk_duration - overlap)):
+                end_time = min(start_time + chunk_duration, duration)
+                
+                # สร้างชื่อไฟล์ chunk
+                chunk_filename = f"chunk_{i}_{video_path.stem}_audio.{audio_format}"
+                chunk_path = temp_dir / chunk_filename
+                
+                logger.info(f"สร้าง audio chunk {i+1}: {start_time}s - {end_time}s")
+                logger.info(f"ไฟล์ chunk path: {chunk_path}")
+                
+                # ใช้ ffmpeg ตัด audio chunk และแปลงเป็น format ที่ Whisper รองรับ
+                stream = ffmpeg.input(str(video_path), ss=start_time, t=end_time-start_time)
+                stream = ffmpeg.output(stream, str(chunk_path),
+                                     acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
+                                     ar=16000,            # 16kHz sample rate (Whisper รองรับ)
+                                     ac=1)                # Mono audio (Whisper รองรับ)
+                
+                ffmpeg.run(stream, overwrite_output=True, quiet=True)
+                
+                # ตรวจสอบว่าไฟล์ถูกสร้างหรือไม่
+                if chunk_path.exists():
+                    logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes)")
+                else:
+                    logger.error(f"ไฟล์ chunk {i+1} ไม่ถูกสร้าง: {chunk_path}")
+                
+                chunk_paths.append(str(chunk_path))
+            
+            logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_paths)} chunks")
+            return chunk_paths
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการสร้าง audio chunks: {e}")
+            raise 

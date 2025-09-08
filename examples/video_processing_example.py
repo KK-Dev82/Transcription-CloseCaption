@@ -132,7 +132,7 @@ def wait_for_task_completion(task_id: str, timeout: int = 300) -> dict:
         if status:
             task_status = status.get('status')
             print(f"สถานะ: {task_status}")
-            
+        
             if task_status == 'completed':
                 print(f"Task เสร็จสิ้น: {status.get('output_file')}")
                 return status

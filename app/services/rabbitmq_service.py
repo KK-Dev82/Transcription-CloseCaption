@@ -10,36 +10,38 @@ import pika
 from pika.exceptions import AMQPConnectionError, AMQPChannelError
 import uuid
 from datetime import datetime
+import time
 
 logger = logging.getLogger(__name__)
 
 class RabbitMQService:
     def __init__(self):
+        """เริ่มต้น RabbitMQ Service"""
         self.connection = None
         self.channel = None
+        self.host = "rabbitmq"
+        self.port = 5672
+        self.username = "admin"
+        self.password = "admin123"
+        self.virtual_host = "/"
         
-        # RabbitMQ configuration
-        self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
-        self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
-        self.rabbitmq_user = os.getenv('RABBITMQ_USER', 'admin')
-        self.rabbitmq_password = os.getenv('RABBITMQ_PASSWORD', 'admin123')
+        # เพิ่ม JSON storage
+        from ..utils.json_storage import JSONStorage
+        self.json_storage = JSONStorage()
         
         # Queue names
         self.trim_queue = 'video_trim_queue'
         self.merge_queue = 'video_merge_queue'
         self.convert_queue = 'video_convert_queue'
         self.resize_queue = 'video_resize_queue'
-        
-        # Connect to RabbitMQ
-        self._connect()
     
     def _connect(self):
         """เชื่อมต่อกับ RabbitMQ"""
         try:
-            credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
+            credentials = pika.PlainCredentials(self.username, self.password)
             parameters = pika.ConnectionParameters(
-                host=self.rabbitmq_host,
-                port=self.rabbitmq_port,
+                host=self.host,
+                port=self.port,
                 credentials=credentials,
                 heartbeat=600,
                 blocked_connection_timeout=300
@@ -66,42 +68,43 @@ class RabbitMQService:
             logger.info("เชื่อมต่อ RabbitMQ ใหม่...")
             self._connect()
     
-    def send_trim_task(self, input_file: str, start_time: float, end_time: float,
-                      output_format: str = "mp4", quality: str = "medium") -> str:
-        """ส่ง trim video task ไปยัง queue"""
-        task_id = str(uuid.uuid4())
-        
-        task_data = {
-            "task_id": task_id,
-            "type": "trim",
-            "status": "pending",
-            "input_file": input_file,
-            "start_time": start_time,
-            "end_time": end_time,
-            "output_format": output_format,
-            "quality": quality,
-            "created_at": datetime.now().isoformat()
-        }
-        
+    def send_trim_task(self, input_file: str, start_time: float, end_time: float, 
+                      output_format: str = "mp4", quality: str = "medium", 
+                      segment_number: int = 1) -> str:
+        """ส่งงานตัดวิดีโอไปยัง queue"""
         try:
+            # เชื่อมต่อ RabbitMQ ก่อนใช้งาน
             self._ensure_connection()
             
-            # ส่ง message ไปยัง queue
+            task_id = str(uuid.uuid4())
+            task_data = {
+                "task_id": task_id,
+                "task_type": "trim",
+                "input_file": input_file,
+                "start_time": start_time,
+                "end_time": end_time,
+                "output_format": output_format,
+                "quality": quality,
+                "segment_number": segment_number,
+                "status": "pending",
+                "created_at": time.time()
+            }
+            
+            # บันทึก task ลง storage
+            self.json_storage.save_video_task(task_id, task_data)
+            
+            # ส่งไปยัง queue
             self.channel.basic_publish(
                 exchange='',
-                routing_key=self.trim_queue,
-                body=json.dumps(task_data),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # make message persistent
-                    content_type='application/json'
-                )
+                routing_key='video_trim_queue',
+                body=json.dumps(task_data)
             )
             
-            logger.info(f"ส่ง trim task ไปยัง queue: {task_id}")
+            logger.info(f"ส่งงานตัดวิดีโอไปยัง queue: {task_id}")
             return task_id
             
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการส่ง trim task: {e}")
+            logger.error(f"เกิดข้อผิดพลาดในการส่งงานตัดวิดีโอ: {e}")
             raise
     
     def send_merge_task(self, input_files: list, output_format: str = "mp4",

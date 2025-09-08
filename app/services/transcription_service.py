@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .file_service import FileService
 from .whisper_service import WhisperService
+from .video_service import VideoService
 from ..models.transcription import TranscriptionChunk, TranscriptionResponse
 from ..utils.json_storage import JSONStorage
 
@@ -16,6 +17,7 @@ class TranscriptionService:
     def __init__(self):
         self.file_service = FileService()
         self.whisper_service = WhisperService()
+        self.video_service = VideoService()
         self.json_storage = JSONStorage()
         self.tasks: Dict[str, TranscriptionResponse] = {}
     
@@ -53,28 +55,49 @@ class TranscriptionService:
             if not Path(file_path).exists():
                 raise FileNotFoundError(f"ไฟล์ไม่พบ: {file_path}")
             
-            # แยกเสียงจากวิดีโอ (ถ้าจำเป็น)
-            audio_path = file_path
-            if self.file_service.is_video_file(file_path):
-                logger.info("กำลังแยกเสียงจากวิดีโอ...")
-                audio_path = self.file_service.extract_audio(file_path)
-            
-            # สร้าง chunks
-            logger.info("กำลังแบ่งไฟล์เป็น chunks...")
-            chunks = self.file_service.create_chunks(audio_path, chunk_duration)
+            # สร้าง audio chunks
+            logger.info("กำลังแบ่งไฟล์เป็น audio chunks...")
+            chunks = self.video_service.extract_audio_chunks(file_path, chunk_duration)
             
             # ดึงข้อมูลไฟล์
             file_info = self.file_service.get_file_info(file_path)
             task.total_duration = file_info.get("duration")
             
-            # แปลงเสียงแต่ละ chunk
+            # แปลงเสียงแต่ละ chunk พร้อม progress tracking
             logger.info(f"กำลังแปลงเสียง {len(chunks)} chunks...")
-            chunk_results = self.whisper_service.transcribe_chunks(
-                chunks, model_size, language
-            )
+            task.status = "processing"
+            task.progress = 10  # เริ่มต้น
+            self.json_storage.save_transcription(task_id, task.__dict__)
+            
+            chunk_results = []
+            total_chunks = len(chunks)
+            
+            for i, chunk_path in enumerate(chunks):
+                try:
+                    logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}")
+                    result = self.whisper_service.transcribe_file(
+                        chunk_path, model_size, language, use_thai_processor=True
+                    )
+                    chunk_results.append(result)
+                    
+                    # อัปเดต progress
+                    progress = 10 + int((i + 1) / total_chunks * 80)  # 10-90%
+                    task.progress = progress
+                    task.status = f"processing_chunk_{i+1}_of_{total_chunks}"
+                    self.json_storage.save_transcription(task_id, task.__dict__)
+                    
+                    logger.info(f"เสร็จ chunk {i+1}/{total_chunks} - Progress: {progress}%")
+                    
+                except Exception as e:
+                    logger.error(f"เกิดข้อผิดพลาดในการแปลง chunk {i}: {e}")
+                    chunk_results.append({"error": str(e)})
             
             # รวมผลลัพธ์
             logger.info("กำลังรวมผลลัพธ์...")
+            task.progress = 90
+            task.status = "merging_results"
+            self.json_storage.save_transcription(task_id, task.__dict__)
+            
             merged_result = self.whisper_service.merge_transcriptions(
                 chunk_results, chunk_duration
             )
@@ -92,7 +115,12 @@ class TranscriptionService:
                     task.chunks.append(chunk)
             
             task.full_text = merged_result.get("text", "")
+            task.progress = 95
+            task.status = "finalizing"
+            self.json_storage.save_transcription(task_id, task.__dict__)
+            
             task.status = "completed"
+            task.progress = 100
             task.completed_at = datetime.now()
             
             # บันทึกลง JSON storage
@@ -109,18 +137,19 @@ class TranscriptionService:
             
             logger.info(f"แปลงเสียงเสร็จสิ้น: {task_id}")
             
+            # ลบไฟล์ชั่วคราวหลังจากประมวลผลเสร็จแล้ว (ปิดไว้เพื่อ debug)
+            # if 'chunks' in locals():
+            #     self.file_service.cleanup_temp_files(chunks)
+            
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง {task_id}: {e}")
             task.status = "failed"
             task.error_message = str(e)
             task.completed_at = datetime.now()
-        
-        finally:
-            # ลบไฟล์ชั่วคราว
-            if 'audio_path' in locals() and audio_path != file_path:
-                self.file_service.cleanup_temp_files([audio_path])
-            if 'chunks' in locals():
-                self.file_service.cleanup_temp_files(chunks)
+            
+            # ลบไฟล์ชั่วคราวในกรณีเกิดข้อผิดพลาด (ปิดไว้เพื่อ debug)
+            # if 'chunks' in locals():
+            #     self.file_service.cleanup_temp_files(chunks)
     
     def get_task_status(self, task_id: str) -> Optional[TranscriptionResponse]:
         """ดึงสถานะของ task"""
