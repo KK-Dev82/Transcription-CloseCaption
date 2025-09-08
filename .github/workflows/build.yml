@@ -11,7 +11,7 @@ env:
   IMAGE_NAME: kk-transcription
   WHISPER_IMAGE_NAME: kk-transcription-whisper
   REGISTRY: ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io
-  VERSION: ${{ github.sha }}
+  VERSION: alpha-dev
 
 jobs:
   build:
@@ -210,7 +210,6 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -223,7 +222,6 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:staging-latest
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -233,8 +231,6 @@ jobs:
           echo "✅ Images pushed successfully!"
           echo "Main App Tags:"
           echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}"
-          echo "  - ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging-latest"
           echo "Whisper Tags:"
           echo "  - ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}"
-          echo "  - ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:staging-latest"
           echo "Registry: ${{ env.REGISTRY }}"
