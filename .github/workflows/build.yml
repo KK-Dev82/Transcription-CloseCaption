@@ -10,7 +10,7 @@ on:
 env:
   IMAGE_NAME: kk-transcription
   WHISPER_IMAGE_NAME: kk-transcription-whisper
-  REGISTRY: ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io
+  REGISTRY: kksenateacr.azurecr.io
   VERSION: alpha-dev
 
 jobs:
