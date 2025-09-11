@@ -45,7 +45,7 @@ RUN mkdir -p app/models
 # สร้างไฟล์ models ที่จำเป็น
 RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional\n\nclass UploadResponse(BaseModel):\n    task_id: str\n    filename: str\n    status: str\n    created_at: datetime\n    file_path: Optional[str] = None\n    error_message: Optional[str] = None' > app/models/upload.py
 
-RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional\n\nclass TranscriptionResponse(BaseModel):\n    task_id: str\n    status: str\n    file_path: str\n    language: str\n    created_at: datetime\n    completed_at: Optional[datetime] = None\n    transcription_text: Optional[str] = None\n    error_message: Optional[str] = None' > app/models/transcription.py
+RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional, List\n\nclass TranscriptionResponse(BaseModel):\n    task_id: str\n    status: str\n    file_path: str\n    language: str\n    created_at: datetime\n    completed_at: Optional[datetime] = None\n    transcription_text: Optional[str] = None\n    error_message: Optional[str] = None\n\nclass TranscriptionChunk(BaseModel):\n    start_time: float\n    end_time: float\n    text: str\n    confidence: Optional[float] = None\n    language: Optional[str] = None' > app/models/transcription.py
 
 RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional, List\n\nclass CaptionResponse(BaseModel):\n    task_id: str\n    status: str\n    file_path: str\n    created_at: datetime\n    completed_at: Optional[datetime] = None\n    captions: Optional[List[dict]] = None\n    error_message: Optional[str] = None' > app/models/caption.py
 

@@ -96,6 +96,7 @@ jobs:
               ports:
                 - "8001:8001"
               volumes:
+                - ./app:/app/app
                 - ./uploads:/app/uploads
                 - ./storage:/app/storage
                 - ./temp:/app/temp

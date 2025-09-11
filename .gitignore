@@ -141,7 +141,18 @@ cython_debug/
 uploads/
 temp/
 storage/
-models/
+# Ignore large model files but allow Python files
+models/*.bin
+models/*.ggml
+models/*.model
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.tflite
+models/*.h5
+models/*.pkl
+models/*.safetensors
+models/*.gguf
 *.mp4
 *.avi
 *.mov
