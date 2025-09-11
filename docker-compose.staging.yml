@@ -1,7 +1,7 @@
 services:
   # Main API Service
   api:
-    build: .
+    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
     container_name: transcription-api-staging
     ports:
       - "8001:8001"
@@ -35,11 +35,11 @@ services:
       resources:
         limits:
           memory: 6G
-          cpus: '3.0'
+          cpus: '2.0'
 
   # Video Processing Worker 1
   video-worker-1:
-    build: .
+    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
     container_name: video-worker-1-staging
     command: python -m app.workers.video_worker
     volumes:
@@ -66,11 +66,11 @@ services:
       resources:
         limits:
           memory: 4G
-          cpus: '3.0'
+          cpus: '1.0'
 
   # Video Processing Worker 2
   video-worker-2:
-    build: .
+    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
     container_name: video-worker-2-staging
     command: python -m app.workers.video_worker
     volumes:
@@ -97,11 +97,11 @@ services:
       resources:
         limits:
           memory: 4G
-          cpus: '3.0'
+          cpus: '1.0'
 
-  # Video Processing Worker 3 (เพิ่มสำหรับ staging)
+  # Video Processing Worker 3
   video-worker-3:
-    build: .
+    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
     container_name: video-worker-3-staging
     command: python -m app.workers.video_worker
     volumes:
@@ -128,7 +128,7 @@ services:
       resources:
         limits:
           memory: 4G
-          cpus: '2.0'
+          cpus: '0.5'
 
   # RabbitMQ สำหรับ message queue
   rabbitmq:
@@ -154,7 +154,7 @@ services:
       resources:
         limits:
           memory: 2G
-          cpus: '1.0'
+          cpus: '0.5'
 
   # Redis สำหรับ caching และ queue
   redis:
@@ -172,13 +172,11 @@ services:
       resources:
         limits:
           memory: 2G
-          cpus: '1.0'
+          cpus: '0.5'
 
   # Whisper.cpp สำหรับ transcription (Staging)
   whisper:
-    build:
-      context: ./whisper-service
-      dockerfile: Dockerfile
+    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
     container_name: transcription-whisper-staging
     ports:
       - "8002:8002"
@@ -202,13 +200,11 @@ services:
       resources:
         limits:
           memory: 8G
-          cpus: '6.0'
+          cpus: '2.0'
 
-  # Whisper สำหรับ Live Streaming (เพิ่มสำหรับ staging)
+  # Whisper สำหรับ Live Streaming
   whisper-live:
-    build:
-      context: ./whisper-service
-      dockerfile: Dockerfile
+    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
     container_name: transcription-whisper-live-staging
     ports:
       - "8003:8002"
@@ -232,7 +228,7 @@ services:
       resources:
         limits:
           memory: 6G
-          cpus: '4.0'
+          cpus: '1.0'
 
 volumes:
   redis_data_staging:

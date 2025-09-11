@@ -39,6 +39,51 @@ COPY . .
 # สร้างโฟลเดอร์ที่จำเป็น
 RUN mkdir -p uploads temp storage models
 
+# สร้าง app/models directory และไฟล์ที่จำเป็น
+RUN mkdir -p app/models
+
+# สร้างไฟล์ models ที่จำเป็น
+RUN echo 'from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
+
+class UploadResponse(BaseModel):
+    task_id: str
+    filename: str
+    status: str
+    created_at: datetime
+    file_path: Optional[str] = None
+    error_message: Optional[str] = None' > app/models/upload.py
+
+RUN echo 'from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional
+
+class TranscriptionResponse(BaseModel):
+    task_id: str
+    status: str
+    file_path: str
+    language: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    transcription_text: Optional[str] = None
+    error_message: Optional[str] = None' > app/models/transcription.py
+
+RUN echo 'from pydantic import BaseModel
+from datetime import datetime
+from typing import Optional, List
+
+class CaptionResponse(BaseModel):
+    task_id: str
+    status: str
+    file_path: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    captions: Optional[List[dict]] = None
+    error_message: Optional[str] = None' > app/models/caption.py
+
+RUN echo '' > app/models/__init__.py
+
 # ตั้งค่า permissions
 RUN chmod +x main.py
 

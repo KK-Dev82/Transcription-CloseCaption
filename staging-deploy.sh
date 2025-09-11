@@ -1,11 +1,9 @@
 #!/bin/bash
 
-# Staging Deployment Script
+# Staging Deployment Script - Simplified Version
 # สำหรับ deploy ระบบไปยัง staging environment
 
 set -e
-
-echo "🚀 Starting Staging Deployment..."
 
 # Colors for output
 RED='\033[0;31m'
@@ -31,84 +29,110 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if Docker is running
+# Configuration
+MAIN_IMAGE="kksenateacr.azurecr.io/kk-transcription:alpha-dev"
+WHISPER_IMAGE="kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev"
+COMPOSE_FILE="docker-compose.staging.yml"
+
+echo "🚀 Starting Staging Deployment..."
+
+# Error handling: Check if Docker is running
 if ! docker info > /dev/null 2>&1; then
     print_error "Docker is not running. Please start Docker first."
     exit 1
 fi
 
-# Check if Docker Compose is available
+# Error handling: Check if Docker Compose is available
 if ! command -v docker-compose &> /dev/null; then
     print_error "Docker Compose is not installed."
     exit 1
 fi
 
-print_status "Docker and Docker Compose are available"
+# Error handling: Check if compose file exists
+if [ ! -f "$COMPOSE_FILE" ]; then
+    print_error "Docker compose file not found: $COMPOSE_FILE"
+    exit 1
+fi
 
-# Create required directories
-print_status "Creating required directories..."
+print_success "Prerequisites check passed"
+
+# Step 1: Pull images from ACR
+print_status "📦 Step 1: Pulling images from ACR..."
+if ! docker pull $MAIN_IMAGE; then
+    print_error "Failed to pull main image: $MAIN_IMAGE"
+    exit 1
+fi
+
+if ! docker pull $WHISPER_IMAGE; then
+    print_error "Failed to pull whisper image: $WHISPER_IMAGE"
+    exit 1
+fi
+
+print_success "Images pulled successfully"
+
+# Step 2: Create required directories
+print_status "📁 Step 2: Creating required directories..."
 mkdir -p uploads temp storage models
+print_success "Directories created"
 
-# Set environment variables for staging
-export ENVIRONMENT=staging
-export STORAGE_TYPE=sqlite
-export SQLITE_DB_PATH=/app/storage/database.db
+# Step 3: Stop existing containers
+print_status "🧹 Step 3: Shutting down old containers..."
+if ! docker-compose -f $COMPOSE_FILE down --remove-orphans; then
+    print_warning "Some containers may not have stopped cleanly"
+fi
+print_success "Old containers stopped"
 
-print_status "Environment variables set for staging"
+# Step 4: Start new containers
+print_status "🚀 Step 4: Starting new containers..."
+if ! docker-compose -f $COMPOSE_FILE up -d; then
+    print_error "Failed to start containers"
+    exit 1
+fi
+print_success "Containers started"
 
-# Stop existing containers (if any)
-print_status "Stopping existing containers..."
-docker-compose -f docker-compose.staging.yml down --remove-orphans || true
-
-# Remove old images (optional - uncomment if you want to force rebuild)
-# print_status "Removing old images..."
-# docker-compose -f docker-compose.staging.yml down --rmi all || true
-
-# Build and start services
-print_status "Building and starting staging services..."
-docker-compose -f docker-compose.staging.yml up --build -d
-
-# Wait for services to be ready
-print_status "Waiting for services to be ready..."
+# Step 5: Wait for services to be ready
+print_status "⏳ Step 5: Waiting for services to start..."
 sleep 30
 
-# Check service health
-print_status "Checking service health..."
+# Step 6: Health checks
+print_status "🔍 Step 6: Checking service health..."
 
-# Check API health
-API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health || echo "000")
-if [ "$API_HEALTH" = "200" ]; then
-    print_success "API service is healthy"
-else
-    print_warning "API service health check failed (HTTP $API_HEALTH)"
-fi
+# Health check function
+check_health() {
+    local service_name=$1
+    local url=$2
+    local expected_code=${3:-200}
+    
+    local response_code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo "000")
+    
+    if [ "$response_code" = "$expected_code" ]; then
+        print_success "$service_name is healthy (HTTP $response_code)"
+        return 0
+    else
+        print_warning "$service_name health check failed (HTTP $response_code)"
+        return 1
+    fi
+}
 
-# Check Whisper health
-WHISPER_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8002/health || echo "000")
-if [ "$WHISPER_HEALTH" = "200" ]; then
-    print_success "Whisper service is healthy"
-else
-    print_warning "Whisper service health check failed (HTTP $WHISPER_HEALTH)"
-fi
+# Check all services
+HEALTH_FAILED=0
 
-# Check RabbitMQ
-RABBITMQ_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" -u admin:admin123 http://localhost:15672/api/overview || echo "000")
-if [ "$RABBITMQ_HEALTH" = "200" ]; then
-    print_success "RabbitMQ service is healthy"
-else
-    print_warning "RabbitMQ service health check failed (HTTP $RABBITMQ_HEALTH)"
-fi
+check_health "API" "http://localhost:8001/health" || HEALTH_FAILED=1
+check_health "Whisper" "http://localhost:8002/health" || HEALTH_FAILED=1
+check_health "Whisper Live" "http://localhost:8003/health" || HEALTH_FAILED=1
+check_health "RabbitMQ" "http://localhost:15672/api/overview" || HEALTH_FAILED=1
 
 # Check Redis
 if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
-    print_success "Redis service is healthy"
+    print_success "Redis is healthy"
 else
-    print_warning "Redis service health check failed"
+    print_warning "Redis health check failed"
+    HEALTH_FAILED=1
 fi
 
-# Display service URLs
+# Step 7: Display service information
 echo ""
-echo "🌐 Service URLs:"
+print_status "🌐 Service URLs:"
 echo "  - API Documentation: http://localhost:8001/docs"
 echo "  - API Health: http://localhost:8001/health"
 echo "  - Whisper API: http://localhost:8002/health"
@@ -116,74 +140,29 @@ echo "  - Whisper Live API: http://localhost:8003/health"
 echo "  - RabbitMQ Management: http://localhost:15672 (admin/admin123)"
 echo "  - Redis: localhost:6379"
 
-# Display container status
+# Step 8: Display container status
 echo ""
-print_status "Container Status:"
-docker-compose -f docker-compose.staging.yml ps
+print_status "📊 Container Status:"
+docker-compose -f $COMPOSE_FILE ps
 
-# Display resource usage
+# Step 9: Display recent logs
 echo ""
-print_status "Resource Usage:"
-docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+print_status "📋 Recent logs (last 20 lines):"
+docker-compose -f $COMPOSE_FILE logs --tail=20
 
-# Run API tests (if test script exists)
-if [ -f "test_api_endpoints.py" ]; then
+# Step 10: Final status
+echo ""
+if [ $HEALTH_FAILED -eq 0 ]; then
+    print_success "🎉 Staging deployment completed successfully!"
     echo ""
-    print_status "Running API tests..."
-    python test_api_endpoints.py || print_warning "Some API tests failed"
+    echo "🛠️  Management commands:"
+    echo "  - View logs: docker-compose -f $COMPOSE_FILE logs -f [service_name]"
+    echo "  - Restart service: docker-compose -f $COMPOSE_FILE restart [service_name]"
+    echo "  - Stop all: docker-compose -f $COMPOSE_FILE down"
+    echo "  - Update: ./staging-deploy.sh"
 else
-    print_warning "API test script not found, skipping tests"
+    print_warning "⚠️  Deployment completed with some health check failures"
+    echo "Please check the logs above for more details"
 fi
 
-# Display logs for the last few minutes
 echo ""
-print_status "Recent logs (last 50 lines):"
-docker-compose -f docker-compose.staging.yml logs --tail=50
-
-echo ""
-print_success "🎉 Staging deployment completed!"
-echo ""
-echo "📊 Next steps:"
-echo "  1. Test the APIs using: http://localhost:8001/docs"
-echo "  2. Monitor logs: docker-compose -f docker-compose.staging.yml logs -f"
-echo "  3. Check database: sqlite3 storage/database.db"
-echo "  4. Run load tests if needed"
-echo ""
-echo "🛠️  Management commands:"
-echo "  - View logs: docker-compose -f docker-compose.staging.yml logs -f [service_name]"
-echo "  - Restart service: docker-compose -f docker-compose.staging.yml restart [service_name]"
-echo "  - Stop all: docker-compose -f docker-compose.staging.yml down"
-echo "  - Update: ./staging-deploy.sh"
-echo ""
-
-# Save deployment info
-cat > deployment_info.txt << EOF
-Staging Deployment Information
-==============================
-Deployed at: $(date)
-Environment: staging
-Storage Type: SQLite
-Database Path: storage/database.db
-Docker Compose File: docker-compose.staging.yml
-
-Services:
-- API: http://localhost:8001
-- Whisper: http://localhost:8002
-- Whisper Live: http://localhost:8003
-- RabbitMQ: http://localhost:15672
-- Redis: localhost:6379
-
-Resource Limits:
-- API: 6GB RAM, 3 CPU cores
-- Whisper: 8GB RAM, 6 CPU cores
-- Whisper Live: 6GB RAM, 4 CPU cores
-- Video Workers: 4GB RAM, 2-3 CPU cores each
-- RabbitMQ: 2GB RAM, 1 CPU core
-- Redis: 2GB RAM, 1 CPU core
-
-Total Resources:
-- RAM: ~32GB
-- CPU: ~16 cores
-EOF
-
-print_success "Deployment information saved to deployment_info.txt"
