@@ -39,9 +39,6 @@ COPY . .
 # สร้างโฟลเดอร์ที่จำเป็น
 RUN mkdir -p uploads temp storage models
 
-# Copy source code
-COPY app/ app/
-
 # ตั้งค่า permissions
 RUN chmod +x main.py
 
