@@ -39,17 +39,8 @@ COPY . .
 # สร้างโฟลเดอร์ที่จำเป็น
 RUN mkdir -p uploads temp storage models
 
-# สร้าง app/models directory และไฟล์ที่จำเป็น
-RUN mkdir -p app/models
-
-# สร้างไฟล์ models ที่จำเป็น
-RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional\n\nclass UploadResponse(BaseModel):\n    task_id: str\n    filename: str\n    status: str\n    created_at: datetime\n    file_path: Optional[str] = None\n    error_message: Optional[str] = None' > app/models/upload.py
-
-RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional, List\n\nclass TranscriptionRequest(BaseModel):\n    file_path: str\n    language: Optional[str] = "th"\n    model_size: Optional[str] = "base"\n    chunk_duration: Optional[int] = 30\n    enable_timestamps: Optional[bool] = True\n\nclass TranscriptionResponse(BaseModel):\n    task_id: str\n    status: str\n    file_path: str\n    language: str\n    created_at: datetime\n    completed_at: Optional[datetime] = None\n    transcription_text: Optional[str] = None\n    error_message: Optional[str] = None\n\nclass TranscriptionChunk(BaseModel):\n    start_time: float\n    end_time: float\n    text: str\n    confidence: Optional[float] = None\n    language: Optional[str] = None' > app/models/transcription.py
-
-RUN echo 'from pydantic import BaseModel\nfrom datetime import datetime\nfrom typing import Optional, List\n\nclass CaptionResponse(BaseModel):\n    task_id: str\n    status: str\n    file_path: str\n    created_at: datetime\n    completed_at: Optional[datetime] = None\n    captions: Optional[List[dict]] = None\n    error_message: Optional[str] = None' > app/models/caption.py
-
-RUN echo '' > app/models/__init__.py
+# Copy source code
+COPY app/ app/
 
 # ตั้งค่า permissions
 RUN chmod +x main.py
