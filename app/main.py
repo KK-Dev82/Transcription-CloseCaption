@@ -359,6 +359,14 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ ไม่สามารถลบ temp folders เก่า: {e}")
     
+    # 🔌 เริ่มต้น WebSocket Service
+    try:
+        from .services.websocket_service import initialize_websocket_service
+        await initialize_websocket_service()
+        logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
+    except Exception as e:
+        logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
+    
     logger.info("✅ API Server พร้อมใช้งาน")
 
 if __name__ == "__main__":

@@ -84,6 +84,10 @@ print_success "Old containers stopped"
 
 # Step 4: Start new containers
 print_status "🚀 Step 4: Starting new containers..."
+# Set environment variables for staging
+export WHISPER_API_URL=http://10.200.22.63:8002
+export ENVIRONMENT=staging
+
 if ! docker-compose -f $COMPOSE_FILE up -d; then
     print_error "Failed to start containers"
     exit 1

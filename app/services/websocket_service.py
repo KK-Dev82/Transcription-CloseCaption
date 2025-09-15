@@ -34,9 +34,12 @@ class WebSocketManager:
     async def connect_redis(self):
         """เชื่อมต่อ Redis สำหรับ Pub/Sub"""
         try:
-            self.redis_client = redis.from_url("redis://localhost:6379")
+            # ใช้ environment variable สำหรับ Redis URL
+            import os
+            redis_url = os.getenv("REDIS_URL", "redis://transcription-redis-staging:6379")
+            self.redis_client = redis.from_url(redis_url)
             await self.redis_client.ping()
-            logger.info("เชื่อมต่อ Redis สำหรับ WebSocket scaling สำเร็จ")
+            logger.info(f"เชื่อมต่อ Redis สำหรับ WebSocket scaling สำเร็จ: {redis_url}")
         except Exception as e:
             logger.warning(f"ไม่สามารถเชื่อมต่อ Redis: {e}")
             self.redis_client = None
@@ -223,3 +226,9 @@ class WebSocketManager:
 
 # Global WebSocket manager instance
 websocket_manager = WebSocketManager()
+
+# Initialize Redis connection on startup
+async def initialize_websocket_service():
+    """Initialize WebSocket service with Redis connection"""
+    await websocket_manager.connect_redis()
+    logger.info("WebSocket service initialized successfully")

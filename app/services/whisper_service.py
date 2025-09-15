@@ -16,8 +16,8 @@ class WhisperService:
         self.model_dir = Path(model_dir)
         self.model_dir.mkdir(exist_ok=True)
         
-        # Whisper API URL
-        self.whisper_api_url = "http://transcription-whisper-dev:8002"
+        # Whisper API URL - ใช้ environment variable
+        self.whisper_api_url = os.getenv('WHISPER_API_URL', 'http://localhost:8002')
         
         # ตรวจสอบว่า whisper.cpp ถูกติดตั้งแล้วหรือไม่
         self._check_whisper_installation()
@@ -94,7 +94,7 @@ class WhisperService:
         try:
             if self.use_docker:
                 # ใช้ Whisper API Service
-                whisper_api_url = "http://transcription-whisper-dev:8002"
+                whisper_api_url = self.whisper_api_url
                 
                 # แปลง path ให้ตรงกับ Whisper container
                 # API container: temp/task_xxx/chunk_X_xxx.wav  
