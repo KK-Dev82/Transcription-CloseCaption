@@ -10,6 +10,8 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
+    env_file:
+      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -19,6 +21,8 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - WHISPER_API_URL=http://transcription-whisper-staging:8002
+      - REDIS_URL=redis://transcription-redis-staging:6379
     depends_on:
       - redis
       - rabbitmq
@@ -47,6 +51,8 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
+    env_file:
+      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -56,6 +62,8 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - WHISPER_API_URL=http://transcription-whisper-staging:8002
+      - REDIS_URL=redis://transcription-redis-staging:6379
     depends_on:
       - rabbitmq
       - redis
@@ -78,6 +86,8 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
+    env_file:
+      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -87,6 +97,8 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - WHISPER_API_URL=http://transcription-whisper-staging:8002
+      - REDIS_URL=redis://transcription-redis-staging:6379
     depends_on:
       - rabbitmq
       - redis
@@ -109,6 +121,8 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
+    env_file:
+      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -118,6 +132,8 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - WHISPER_API_URL=http://transcription-whisper-staging:8002
+      - REDIS_URL=redis://transcription-redis-staging:6379
     depends_on:
       - rabbitmq
       - redis
