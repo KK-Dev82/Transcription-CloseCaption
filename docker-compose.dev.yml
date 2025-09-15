@@ -11,6 +11,8 @@ services:
       - ./temp:/app/temp
       - ./models:/app/models
       - .:/app  # Mount source code for development
+    env_file:
+      - env.development
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=development
@@ -18,6 +20,7 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - WHISPER_API_URL=http://localhost:8002
     depends_on:
       - redis
       - rabbitmq
