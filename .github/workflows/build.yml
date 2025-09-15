@@ -3,8 +3,9 @@ name: Build and Deploy to Azure Container Registry
 on:
   push:
     branches:
-      - staging
-      - "staging/**"
+      # - staging
+      # - "staging/**"
+      - no-build
   workflow_dispatch: # ให้รันได้ด้วยมือ
 
 env:
@@ -66,14 +67,14 @@ jobs:
         with:
           name: main-image
           path: main-image.tar.gz
-          retention-days: 1
+          retention-days: 0
 
       - name: Upload whisper image
         uses: actions/upload-artifact@v4
         with:
           name: whisper-image
           path: whisper-image.tar.gz
-          retention-days: 1
+          retention-days: 0
 
       - name: Save image info
         id: save-main
