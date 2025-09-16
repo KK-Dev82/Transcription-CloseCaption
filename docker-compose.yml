@@ -10,8 +10,6 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -51,8 +49,6 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -86,8 +82,6 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging
@@ -121,8 +115,6 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=staging

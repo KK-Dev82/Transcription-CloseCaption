@@ -32,7 +32,7 @@ print_error() {
 # Configuration
 MAIN_IMAGE="kksenateacr.azurecr.io/kk-transcription:alpha-dev"
 WHISPER_IMAGE="kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev"
-COMPOSE_FILE="docker-compose.staging.yml"
+COMPOSE_FILE="docker-compose.yml"
 
 echo "🚀 Starting Staging Deployment..."
 
