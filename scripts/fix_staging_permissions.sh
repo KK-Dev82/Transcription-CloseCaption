@@ -13,6 +13,7 @@ chmod 755 storage/transcriptions/
 chmod 755 storage/captions/
 chmod 755 storage/videos/
 chmod 755 storage/metadata/
+chmod 755 test-files/
 
 # แก้ไข permission ของไฟล์ทั้งหมดใน uploads
 echo "📄 Fixing file permissions in uploads..."
@@ -31,8 +32,13 @@ echo "👤 Changing file ownership..."
 chown -R kscdev:kscdev uploads/
 chown -R kscdev:kscdev temp/
 chown -R kscdev:kscdev storage/
+chown -R kscdev:kscdev test-files/
+
+set -e  # หยุดทำงานเมื่อเกิด error
 
 echo "✅ Permission fix completed!"
 echo "📊 Current permissions:"
-ls -la uploads/
+echo "🔍 Checking current permissions before fix..."
+ls -la uploads/ | head -5
+# ls -la uploads/
 ls -la storage/

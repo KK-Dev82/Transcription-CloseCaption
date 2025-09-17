@@ -19,8 +19,8 @@ RUN apt-get update && apt-get install -y \
 # สร้าง working directory
 WORKDIR /app
 
-# คัดลอก requirements และติดตั้ง Python dependencies
-COPY requirements-core.txt .
+# คัดลอก requirements และติดตั้ง Python dependencies (ไม่ติดตั้ง PyTorch)
+COPY docs/requirements-core.txt .
 RUN pip install --no-cache-dir --user -r requirements-core.txt
 
 # Production stage

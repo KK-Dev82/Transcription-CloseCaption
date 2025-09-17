@@ -113,6 +113,7 @@ app.include_router(history.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/test-files", StaticFiles(directory="test-files"), name="test-files")
 
 # Mount test frontend
 from fastapi.responses import FileResponse
@@ -374,7 +375,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=True,
         log_level="info"
     ) 

@@ -12,7 +12,7 @@ REGISTRY_URL="${ACR_NAME}.azurecr.io"
 
 echo "🚀 Building and pushing images to ACR..."
 
-# 1. Build Main API Image
+# 1. Build Main API Image (ไม่ติดตั้ง PyTorch)
 echo "📦 Building main API image..."
 docker buildx build \
     --platform linux/amd64 \
