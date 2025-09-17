@@ -104,11 +104,22 @@ class WhisperService:
                 audio_path_obj = Path(audio_path)
                 if audio_path_obj.is_absolute():
                     # ถ้าเป็น absolute path ให้แปลงเป็น relative จาก project root
-                    relative_path = audio_path_obj.relative_to(Path.cwd())
-                    whisper_audio_path = f"/app/{relative_path}"
+                    try:
+                        relative_path = audio_path_obj.relative_to(Path.cwd())
+                        whisper_audio_path = f"/app/{relative_path}"
+                    except ValueError:
+                        # ถ้าไม่สามารถหา relative path ได้ ให้ใช้ absolute path
+                        whisper_audio_path = str(audio_path_obj)
                 else:
                     # ถ้าเป็น relative path แล้ว
                     whisper_audio_path = f"/app/{audio_path}"
+                
+                # ตรวจสอบว่าไฟล์มีอยู่จริงหรือไม่
+                if not os.path.exists(audio_path):
+                    raise FileNotFoundError(f"Audio file not found: {audio_path}")
+                
+                logger.info(f"Original audio path: {audio_path}")
+                logger.info(f"Whisper audio path: {whisper_audio_path}")
                 
                 # ส่งคำขอไปยัง Whisper API
                 request_data = {

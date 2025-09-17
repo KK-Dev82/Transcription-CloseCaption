@@ -36,6 +36,8 @@ class TranscriptionService:
             self.api_server_url = "http://transcription-api-dev:8001"
         elif environment == 'staging':
             self.api_server_url = "http://transcription-api-staging:8001"
+        elif environment == 'local':
+            self.api_server_url = "http://api:8001"
         else:  # production
             self.api_server_url = "http://transcription-api:8001"
     
@@ -176,9 +178,11 @@ class TranscriptionService:
                 chunk_results, chunk_duration
             )
             
+            logger.info(f"Merged result: {merged_result}")
+            
             # แปลงเป็น TranscriptionChunk objects
             task.chunks = []
-            if "segments" in merged_result:
+            if "segments" in merged_result and merged_result["segments"]:
                 for segment in merged_result["segments"]:
                     chunk = TranscriptionChunk(
                         start_time=segment["start"],
@@ -187,11 +191,15 @@ class TranscriptionService:
                         confidence=segment.get("avg_logprob", None)
                     )
                     task.chunks.append(chunk)
+            else:
+                logger.warning("No segments found in merged result")
             
             task.full_text = merged_result.get("text", "")
             task.progress = 95
             task.status = "finalizing"
             task.updated_at = datetime.now()
+            
+            logger.info(f"Final task data - full_text: '{task.full_text}', chunks: {len(task.chunks)}")
             
             # แปลง task เป็น dict ที่ JSON serializable ได้
             task_data = {

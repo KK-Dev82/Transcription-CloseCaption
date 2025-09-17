@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧪 Local Transcription Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .status { 
+            display: flex; 
+            gap: 20px; 
+            margin-bottom: 30px; 
+            flex-wrap: wrap;
+        }
+        .status-card { 
+            flex: 1; 
+            min-width: 200px;
+            padding: 15px; 
+            border-radius: 8px; 
+            text-align: center;
+        }
+        .connected { background: #d4edda; border: 1px solid #c3e6cb; }
+        .disconnected { background: #f8d7da; border: 1px solid #f5c6cb; }
+        .polling { background: #fff3cd; border: 1px solid #ffeaa7; }
+        
+        .upload-section { 
+            margin-bottom: 30px; 
+            border: 2px solid #007bff;
+            border-radius: 12px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+        .file-input { 
+            width: 100%; 
+            padding: 15px; 
+            border: 2px dashed #007bff; 
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            background: white;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+        .file-input:hover { border-color: #007bff; }
+        
+        button { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 12px 24px; 
+            border-radius: 6px; 
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        
+        .progress-section { margin-bottom: 30px; }
+        .progress-bar { 
+            width: 100%; 
+            height: 20px; 
+            background: #e9ecef; 
+            border-radius: 10px; 
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill { 
+            height: 100%; 
+            background: linear-gradient(90deg, #28a745, #20c997); 
+            transition: width 0.3s ease;
+        }
+        
+        .logs { 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            border-radius: 6px; 
+            padding: 15px; 
+            height: 300px; 
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry { 
+            margin-bottom: 5px; 
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .log-info { background: #d1ecf1; }
+        .log-success { background: #d4edda; }
+        .log-error { background: #f8d7da; }
+        .log-warning { background: #fff3cd; }
+        
+        .environment-info {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 Local Transcription Test</h1>
+            <p>ทดสอบระบบ Transcription บน Local Environment (เปิดจากไฟล์)</p>
+        </div>
+
+        <!-- Environment Info -->
+        <div class="environment-info">
+            <h3>🌍 Environment Information</h3>
+            <div id="env-info">
+                <div><strong>Environment:</strong> <span id="env-type">Local File</span></div>
+                <div><strong>API Base:</strong> <span id="api-base">http://localhost:8001</span></div>
+                <div><strong>WebSocket Base:</strong> <span id="ws-base">ws://localhost:8001</span></div>
+                <div><strong>User ID:</strong> <span id="user-id">-</span></div>
+                <div><strong>Status:</strong> <span id="server-status">Checking...</span></div>
+            </div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="status">
+            <div class="status-card" id="connection-status">
+                <h3>🔌 Connection</h3>
+                <div id="connection-type">Checking...</div>
+                <div id="connection-details"></div>
+            </div>
+            <div class="status-card" id="api-status">
+                <h3>🌐 API Health</h3>
+                <div id="api-health">Checking...</div>
+            </div>
+            <div class="status-card" id="websocket-status">
+                <h3>📡 WebSocket</h3>
+                <div id="ws-health">Checking...</div>
+            </div>
+        </div>
+
+        <!-- File Upload -->
+        <div class="upload-section">
+            <h3>🎬 อัปโหลดและแปลงไฟล์</h3>
+            <div class="file-input" onclick="document.getElementById('file').click()">
+                <input type="file" id="file" accept=".mp4,.mp3,.wav,.m4a" style="display:none" onchange="handleFileSelect(event)">
+                <span id="file-text">📁 คลิกเพื่อเลือกไฟล์ (MP4, MP3, WAV, M4A)</span>
+            </div>
+            <div id="selectedFile" style="display:none; margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 6px;">
+                <strong>ไฟล์ที่เลือก:</strong> <span id="fileName"></span> 
+                (<span id="fileSize"></span>)
+            </div>
+            <button onclick="startTranscription()" id="transcribe-btn" disabled style="width: 100%; padding: 12px; margin: 5px 0;">
+                🚀 เริ่มแปลงเสียง
+            </button>
+            <button onclick="testWithSampleFile()" style="width: 100%; padding: 8px; background: #6c757d;">
+                🎬 ทดสอบด้วยไฟล์ตัวอย่าง
+            </button>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-section" id="progress-section" style="display:none">
+            <h3>⏳ ความคืบหน้าการแปลง</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                <div><strong>Task ID:</strong> <span id="current-task-id">-</span></div>
+                <div><strong>สถานะ:</strong> <span id="current-status">-</span></div>
+                <div><strong>ขั้นตอน:</strong> <span id="current-stage">-</span></div>
+            </div>
+            <div class="progress-bar" style="background: #e9ecef; height: 25px; border-radius: 12px; overflow: hidden; margin: 15px 0;">
+                <div class="progress-fill" id="progress-fill" style="background: linear-gradient(45deg, #007bff, #0056b3); height: 100%; width: 0%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;"></div>
+            </div>
+            <div style="text-align: center; margin: 10px 0;"><strong>ความคืบหน้า:</strong> <span id="progress-text">0%</span></div>
+        </div>
+
+        <!-- Transcription Results -->
+        <div class="results-section" id="results-section" style="display:none">
+            <h3>📝 ผลการแปลงเสียง</h3>
+            <div id="transcription-result" style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin: 15px 0;">
+                <div id="transcription-text" style="white-space: pre-wrap; line-height: 1.8; font-size: 16px; margin-bottom: 15px; min-height: 50px; background: white; padding: 15px; border-radius: 6px;"></div>
+                <div id="transcription-stats" style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.9em; color: #666;">
+                    <div><strong>จำนวนคำ:</strong> <span id="word-count">-</span></div>
+                    <div><strong>ระยะเวลา:</strong> <span id="duration">-</span> วินาที</div>
+                    <div><strong>โมเดล:</strong> <span id="model-used">-</span></div>
+                    <div><strong>ภาษา:</strong> <span id="language">-</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Logs -->
+        <div style="margin-top: 30px;">
+            <h3>📝 Logs</h3>
+            <button onclick="clearLogs()">Clear Logs</button>
+            <div class="logs" id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let selectedFile = null;
+        let currentTaskId = null;
+        let websocket = null;
+        let connectionType = 'disconnected';
+        let pollingInterval = null;
+        
+        // Local environment configuration
+        const API_BASE = 'http://localhost:8001';
+        const WS_BASE = 'ws://localhost:8001';
+        const userId = 'local_test_' + Math.random().toString(36).substr(2, 9);
+
+        // Logging
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // File handling
+        function handleFileSelect(event) {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-text').textContent = `📁 ${selectedFile.name}`;
+                document.getElementById('fileName').textContent = selectedFile.name;
+                document.getElementById('fileSize').textContent = formatFileSize(selectedFile.size);
+                document.getElementById('selectedFile').style.display = 'block';
+                document.getElementById('transcribe-btn').disabled = false;
+                log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // WebSocket connection
+        function connectWebSocket() {
+            try {
+                const wsUrl = `${WS_BASE}/ws/transcription/${userId}`;
+                log(`Connecting to WebSocket: ${wsUrl}`);
+                
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = () => {
+                    log('✅ WebSocket connected', 'success');
+                    connectionType = 'websocket';
+                    updateConnectionStatus();
+                };
+                
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 WebSocket message: ${data.type}`, 'info');
+                    
+                    if (data.type === 'ping') {
+                        websocket.send(JSON.stringify({
+                            type: 'pong',
+                            timestamp: data.timestamp
+                        }));
+                        log('🏓 Sent pong response', 'info');
+                        return;
+                    }
+                    
+                    if (data.task_id && data.task_id === currentTaskId) {
+                        updateTaskProgress(data);
+                    }
+                };
+                
+                websocket.onclose = (event) => {
+                    log(`🔴 WebSocket closed: ${event.code}`, 'warning');
+                    connectionType = 'disconnected';
+                    updateConnectionStatus();
+                    
+                    // Start polling fallback
+                    setTimeout(() => {
+                        log('🔄 Starting polling fallback', 'info');
+                        startPolling();
+                    }, 2000);
+                };
+                
+                websocket.onerror = (error) => {
+                    log('❌ WebSocket error', 'error');
+                };
+                
+            } catch (error) {
+                log(`❌ WebSocket connection failed: ${error.message}`, 'error');
+                startPolling();
+            }
+        }
+
+        // Polling fallback
+        function startPolling() {
+            if (pollingInterval) return;
+            
+            connectionType = 'polling';
+            updateConnectionStatus();
+            log('🔄 Polling mode active', 'warning');
+            
+            pollingInterval = setInterval(async () => {
+                if (currentTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${currentTaskId}`);
+                        const data = await response.json();
+                        updateTaskProgress(data);
+                    } catch (error) {
+                        log(`❌ Polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 3000);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // Task progress updates
+        function updateTaskProgress(data) {
+            document.getElementById('current-task-id').textContent = data.task_id?.slice(0, 8) || '-';
+            document.getElementById('current-status').textContent = data.status || '-';
+            document.getElementById('current-stage').textContent = data.stage || '-';
+            
+            const progress = data.progress || 0;
+            document.getElementById('progress-text').textContent = `${progress}%`;
+            document.getElementById('progress-fill').style.width = `${progress}%`;
+            document.getElementById('progress-fill').textContent = `${progress}%`;
+            
+            if (data.status === 'completed') {
+                log('✅ Transcription completed!', 'success');
+                stopPolling();
+                // Fetch results
+                fetchTranscriptionResults(data.task_id);
+            } else if (data.status === 'failed') {
+                log(`❌ Transcription failed: ${data.error_message || 'Unknown error'}`, 'error');
+                stopPolling();
+            }
+        }
+
+        async function fetchTranscriptionResults(taskId) {
+            try {
+                log('🔍 Fetching transcription results...', 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    displayTranscriptionResults(data);
+                } else {
+                    log('⚠️ No transcription results found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to fetch results: ${error.message}`, 'error');
+            }
+        }
+
+        function displayTranscriptionResults(data) {
+            // Show results section
+            document.getElementById('results-section').style.display = 'block';
+            
+            // Display transcription text
+            document.getElementById('transcription-text').textContent = data.results.full_text || 'ไม่พบข้อความ';
+            
+            // Display stats
+            document.getElementById('word-count').textContent = data.results.word_count || 0;
+            document.getElementById('duration').textContent = data.file_info?.total_duration || '-';
+            document.getElementById('model-used').textContent = data.basic_info?.model_size || '-';
+            document.getElementById('language').textContent = data.basic_info?.language || '-';
+            
+            log('🎉 Results displayed successfully!', 'success');
+        }
+
+        // Connection status
+        function updateConnectionStatus() {
+            const statusEl = document.getElementById('connection-status');
+            const typeEl = document.getElementById('connection-type');
+            
+            statusEl.className = 'status-card';
+            
+            switch (connectionType) {
+                case 'websocket':
+                    statusEl.classList.add('connected');
+                    typeEl.textContent = '🟢 WebSocket (Real-time)';
+                    break;
+                case 'polling':
+                    statusEl.classList.add('polling');
+                    typeEl.textContent = '🟡 Polling (Fallback)';
+                    break;
+                default:
+                    statusEl.classList.add('disconnected');
+                    typeEl.textContent = '🔴 Disconnected';
+            }
+        }
+
+        // API functions
+        async function startTranscription() {
+            if (!selectedFile) {
+                log('❌ No file selected', 'error');
+                return;
+            }
+
+            try {
+                // 1. Upload file
+                log(`📤 Uploading ${selectedFile.name}...`);
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+
+                // 2. Start transcription
+                log('🎤 Starting transcription...');
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                currentTaskId = transcribeResult.task_id;
+                
+                log(`✅ Transcription started: ${currentTaskId}`, 'success');
+                
+                // Show progress section
+                document.getElementById('progress-section').style.display = 'block';
+                
+                // Subscribe to WebSocket updates
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        type: 'subscribe',
+                        task_id: currentTaskId
+                    }));
+                    log('📝 Subscribed to WebSocket updates');
+                }
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testWithSampleFile() {
+            log('🎬 Testing with sample file...');
+            // Create a small test file
+            const testContent = 'This is a test audio file for transcription testing.';
+            const testFile = new File([testContent], 'test.txt', { type: 'text/plain' });
+            
+            // Simulate file selection
+            selectedFile = testFile;
+            document.getElementById('file-text').textContent = `📁 ${testFile.name}`;
+            document.getElementById('fileName').textContent = testFile.name;
+            document.getElementById('fileSize').textContent = formatFileSize(testFile.size);
+            document.getElementById('selectedFile').style.display = 'block';
+            document.getElementById('transcribe-btn').disabled = false;
+            
+            log(`Sample file created: ${testFile.name} (${formatFileSize(testFile.size)})`);
+        }
+
+        // Health checks
+        async function checkAPIHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('api-health').textContent = '🟢 Healthy';
+                    document.getElementById('api-status').className = 'status-card connected';
+                    document.getElementById('server-status').textContent = 'Server is running';
+                    log('✅ API health check passed', 'success');
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                document.getElementById('api-health').textContent = '🔴 Unhealthy';
+                document.getElementById('api-status').className = 'status-card disconnected';
+                document.getElementById('server-status').textContent = 'Server not running';
+                log(`❌ API health check failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkWebSocketHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/ws/stats`);
+                const data = await response.json();
+                
+                if (data.status === 'active') {
+                    document.getElementById('ws-health').textContent = '🟢 Healthy';
+                    document.getElementById('websocket-status').className = 'status-card connected';
+                } else {
+                    document.getElementById('ws-health').textContent = '🔴 Unhealthy';
+                    document.getElementById('websocket-status').className = 'status-card disconnected';
+                }
+                
+                document.getElementById('connection-details').textContent = 
+                    `${data.websocket_stats?.active_connections || 0} connections`;
+                    
+            } catch (error) {
+                document.getElementById('ws-health').textContent = '🔴 Error';
+                document.getElementById('websocket-status').className = 'status-card disconnected';
+                log(`❌ WebSocket health check failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize
+        async function init() {
+            log('🚀 Initializing local test frontend...');
+            log(`🔗 API Base: ${API_BASE}`);
+            log(`📡 WebSocket Base: ${WS_BASE}`);
+            log(`👤 User ID: ${userId}`);
+            
+            // Update environment info
+            document.getElementById('user-id').textContent = userId;
+            
+            // Check API health
+            await checkAPIHealth();
+            await checkWebSocketHealth();
+            
+            // Try WebSocket connection
+            connectWebSocket();
+            
+            // Update status every 30 seconds
+            setInterval(() => {
+                checkAPIHealth();
+                checkWebSocketHealth();
+            }, 30000);
+            
+            log('✅ Local test frontend ready!', 'success');
+        }
+
+        // Start when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

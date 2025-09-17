@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 from pythainlp import word_tokenize, spell
 from pythainlp.corpus import thai_words
 from pythainlp.spell import correct
+from pythainlp.util import normalize
+from pythainlp.tokenize import word_tokenize as thai_word_tokenize
 import requests
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,13 @@ class ThaiTextProcessor:
             "ดีแล้ว": "ดี แล้ว",
             "จริงจริง": "จริง ๆ",
             "นั้นนะ": "นั้น นะ",
+            
+            # เพิ่มคำที่พบในตัวอย่าง
+            "กลับเรียน": "กลับ เรียน",
+            "ทั้น": "นั้น",
+            "รอบ": "รอบ",
+            "สวัง": "สวัสดี",
+            "มาชิคกู": "มาชิก",
         }
         
         # รูปแบบ regex สำหรับแก้ไข
@@ -77,8 +86,10 @@ class ThaiTextProcessor:
         if not text or not text.strip():
             return text
             
+        # ขั้นตอนที่ 0: ปรับปรุงข้อความให้เป็นมาตรฐาน
+        corrected = normalize(text)
+        
         # ขั้นตอนที่ 1: แทนที่คำที่ผิดทั่วไป
-        corrected = text
         for wrong, correct_word in self.common_corrections.items():
             corrected = corrected.replace(wrong, correct_word)
         
@@ -92,13 +103,16 @@ class ThaiTextProcessor:
         # ขั้นตอนที่ 4: ปรับปรุงการเว้นวรรค
         corrected = self._fix_spacing(corrected)
         
+        # ขั้นตอนที่ 5: ใช้ word tokenization เพื่อปรับปรุงการแยกคำ
+        corrected = self._improve_word_segmentation(corrected)
+        
         return corrected.strip()
     
     def _spell_check(self, text: str) -> str:
         """ตรวจสอบการสะกดด้วย PyThaiNLP"""
         try:
-            # แยกคำ
-            tokens = word_tokenize(text, engine='newmm')
+            # แยกคำด้วย PyThaiNLP
+            tokens = thai_word_tokenize(text, engine='newmm')
             corrected_tokens = []
             
             for token in tokens:
@@ -132,14 +146,32 @@ class ThaiTextProcessor:
         
         return text
     
+    def _improve_word_segmentation(self, text: str) -> str:
+        """ปรับปรุงการแยกคำด้วย PyThaiNLP"""
+        try:
+            # ใช้ PyThaiNLP word tokenization
+            tokens = thai_word_tokenize(text, engine='newmm')
+            
+            # รวมคำที่แยกแล้วด้วยช่องว่าง
+            improved_text = ' '.join(tokens)
+            
+            # ปรับปรุงการเว้นวรรค
+            improved_text = re.sub(r'\s+', ' ', improved_text)
+            
+            return improved_text
+            
+        except Exception as e:
+            logger.error(f"Word segmentation error: {e}")
+            return text
+    
     def get_confidence_score(self, original: str, corrected: str) -> float:
         """คำนวณคะแนนความมั่นใจในการแก้ไข"""
         if original == corrected:
             return 1.0
             
         # นับจำนวนคำที่ถูกต้องในพจนานุกรม
-        original_tokens = word_tokenize(original, engine='newmm')
-        corrected_tokens = word_tokenize(corrected, engine='newmm')
+        original_tokens = thai_word_tokenize(original, engine='newmm')
+        corrected_tokens = thai_word_tokenize(corrected, engine='newmm')
         
         original_correct = sum(1 for token in original_tokens if token in self.thai_words_set)
         corrected_correct = sum(1 for token in corrected_tokens if token in self.thai_words_set)

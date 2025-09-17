@@ -1,8 +1,10 @@
 services:
   # Main API Service
   api:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: transcription-api-staging
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: transcription-api-local
     ports:
       - "8001:8001"
     volumes:
@@ -12,7 +14,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
       - STORAGE_TYPE=sqlite
       - SQLITE_DB_PATH=/app/storage/database.db
       - RABBITMQ_HOST=rabbitmq
@@ -41,8 +43,10 @@ services:
 
   # Video Processing Worker 1
   video-worker-1:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-1-staging
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: video-worker-1-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -51,7 +55,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
       - STORAGE_TYPE=sqlite
       - SQLITE_DB_PATH=/app/storage/database.db
       - RABBITMQ_HOST=rabbitmq
@@ -80,8 +84,10 @@ services:
 
   # Video Processing Worker 2
   video-worker-2:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-2-staging
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: video-worker-2-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -90,7 +96,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
       - STORAGE_TYPE=sqlite
       - SQLITE_DB_PATH=/app/storage/database.db
       - RABBITMQ_HOST=rabbitmq
@@ -119,8 +125,10 @@ services:
 
   # Video Processing Worker 3
   video-worker-3:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-3-staging
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: video-worker-3-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -129,7 +137,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
       - STORAGE_TYPE=sqlite
       - SQLITE_DB_PATH=/app/storage/database.db
       - RABBITMQ_HOST=rabbitmq
@@ -159,7 +167,7 @@ services:
   # RabbitMQ สำหรับ message queue
   rabbitmq:
     image: rabbitmq:3-management-alpine
-    container_name: transcription-rabbitmq-staging
+    container_name: transcription-rabbitmq-local
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -167,7 +175,7 @@ services:
       - RABBITMQ_DEFAULT_USER=admin
       - RABBITMQ_DEFAULT_PASS=admin123
     volumes:
-      - rabbitmq_data_staging:/var/lib/rabbitmq
+      - rabbitmq_data_local:/var/lib/rabbitmq
     networks:
       - app-network
     restart: unless-stopped
@@ -185,11 +193,11 @@ services:
   # Redis สำหรับ caching และ queue
   redis:
     image: redis:7-alpine
-    container_name: transcription-redis-staging
+    container_name: transcription-redis-local
     ports:
       - "6379:6379"
     volumes:
-      - redis_data_staging:/data
+      - redis_data_local:/data
     networks:
       - app-network
     restart: unless-stopped
@@ -200,10 +208,10 @@ services:
           memory: 2G
           cpus: '0.5'
 
-  # Whisper.cpp สำหรับ transcription (Staging)
+  # Whisper.cpp สำหรับ transcription (Local)
   whisper:
-    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
-    container_name: transcription-whisper-staging
+    image: whisper-arm64
+    container_name: transcription-whisper-local
     ports:
       - "8002:8002"
     volumes:
@@ -212,7 +220,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
     networks:
       - app-network
     restart: unless-stopped
@@ -230,8 +238,8 @@ services:
 
   # Whisper สำหรับ Live Streaming
   whisper-live:
-    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
-    container_name: transcription-whisper-live-staging
+    image: whisper-arm64
+    container_name: transcription-whisper-live-local
     ports:
       - "8003:8002"
     volumes:
@@ -240,7 +248,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
     networks:
       - app-network
     restart: unless-stopped
@@ -257,8 +265,8 @@ services:
           cpus: '1.0'
 
 volumes:
-  redis_data_staging:
-  rabbitmq_data_staging:
+  redis_data_local:
+  rabbitmq_data_local:
 
 networks:
   app-network:

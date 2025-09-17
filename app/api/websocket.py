@@ -119,6 +119,11 @@ async def handle_websocket_message(websocket: WebSocket, user_id: str, message: 
             "timestamp": message.get("timestamp")
         }))
     
+    elif message_type == "pong":
+        # Acknowledge pong response from client
+        # No response needed, just log for debugging
+        logger.debug(f"Received pong from user {user_id}")
+    
     elif message_type == "get_stats":
         # ส่งสถิติ (สำหรับ admin)
         stats = websocket_manager.get_stats()
