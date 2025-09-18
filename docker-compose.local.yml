@@ -12,6 +12,7 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
+      - ./test-files:/app/test-files
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=local

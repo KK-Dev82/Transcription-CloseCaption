@@ -72,6 +72,49 @@ async def upload_file(file: UploadFile = File(...)):
             detail=f"เกิดข้อผิดพลาดในการอัปโหลด: {str(e)}"
         )
 
+@router.get("/list")
+async def list_uploaded_files():
+    """ดึงรายการไฟล์ที่อัปโหลดแล้ว"""
+    try:
+        from pathlib import Path
+        import os
+        from datetime import datetime
+        
+        upload_dir = Path("uploads")
+        if not upload_dir.exists():
+            return {"files": [], "total": 0}
+        
+        files = []
+        for file_path in upload_dir.iterdir():
+            if file_path.is_file():
+                stat = file_path.stat()
+                files.append({
+                    "filename": file_path.name,
+                    "file_path": str(file_path),
+                    "file_size": stat.st_size,
+                    "file_type": file_path.suffix.lower(),
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "is_video": file_service.is_video_file(str(file_path)),
+                    "is_audio": file_service.is_audio_file(str(file_path))
+                })
+        
+        # เรียงตามวันที่แก้ไขล่าสุด
+        files.sort(key=lambda x: x["modified_at"], reverse=True)
+        
+        return {
+            "files": files,
+            "total": len(files),
+            "upload_directory": str(upload_dir)
+        }
+        
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการดึงรายการไฟล์: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงรายการไฟล์: {str(e)}"
+        )
+
 @router.get("/{file_id}/info")
 async def get_file_info(file_id: str):
     """ดึงข้อมูลไฟล์"""

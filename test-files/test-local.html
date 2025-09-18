@@ -100,6 +100,27 @@
             padding: 15px;
             margin-bottom: 20px;
         }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+        
+        .realtime-update {
+            animation: pulse 0.5s ease-in-out;
+        }
     </style>
 </head>
 <body>
@@ -149,9 +170,22 @@
                 <strong>ไฟล์ที่เลือก:</strong> <span id="fileName"></span> 
                 (<span id="fileSize"></span>)
             </div>
-            <button onclick="startTranscription()" id="transcribe-btn" disabled style="width: 100%; padding: 12px; margin: 5px 0;">
-                🚀 เริ่มแปลงเสียง
-            </button>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button onclick="startTranscription()" id="transcribe-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0;">
+                    🚀 เริ่มแปลงเสียง
+                </button>
+                <button onclick="startLiveCaption()" id="live-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #17a2b8;">
+                    📺 Live Caption
+                </button>
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                <button onclick="startRealtimeCaptionMode()" id="realtime-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #28a745;">
+                    🎬 Real-time Live Caption
+                </button>
+                <button onclick="testSearchFeature()" id="search-test-btn" style="flex: 1; padding: 12px; margin: 5px 0; background: #6f42c1;">
+                    🔍 ทดสอบค้นหา
+                </button>
+            </div>
             <button onclick="testWithSampleFile()" style="width: 100%; padding: 8px; background: #6c757d;">
                 🎬 ทดสอบด้วยไฟล์ตัวอย่าง
             </button>
@@ -175,13 +209,134 @@
         <div class="results-section" id="results-section" style="display:none">
             <h3>📝 ผลการแปลงเสียง</h3>
             <div id="transcription-result" style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin: 15px 0;">
-                <div id="transcription-text" style="white-space: pre-wrap; line-height: 1.8; font-size: 16px; margin-bottom: 15px; min-height: 50px; background: white; padding: 15px; border-radius: 6px;"></div>
+                <div id="transcription-text" style="white-space: pre-wrap; line-height: 1.8; font-size: 16px; margin-bottom: 15px; min-height: 50px; background: white; padding: 15px; border-radius: 6px; border: 2px solid #e3f2fd; transition: all 0.3s ease;">
+                    <div style="text-align: center; color: #666; font-style: italic;">
+                        กำลังรอการแปลงเสียง... ผลลัพธ์จะแสดงแบบ real-time
+                    </div>
+                </div>
                 <div id="transcription-stats" style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.9em; color: #666;">
-                    <div><strong>จำนวนคำ:</strong> <span id="word-count">-</span></div>
+                    <div><strong>จำนวนคำ:</strong> <span id="word-count">0</span></div>
                     <div><strong>ระยะเวลา:</strong> <span id="duration">-</span> วินาที</div>
                     <div><strong>โมเดล:</strong> <span id="model-used">-</span></div>
                     <div><strong>ภาษา:</strong> <span id="language">-</span></div>
                 </div>
+            </div>
+            
+            <!-- Real-time Chunks Display -->
+            <div id="realtime-chunks-section" style="display:none; margin-top: 20px;">
+                <h4>🎵 ผลลัพธ์แบบ Real-time</h4>
+                <div id="caption-chunks" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: white;">
+                    <!-- Chunks will be displayed here in real-time -->
+                </div>
+            </div>
+        </div>
+
+        <!-- History Section -->
+        <div class="container">
+            <h3>📚 ประวัติการแปลงเสียง</h3>
+            <div style="margin-bottom: 15px;">
+                <button onclick="loadHistory()" style="margin-right: 10px;">🔄 โหลดประวัติ</button>
+                <button onclick="clearHistoryView()">🗑️ ล้างการแสดงผล</button>
+            </div>
+            <div id="history-section" style="display:none;">
+                <div id="history-stats" style="background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 0.9em;"></div>
+                <div id="history-list" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px;"></div>
+            </div>
+            <div id="history-loading" style="display:none; text-align: center; padding: 20px; color: #666;">
+                🔄 กำลังโหลดประวัติ...
+            </div>
+        </div>
+
+        <!-- Search Section -->
+        <div class="container">
+            <h3>🔍 ค้นหาข้อความในวิดีโอ</h3>
+            <div style="margin-bottom: 15px;">
+                <input type="text" id="search-input" placeholder="พิมพ์คำที่ต้องการค้นหา..." style="width: 70%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px;">
+                <button onclick="searchInVideos()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    🔍 ค้นหา
+                </button>
+                <button onclick="clearSearch()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">
+                    🗑️ ล้าง
+                </button>
+            </div>
+            <div id="search-results" style="display:none;">
+                <h4>🎯 ผลการค้นหา</h4>
+                <div id="search-results-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: white;"></div>
+            </div>
+        </div>
+
+        <!-- Live Caption Section -->
+        <div class="container" id="live-caption-section" style="display:none;">
+            <h3>📺 Live Close Caption</h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                <div id="live-caption-display" style="background: white; padding: 20px; border-radius: 6px; min-height: 100px; border-left: 4px solid #17a2b8; font-size: 18px; line-height: 1.6;">
+                    <div style="text-align: center; color: #666;">กำลังรอการแปลงเสียง...</div>
+                </div>
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="stopLiveCaption()" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        ⏹️ หยุด Live Caption
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real-time Live Caption Section -->
+        <div class="container" id="realtime-caption-section" style="display:none;">
+            <h3>🎬 Real-time Live Close Caption</h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                <!-- Video Player -->
+                <div id="video-player-container" style="margin-bottom: 20px;">
+                    <video id="preview-video" controls style="width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <p style="color: #666;">เบราว์เซอร์ของคุณไม่รองรับการเล่นวิดีโอ</p>
+                    </video>
+                </div>
+                
+                <!-- Live Caption Display -->
+                <div id="realtime-caption-display" style="background: white; padding: 20px; border-radius: 6px; min-height: 200px; border-left: 4px solid #17a2b8;">
+                    <div style="text-align: center; color: #666; margin-bottom: 20px;">
+                        📺 เลือกวีดิโอเพื่อเริ่ม Live Caption
+                    </div>
+                    
+                    <!-- Caption Chunks -->
+                    <div id="caption-chunks" style="max-height: 300px; overflow-y: auto;">
+                        <!-- Caption chunks will be displayed here -->
+                    </div>
+                </div>
+                
+                <!-- Controls -->
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="startRealtimeCaption()" id="start-realtime-btn" style="padding: 10px 20px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">
+                        ▶️ เริ่ม Live Caption
+                    </button>
+                    <button onclick="pauseRealtimeCaption()" id="pause-realtime-btn" style="padding: 10px 20px; background: #ffc107; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; display: none;">
+                        ⏸️ หยุดชั่วคราว
+                    </button>
+                    <button onclick="stopRealtimeCaption()" id="stop-realtime-btn" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        ⏹️ หยุด Live Caption
+                    </button>
+                </div>
+                
+                <!-- Progress -->
+                <div style="margin-top: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span id="current-time">00:00</span>
+                        <span id="total-time">00:00</span>
+                    </div>
+                    <div style="background: #e9ecef; height: 6px; border-radius: 3px; overflow: hidden;">
+                        <div id="video-progress" style="background: #17a2b8; height: 100%; width: 0%; transition: width 0.1s ease;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detail View Modal -->
+        <div id="detail-modal" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;" onclick="closeDetailModal()">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 12px; max-width: 80%; max-height: 80%; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.3);" onclick="event.stopPropagation()">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 id="detail-title">📝 รายละเอียดการแปลง</h3>
+                    <button onclick="closeDetailModal()" style="background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer;">✕ ปิด</button>
+                </div>
+                <div id="detail-content"></div>
             </div>
         </div>
 
@@ -200,6 +355,14 @@
         let websocket = null;
         let connectionType = 'disconnected';
         let pollingInterval = null;
+        
+        // Real-time Caption State
+        let realtimeCaptionActive = false;
+        let videoElement = null;
+        let captionChunks = [];
+        let currentChunkIndex = 0;
+        let videoDuration = 0;
+        let realtimeTaskId = null;
         
         // Local environment configuration
         const API_BASE = 'http://localhost:8001';
@@ -230,6 +393,7 @@
                 document.getElementById('fileSize').textContent = formatFileSize(selectedFile.size);
                 document.getElementById('selectedFile').style.display = 'block';
                 document.getElementById('transcribe-btn').disabled = false;
+                document.getElementById('live-caption-btn').disabled = false;
                 log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
             }
         }
@@ -335,10 +499,19 @@
             document.getElementById('progress-fill').style.width = `${progress}%`;
             document.getElementById('progress-fill').textContent = `${progress}%`;
             
+            // Show results section if not already shown
+            document.getElementById('results-section').style.display = 'block';
+            
+            // Update transcription text in real-time if available
+            if (data.partial_text || (data.chunks && data.chunks.length > 0)) {
+                log(`📝 Updating real-time text: ${data.partial_text?.length || 0} chars, ${data.chunks?.length || 0} chunks`, 'info');
+                updateTranscriptionText(data.partial_text || '', data.chunks || []);
+            }
+            
             if (data.status === 'completed') {
                 log('✅ Transcription completed!', 'success');
                 stopPolling();
-                // Fetch results
+                // Fetch final results
                 fetchTranscriptionResults(data.task_id);
             } else if (data.status === 'failed') {
                 log(`❌ Transcription failed: ${data.error_message || 'Unknown error'}`, 'error');
@@ -362,6 +535,77 @@
             }
         }
 
+        function updateTranscriptionText(partialText, chunks = []) {
+            const textElement = document.getElementById('transcription-text');
+            if (partialText) {
+                textElement.innerHTML = `<div style="color: #333; font-weight: 500;" class="realtime-update">${partialText}</div>`;
+                log(`📝 Updated transcription text: ${partialText.length} characters`, 'info');
+                
+                // Add pulse animation
+                textElement.classList.add('realtime-update');
+                setTimeout(() => {
+                    textElement.classList.remove('realtime-update');
+                }, 500);
+            }
+            
+            // Update word count
+            const wordCount = partialText ? partialText.split(/\s+/).length : 0;
+            document.getElementById('word-count').textContent = wordCount;
+            
+            // Update chunks if available
+            if (chunks.length > 0) {
+                updateChunksDisplay(chunks);
+                // Show real-time chunks section
+                document.getElementById('realtime-chunks-section').style.display = 'block';
+            }
+        }
+
+        function updateChunksDisplay(chunks) {
+            const chunksContainer = document.getElementById('caption-chunks');
+            if (!chunksContainer) {
+                log('❌ Chunks container not found', 'error');
+                return;
+            }
+            
+            log(`🎵 Updating chunks display: ${chunks.length} chunks`, 'info');
+            
+            chunksContainer.innerHTML = '';
+            
+            chunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.id = `realtime-chunk-${index}`;
+                chunkDiv.style.cssText = `
+                    padding: 12px; 
+                    margin: 8px 0; 
+                    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+                    border-left: 4px solid #17a2b8; 
+                    border-radius: 8px;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    animation: slideIn 0.5s ease-out;
+                `;
+                
+                chunkDiv.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-size: 0.9em; color: #666; font-weight: 600;">
+                            🎵 Chunk ${index + 1}
+                        </div>
+                        <div style="font-size: 0.8em; color: #17a2b8; background: #e3f2fd; padding: 2px 8px; border-radius: 12px;">
+                            ${formatTime(chunk.start_time || 0)} - ${formatTime(chunk.end_time || 0)}
+                        </div>
+                    </div>
+                    <div style="line-height: 1.6; color: #333; font-size: 14px;">${chunk.text || 'No text'}</div>
+                `;
+                
+                chunksContainer.appendChild(chunkDiv);
+                
+                // Scroll to latest chunk
+                chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+            
+            log(`✅ Chunks display updated with ${chunks.length} chunks`, 'success');
+        }
+
         function displayTranscriptionResults(data) {
             // Show results section
             document.getElementById('results-section').style.display = 'block';
@@ -374,6 +618,11 @@
             document.getElementById('duration').textContent = data.file_info?.total_duration || '-';
             document.getElementById('model-used').textContent = data.basic_info?.model_size || '-';
             document.getElementById('language').textContent = data.basic_info?.language || '-';
+            
+            // Display chunks if available
+            if (data.results.chunks && data.results.chunks.length > 0) {
+                updateChunksDisplay(data.results.chunks);
+            }
             
             log('🎉 Results displayed successfully!', 'success');
         }
@@ -548,6 +797,798 @@
             }, 30000);
             
             log('✅ Local test frontend ready!', 'success');
+        }
+
+        // History functions
+        async function loadHistory() {
+            const historyLoading = document.getElementById('history-loading');
+            const historySection = document.getElementById('history-section');
+            
+            historyLoading.style.display = 'block';
+            historySection.style.display = 'none';
+            
+            try {
+                log('🔄 Loading transcription history...', 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions`);
+                const data = await response.json();
+                
+                if (data.history && data.history.length > 0) {
+                    displayHistory(data);
+                    historySection.style.display = 'block';
+                    log(`✅ Loaded ${data.history.length} transcription records`, 'success');
+                } else {
+                    log('⚠️ No transcription history found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to load history: ${error.message}`, 'error');
+            } finally {
+                historyLoading.style.display = 'none';
+            }
+        }
+
+        function displayHistory(data) {
+            const historyStats = document.getElementById('history-stats');
+            const historyList = document.getElementById('history-list');
+            
+            // Display stats
+            const totalTasks = data.history.length;
+            const completedTasks = data.history.filter(t => t.status === 'completed').length;
+            const totalWords = data.history.reduce((sum, t) => sum + (t.word_count || 0), 0);
+            
+            historyStats.innerHTML = `
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div><strong>📊 รวม:</strong> ${totalTasks} รายการ</div>
+                    <div><strong>✅ เสร็จแล้ว:</strong> ${completedTasks} รายการ</div>
+                    <div><strong>📝 รวมคำ:</strong> ${totalWords.toLocaleString()} คำ</div>
+                </div>
+            `;
+            
+            // Display history list
+            historyList.innerHTML = '';
+            
+            data.history.forEach((item, index) => {
+                const historyItem = document.createElement('div');
+                historyItem.style.cssText = `
+                    padding: 15px; 
+                    border-bottom: 1px solid #eee; 
+                    cursor: pointer; 
+                    transition: background-color 0.2s ease;
+                `;
+                
+                historyItem.onmouseover = () => historyItem.style.backgroundColor = '#f8f9fa';
+                historyItem.onmouseout = () => historyItem.style.backgroundColor = 'white';
+                historyItem.onclick = () => showTranscriptionDetail(item.task_id);
+                
+                const statusColor = item.status === 'completed' ? '#28a745' : 
+                                   item.status === 'failed' ? '#dc3545' : '#ffc107';
+                
+                const createdDate = new Date(item.created_at).toLocaleDateString('th-TH', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                
+                historyItem.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: bold; margin-bottom: 5px;">
+                                🎬 Task #${index + 1}: ${item.task_id.slice(0, 8)}...
+                                <span style="color: ${statusColor}; font-size: 0.9em; margin-left: 10px;">
+                                    ${item.status === 'completed' ? '✅ เสร็จแล้ว' : 
+                                      item.status === 'failed' ? '❌ ล้มเหลว' : '⏳ กำลังดำเนินการ'}
+                                </span>
+                            </div>
+                            <div style="font-size: 0.9em; color: #666;">
+                                📅 ${createdDate} | 
+                                📝 ${item.word_count || 0} คำ | 
+                                ⏱️ ${item.duration || 0} วิ | 
+                                🔤 ${item.language || 'th'}
+                            </div>
+                        </div>
+                        <div style="font-size: 1.2em;">👁️</div>
+                    </div>
+                `;
+                
+                historyList.appendChild(historyItem);
+            });
+        }
+
+        async function showTranscriptionDetail(taskId) {
+            try {
+                log(`🔍 Loading details for task ${taskId.slice(0, 8)}...`, 'info');
+                
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    displayTranscriptionDetail(data);
+                } else {
+                    log('⚠️ No transcription results found for this task', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to load task details: ${error.message}`, 'error');
+            }
+        }
+
+        function displayTranscriptionDetail(data) {
+            const modal = document.getElementById('detail-modal');
+            const title = document.getElementById('detail-title');
+            const content = document.getElementById('detail-content');
+            
+            title.textContent = `📝 รายละเอียดการแปลง - ${data.task_id.slice(0, 8)}...`;
+            
+            const createdDate = new Date(data.timestamps.created_at).toLocaleDateString('th-TH', {
+                year: 'numeric', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+            
+            content.innerHTML = `
+                <!-- Task Info -->
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0;">📊 ข้อมูลงาน</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em;">
+                        <div><strong>Task ID:</strong> ${data.task_id}</div>
+                        <div><strong>สถานะ:</strong> <span style="color: #28a745;">${data.basic_info.status}</span></div>
+                        <div><strong>วันที่สร้าง:</strong> ${createdDate}</div>
+                        <div><strong>ความคืบหน้า:</strong> ${data.basic_info.progress}%</div>
+                        <div><strong>ภาษา:</strong> ${data.basic_info.language || 'th'}</div>
+                        <div><strong>โมเดล:</strong> ${data.basic_info.model_size || 'base'}</div>
+                        <div><strong>ระยะเวลา:</strong> ${data.file_info.total_duration || 0} วินาที</div>
+                        <div><strong>จำนวนคำ:</strong> ${data.results.word_count || 0} คำ</div>
+                    </div>
+                </div>
+
+                <!-- Video Player -->
+                ${data.file_info.file_path ? `
+                <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 15px 0;">🎬 วิดีโอต้นฉบับ</h4>
+                    <div style="text-align: center;">
+                        <video 
+                            controls 
+                            style="max-width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
+                            onloadstart="log('📹 Loading video...', 'info')"
+                            onloadeddata="log('✅ Video loaded successfully', 'success')"
+                            onerror="log('❌ Failed to load video', 'error')"
+                        >
+                            <source src="/file/${data.file_info.file_path.replace('uploads/', '')}" type="video/mp4">
+                            <p style="color: #666;">เบราว์เซอร์ของคุณไม่รองรับการเล่นวิดีโอ</p>
+                        </video>
+                        <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            📁 ${data.file_info.file_path.split('/').pop()} | 
+                            ⏱️ ${data.file_info.total_duration || 0} วินาที
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Transcription Text -->
+                <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 15px 0;">📝 ข้อความที่แปลงได้</h4>
+                    <div style="line-height: 1.8; font-size: 16px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; background: #f8f9fa; padding: 15px; border-radius: 6px;">
+${data.results.full_text || 'ไม่พบข้อความ'}
+                    </div>
+                </div>
+
+                <!-- Chunks -->
+                <div>
+                    <h4 style="margin: 0 0 15px 0;">🎵 แบ่งตาม Timeline</h4>
+                    <div style="max-height: 300px; overflow-y: auto;">
+                        ${data.results.chunks && data.results.chunks.length > 0 ? 
+                            data.results.chunks.map((chunk, index) => `
+                                <div style="padding: 10px; margin: 5px 0; background: #f8f9fa; border-left: 3px solid #007bff; border-radius: 4px;">
+                                    <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                                        <strong>Chunk ${index + 1}:</strong> ${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}
+                                    </div>
+                                    <div style="line-height: 1.6;">${chunk.text}</div>
+                                </div>
+                            `).join('') : 
+                            '<div style="padding: 20px; text-align: center; color: #666;">ไม่มีข้อมูล chunks</div>'
+                        }
+                    </div>
+                </div>
+            `;
+            
+            modal.style.display = 'block';
+            log('🎉 Task details displayed', 'success');
+        }
+
+        function closeDetailModal() {
+            document.getElementById('detail-modal').style.display = 'none';
+        }
+
+        function clearHistoryView() {
+            document.getElementById('history-section').style.display = 'none';
+            document.getElementById('history-loading').style.display = 'none';
+            log('🗑️ History view cleared', 'info');
+        }
+
+        // Search functions
+        async function searchInVideos() {
+            const searchTerm = document.getElementById('search-input').value.trim();
+            if (!searchTerm) {
+                log('❌ กรุณาใส่คำค้นหา', 'error');
+                return;
+            }
+
+            try {
+                log(`🔍 Searching for: "${searchTerm}"`, 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions?search=${encodeURIComponent(searchTerm)}`);
+                const data = await response.json();
+                
+                if (data.history && data.history.length > 0) {
+                    displaySearchResults(data.history, searchTerm);
+                    document.getElementById('search-results').style.display = 'block';
+                    log(`✅ Found ${data.history.length} results`, 'success');
+                } else {
+                    log('⚠️ No results found', 'warning');
+                    document.getElementById('search-results').style.display = 'block';
+                    document.getElementById('search-results-list').innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">ไม่พบผลการค้นหา</div>';
+                }
+            } catch (error) {
+                log(`❌ Search failed: ${error.message}`, 'error');
+            }
+        }
+
+        function displaySearchResults(results, searchTerm) {
+            const resultsList = document.getElementById('search-results-list');
+            resultsList.innerHTML = '';
+            
+            results.forEach((item, index) => {
+                const resultItem = document.createElement('div');
+                resultItem.style.cssText = `
+                    padding: 15px; 
+                    border-bottom: 1px solid #eee; 
+                    cursor: pointer; 
+                    transition: background-color 0.2s ease;
+                `;
+                
+                resultItem.onmouseover = () => resultItem.style.backgroundColor = '#f8f9fa';
+                resultItem.onmouseout = () => resultItem.style.backgroundColor = 'white';
+                resultItem.onclick = () => showTranscriptionDetail(item.task_id);
+                
+                const createdDate = new Date(item.created_at).toLocaleDateString('th-TH', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                
+                resultItem.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: bold; margin-bottom: 5px;">
+                                🎬 Task #${index + 1}: ${item.task_id.slice(0, 8)}...
+                                <span style="color: #28a745; font-size: 0.9em; margin-left: 10px;">✅ เสร็จแล้ว</span>
+                            </div>
+                            <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                                📅 ${createdDate} | 
+                                📝 ${item.word_count || 0} คำ | 
+                                ⏱️ ${item.duration || 0} วิ
+                            </div>
+                            <div style="font-size: 0.9em; color: #007bff;">
+                                🔍 ค้นหา: "${searchTerm}"
+                            </div>
+                        </div>
+                        <div style="font-size: 1.2em;">👁️</div>
+                    </div>
+                `;
+                
+                resultsList.appendChild(resultItem);
+            });
+        }
+
+        function clearSearch() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('search-results').style.display = 'none';
+            log('🗑️ Search cleared', 'info');
+        }
+
+        // Live Caption functions
+        async function startLiveCaption() {
+            if (!selectedFile) {
+                log('❌ No file selected for live caption', 'error');
+                return;
+            }
+
+            try {
+                log('📺 Starting live caption...', 'info');
+                
+                // Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // Start transcription for live caption
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                currentTaskId = transcribeResult.task_id;
+                
+                log(`✅ Live caption started: ${currentTaskId}`, 'success');
+                
+                // Show live caption section
+                document.getElementById('live-caption-section').style.display = 'block';
+                
+                // Start polling for live updates
+                startLiveCaptionPolling();
+                
+            } catch (error) {
+                log(`❌ Live caption error: ${error.message}`, 'error');
+            }
+        }
+
+        function startLiveCaptionPolling() {
+            if (pollingInterval) return;
+            
+            pollingInterval = setInterval(async () => {
+                if (currentTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${currentTaskId}`);
+                        const data = await response.json();
+                        
+                        // Update live caption display
+                        updateLiveCaptionDisplay(data);
+                        
+                        if (data.status === 'completed') {
+                            stopLiveCaption();
+                            log('✅ Live caption completed!', 'success');
+                        } else if (data.status === 'failed') {
+                            stopLiveCaption();
+                            log(`❌ Live caption failed: ${data.error_message || 'Unknown error'}`, 'error');
+                        }
+                    } catch (error) {
+                        log(`❌ Live caption polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 2000);
+        }
+
+        function updateLiveCaptionDisplay(data) {
+            const display = document.getElementById('live-caption-display');
+            
+            if (data.stage === 'transcribing' && data.progress > 0) {
+                display.innerHTML = `
+                    <div style="text-align: center; color: #17a2b8; margin-bottom: 10px;">
+                        📺 Live Caption - ${data.progress}%
+                    </div>
+                    <div style="text-align: center; color: #666;">
+                        กำลังแปลงเสียง... กรุณารอสักครู่
+                    </div>
+                `;
+            } else if (data.status === 'completed') {
+                // Fetch final results
+                fetchTranscriptionResults(data.task_id).then(() => {
+                    display.innerHTML = `
+                        <div style="text-align: center; color: #28a745; margin-bottom: 10px;">
+                            ✅ Live Caption เสร็จสิ้น
+                        </div>
+                        <div style="line-height: 1.6;">
+                            การแปลงเสียงเสร็จสิ้นแล้ว สามารถดูผลลัพธ์ได้ในส่วนผลการแปลงเสียง
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        function stopLiveCaption() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            document.getElementById('live-caption-section').style.display = 'none';
+            log('⏹️ Live caption stopped', 'info');
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Real-time Caption Functions
+        async function startRealtimeCaptionMode() {
+            if (!selectedFile) {
+                log('❌ No file selected for real-time caption', 'error');
+                return;
+            }
+
+            try {
+                log('🎬 Starting real-time caption mode...', 'info');
+                
+                // Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // Start transcription for real-time caption
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                realtimeTaskId = transcribeResult.task_id;
+                
+                log(`✅ Real-time caption started: ${realtimeTaskId}`, 'success');
+                
+                // Setup video player
+                setupVideoPlayer(uploadResult.file_path);
+                
+                // Show real-time caption section
+                document.getElementById('realtime-caption-section').style.display = 'block';
+                
+                // Start polling for chunks
+                startRealtimeCaptionPolling();
+                
+            } catch (error) {
+                log(`❌ Real-time caption error: ${error.message}`, 'error');
+            }
+        }
+
+        function setupVideoPlayer(filePath) {
+            videoElement = document.getElementById('preview-video');
+            videoElement.src = `/file/${filePath.replace('uploads/', '')}`;
+            
+            videoElement.addEventListener('loadedmetadata', () => {
+                videoDuration = videoElement.duration;
+                document.getElementById('total-time').textContent = formatTime(videoDuration);
+                log(`📹 Video loaded: ${formatTime(videoDuration)}`, 'info');
+            });
+            
+            videoElement.addEventListener('timeupdate', () => {
+                updateVideoProgress();
+                updateCaptionDisplay();
+            });
+            
+            videoElement.addEventListener('play', () => {
+                if (realtimeCaptionActive) {
+                    log('▶️ Video playing with live captions', 'info');
+                }
+            });
+            
+            videoElement.addEventListener('pause', () => {
+                log('⏸️ Video paused', 'info');
+            });
+        }
+
+        function startRealtimeCaptionPolling() {
+            if (pollingInterval) return;
+            
+            pollingInterval = setInterval(async () => {
+                if (realtimeTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${realtimeTaskId}`);
+                        const data = await response.json();
+                        
+                        if (data.status === 'completed') {
+                            // Fetch transcription results
+                            await fetchRealtimeCaptionResults();
+                            stopRealtimeCaptionPolling();
+                        } else if (data.status === 'failed') {
+                            log(`❌ Real-time caption failed: ${data.error_message || 'Unknown error'}`, 'error');
+                            stopRealtimeCaptionPolling();
+                        }
+                    } catch (error) {
+                        log(`❌ Real-time caption polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 2000);
+        }
+
+        async function fetchRealtimeCaptionResults() {
+            try {
+                const response = await fetch(`${API_BASE}/history/transcriptions/${realtimeTaskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.chunks) {
+                    captionChunks = data.results.chunks;
+                    log(`✅ Loaded ${captionChunks.length} caption chunks`, 'success');
+                    displayCaptionChunks();
+                } else {
+                    log('⚠️ No caption chunks found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to fetch caption results: ${error.message}`, 'error');
+            }
+        }
+
+        function displayCaptionChunks() {
+            const chunksContainer = document.getElementById('caption-chunks');
+            chunksContainer.innerHTML = '';
+            
+            captionChunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.id = `chunk-${index}`;
+                chunkDiv.style.cssText = `
+                    padding: 10px; 
+                    margin: 5px 0; 
+                    background: #f8f9fa; 
+                    border-left: 3px solid #17a2b8; 
+                    border-radius: 4px;
+                    opacity: 0.5;
+                    transition: all 0.3s ease;
+                `;
+                
+                chunkDiv.innerHTML = `
+                    <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                        <strong>Chunk ${index + 1}:</strong> ${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}
+                    </div>
+                    <div style="line-height: 1.6;">${chunk.text}</div>
+                `;
+                
+                chunksContainer.appendChild(chunkDiv);
+            });
+        }
+
+        function updateVideoProgress() {
+            if (!videoElement) return;
+            
+            const currentTime = videoElement.currentTime;
+            const progress = (currentTime / videoDuration) * 100;
+            
+            document.getElementById('current-time').textContent = formatTime(currentTime);
+            document.getElementById('video-progress').style.width = `${progress}%`;
+        }
+
+        function updateCaptionDisplay() {
+            if (!videoElement || captionChunks.length === 0) return;
+            
+            const currentTime = videoElement.currentTime;
+            
+            // Find current chunk
+            let activeChunkIndex = -1;
+            for (let i = 0; i < captionChunks.length; i++) {
+                const chunk = captionChunks[i];
+                if (currentTime >= chunk.start_time && currentTime <= chunk.end_time) {
+                    activeChunkIndex = i;
+                    break;
+                }
+            }
+            
+            // Update chunk display
+            document.querySelectorAll('[id^="chunk-"]').forEach((chunkDiv, index) => {
+                if (index === activeChunkIndex) {
+                    chunkDiv.style.opacity = '1';
+                    chunkDiv.style.background = '#e3f2fd';
+                    chunkDiv.style.borderLeftColor = '#2196f3';
+                    chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else if (index < activeChunkIndex) {
+                    chunkDiv.style.opacity = '0.7';
+                    chunkDiv.style.background = '#d4edda';
+                    chunkDiv.style.borderLeftColor = '#28a745';
+                } else {
+                    chunkDiv.style.opacity = '0.5';
+                    chunkDiv.style.background = '#f8f9fa';
+                    chunkDiv.style.borderLeftColor = '#17a2b8';
+                }
+            });
+        }
+
+        function startRealtimeCaption() {
+            if (!videoElement) {
+                log('❌ No video loaded', 'error');
+                return;
+            }
+            
+            realtimeCaptionActive = true;
+            videoElement.play();
+            
+            document.getElementById('start-realtime-btn').style.display = 'none';
+            document.getElementById('pause-realtime-btn').style.display = 'inline-block';
+            
+            log('▶️ Real-time caption started', 'success');
+        }
+
+        function pauseRealtimeCaption() {
+            if (!videoElement) return;
+            
+            videoElement.pause();
+            
+            document.getElementById('pause-realtime-btn').style.display = 'none';
+            document.getElementById('start-realtime-btn').style.display = 'inline-block';
+            
+            log('⏸️ Real-time caption paused', 'info');
+        }
+
+        function stopRealtimeCaption() {
+            realtimeCaptionActive = false;
+            
+            if (videoElement) {
+                videoElement.pause();
+                videoElement.currentTime = 0;
+            }
+            
+            document.getElementById('realtime-caption-section').style.display = 'none';
+            document.getElementById('start-realtime-btn').style.display = 'inline-block';
+            document.getElementById('pause-realtime-btn').style.display = 'none';
+            
+            stopRealtimeCaptionPolling();
+            log('⏹️ Real-time caption stopped', 'info');
+        }
+
+        function stopRealtimeCaptionPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // Search Test Function
+        async function testSearchFeature() {
+            log('🔍 Testing search feature...', 'info');
+            
+            try {
+                // Load history first
+                const response = await fetch(`${API_BASE}/history/transcriptions`);
+                const data = await response.json();
+                
+                if (!data.history || data.history.length === 0) {
+                    log('⚠️ ไม่มีประวัติการแปลงเสียง กรุณาแปลงไฟล์ก่อน', 'warning');
+                    alert('ไม่มีประวัติการแปลงเสียง\nกรุณาอัปโหลดและแปลงไฟล์ก่อนทดสอบค้นหา');
+                    return;
+                }
+                
+                // Show available videos for selection
+                const completedTasks = data.history.filter(t => t.status === 'completed');
+                if (completedTasks.length === 0) {
+                    log('⚠️ ไม่มีไฟล์ที่แปลงเสร็จแล้ว', 'warning');
+                    alert('ไม่มีไฟล์ที่แปลงเสร็จแล้ว\nกรุณารอให้การแปลงเสร็จสิ้นก่อน');
+                    return;
+                }
+                
+                // Create selection modal
+                showVideoSelectionModal(completedTasks);
+                
+            } catch (error) {
+                log(`❌ Failed to load history: ${error.message}`, 'error');
+            }
+        }
+
+        function showVideoSelectionModal(videos) {
+            // Create modal HTML
+            const modalHtml = `
+                <div id="video-selection-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center;">
+                    <div style="background: white; padding: 30px; border-radius: 12px; max-width: 80%; max-height: 80%; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                        <h3 style="margin: 0 0 20px 0;">🔍 เลือกวิดีโอสำหรับทดสอบค้นหา</h3>
+                        <p style="margin: 0 0 20px 0; color: #666;">เลือกวิดีโอที่ต้องการทดสอบการค้นหาข้อความ:</p>
+                        <div id="video-list" style="max-height: 400px; overflow-y: auto;">
+                            ${videos.map((video, index) => {
+                                const createdDate = new Date(video.created_at).toLocaleDateString('th-TH', {
+                                    year: 'numeric', month: 'short', day: 'numeric',
+                                    hour: '2-digit', minute: '2-digit'
+                                });
+                                return `
+                                    <div onclick="selectVideoForSearch('${video.task_id}')" style="
+                                        padding: 15px; 
+                                        margin: 10px 0; 
+                                        border: 1px solid #ddd; 
+                                        border-radius: 8px; 
+                                        cursor: pointer; 
+                                        transition: all 0.2s ease;
+                                        background: white;
+                                    " onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+                                        <div style="font-weight: bold; margin-bottom: 5px;">
+                                            🎬 Task #${index + 1}: ${video.task_id.slice(0, 8)}...
+                                        </div>
+                                        <div style="font-size: 0.9em; color: #666;">
+                                            📅 ${createdDate} | 
+                                            📝 ${video.word_count || 0} คำ | 
+                                            ⏱️ ${video.duration || 0} วิ
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                        <div style="margin-top: 20px; text-align: center;">
+                            <button onclick="closeVideoSelectionModal()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                ✕ ปิด
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add modal to page
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+        }
+
+        async function selectVideoForSearch(taskId) {
+            try {
+                closeVideoSelectionModal();
+                log(`🔍 Loading video details for search test...`, 'info');
+                
+                // Get video details
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    // Extract some words from the transcription for search
+                    const words = data.results.full_text.split(/\s+/).filter(word => 
+                        word.length > 2 && 
+                        !['และ', 'ที่', 'เป็น', 'ใน', 'มี', 'จะ', 'ได้', 'แล้ว', 'ครับ', 'ค่ะ'].includes(word)
+                    );
+                    
+                    if (words.length > 0) {
+                        // Use a random word from the transcription
+                        const searchWord = words[Math.floor(Math.random() * Math.min(words.length, 10))];
+                        
+                        log(`🎯 Testing search with word from video: "${searchWord}"`, 'info');
+                        document.getElementById('search-input').value = searchWord;
+                        await searchInVideos();
+                        
+                        log(`✅ Search test completed with: "${searchWord}"`, 'success');
+                    } else {
+                        log('⚠️ ไม่พบคำที่เหมาะสมสำหรับทดสอบ', 'warning');
+                    }
+                } else {
+                    log('⚠️ ไม่พบข้อความในวิดีโอนี้', 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ Error in search test: ${error.message}`, 'error');
+            }
+        }
+
+        function closeVideoSelectionModal() {
+            const modal = document.getElementById('video-selection-modal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        // Update file handling to enable real-time caption button
+        function handleFileSelect(event) {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-text').textContent = `📁 ${selectedFile.name}`;
+                document.getElementById('fileName').textContent = selectedFile.name;
+                document.getElementById('fileSize').textContent = formatFileSize(selectedFile.size);
+                document.getElementById('selectedFile').style.display = 'block';
+                document.getElementById('transcribe-btn').disabled = false;
+                document.getElementById('live-caption-btn').disabled = false;
+                document.getElementById('realtime-caption-btn').disabled = false;
+                log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
+            }
         }
 
         // Start when page loads

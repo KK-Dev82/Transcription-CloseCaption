@@ -137,6 +137,10 @@ class TranscriptionService:
             chunk_results = []
             total_chunks = len(chunks)
             
+            # เก็บ partial results
+            partial_text = ""
+            partial_chunks = []
+            
             for i, chunk_path in enumerate(chunks):
                 try:
                     logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}")
@@ -144,6 +148,26 @@ class TranscriptionService:
                         chunk_path, model_size, language, use_thai_processor=True
                     )
                     chunk_results.append(result)
+                    
+                    # สร้าง partial results สำหรับ real-time display
+                    if result and "segments" in result and result["segments"]:
+                        for segment in result["segments"]:
+                            chunk_obj = {
+                                "start_time": segment.get("start", 0) + (i * chunk_duration),
+                                "end_time": segment.get("end", 0) + (i * chunk_duration),
+                                "text": segment.get("text", ""),
+                                "confidence": segment.get("avg_logprob")
+                            }
+                            partial_chunks.append(chunk_obj)
+                    
+                    # รวมข้อความที่แปลงได้
+                    if result and result.get("text"):
+                        partial_text += " " + result.get("text")
+                        partial_text = partial_text.strip()
+                    
+                    # เก็บ partial results ใน task
+                    task.partial_text = partial_text
+                    task.chunks = partial_chunks
                     
                     # อัปเดต progress
                     progress = 10 + int((i + 1) / total_chunks * 80)  # 10-90%
@@ -157,7 +181,9 @@ class TranscriptionService:
                             await self._notify_api_server("progress", task_id, {
                                 "progress": progress,
                                 "status": task.status,
-                                "stage": f"processing_chunk_{i+1}_of_{total_chunks}"
+                                "stage": f"processing_chunk_{i+1}_of_{total_chunks}",
+                                "partial_text": partial_text,
+                                "chunks": partial_chunks
                             })
                         except Exception as e:
                             logger.warning(f"WebSocket notification failed (progress): {e}")

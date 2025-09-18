@@ -85,49 +85,166 @@
             </div>
         </div>
 
-        <!-- Test Files Grid -->
-        <div class="test-grid">
-            <div class="test-card">
-                <h3>🎬 Staging Test</h3>
-                <p>ทดสอบระบบ Transcription บน Staging Environment</p>
-                <a href="test-staging.html">เปิด Staging Test</a>
+        <!-- Environment Selection -->
+        <div style="margin-bottom: 30px; text-align: center;">
+            <h2>🌍 เลือก Environment</h2>
+            <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+                <button onclick="showEnvironment('local')" id="local-btn" style="padding: 15px 30px; font-size: 16px; border: 2px solid #28a745; background: #28a745; color: white; border-radius: 8px; cursor: pointer;">
+                    🏠 Local Environment
+                </button>
+                <button onclick="showEnvironment('staging')" id="staging-btn" style="padding: 15px 30px; font-size: 16px; border: 2px solid #007bff; background: #007bff; color: white; border-radius: 8px; cursor: pointer;">
+                    🌐 Staging Environment
+                </button>
             </div>
+        </div>
 
-            <div class="test-card">
-                <h3>🏠 Local Test</h3>
-                <p>ทดสอบระบบ Transcription บน Local Environment</p>
-                <a href="test-local.html">เปิด Local Test</a>
-            </div>
+        <!-- Local Environment Tests -->
+        <div id="local-tests" class="test-section">
+            <h2>🏠 Local Environment Tests</h2>
+            <div class="test-grid">
+                <div class="test-card">
+                    <h3>🎬 Complete Test Suite</h3>
+                    <p>ทดสอบครบทุกฟีเจอร์: แปลงเสียง, ค้นหาข้อความ, Live Caption, Real-time Caption</p>
+                    <a href="test-local.html">เปิด Local Test</a>
+                </div>
 
-            <div class="test-card">
-                <h3>🔧 Permission Fix Test</h3>
-                <p>ทดสอบการแก้ไขปัญหา Permission และ File Access</p>
-                <a href="test_permission_fix.html">เปิด Permission Test</a>
-            </div>
+                <div class="test-card">
+                    <h3>🔧 Debug & Fix</h3>
+                    <p>ทดสอบการแก้ไขปัญหา Permission และ File Access</p>
+                    <a href="test_permission_fix.html">เปิด Permission Test</a>
+                </div>
 
-            <div class="test-card">
-                <h3>📡 WebSocket Test</h3>
-                <p>ทดสอบ WebSocket Connection และ Real-time Updates</p>
-                <a href="test_websocket.html">เปิด WebSocket Test</a>
-            </div>
+                <div class="test-card">
+                    <h3>📡 WebSocket Test</h3>
+                    <p>ทดสอบ WebSocket Connection และ Real-time Updates</p>
+                    <a href="test_websocket.html">เปิด WebSocket Test</a>
+                </div>
 
-            <div class="test-card">
-                <h3>🎯 Frontend Test</h3>
-                <p>ทดสอบ Frontend Integration และ Complete Workflow</p>
-                <a href="test-frontend.html">เปิด Frontend Test</a>
-            </div>
+                <div class="test-card">
+                    <h3>🔍 Debug Test</h3>
+                    <p>ทดสอบการ Debug และ Troubleshooting</p>
+                    <a href="test_transcription_debug.html">เปิด Debug Test</a>
+                </div>
 
-            <div class="test-card">
-                <h3>🔍 Debug Test</h3>
-                <p>ทดสอบการ Debug และ Troubleshooting</p>
-                <a href="test_transcription_debug.html">เปิด Debug Test</a>
-            </div>
+                <div class="test-card">
+                    <h3>🎬 Real-time Live Caption</h3>
+                    <p>ทดสอบ Live Caption แบบ Real-time พร้อม Video Player</p>
+                    <a href="test-local.html#realtime-caption">เปิด Real-time Test</a>
+                </div>
 
-            <div class="test-card">
-                <h3>🐍 Python Tests</h3>
-                <p>ทดสอบระบบผ่าน Python Scripts</p>
-                <a href="python-tests/">เปิด Python Tests</a>
+                <div class="test-card">
+                    <h3>🔍 Search & History</h3>
+                    <p>ทดสอบการค้นหาข้อความและดูประวัติการแปลงเสียง</p>
+                    <a href="test-local.html#search-section">เปิด Search Test</a>
+                </div>
             </div>
+        </div>
+
+        <!-- Staging Environment Tests -->
+        <div id="staging-tests" class="test-section" style="display: none;">
+            <h2>🌐 Staging Environment Tests</h2>
+            <div class="test-grid">
+                <div class="test-card">
+                    <h3>🎬 Complete Test Suite</h3>
+                    <p>ทดสอบครบทุกฟีเจอร์: แปลงเสียง, ค้นหาข้อความ, Live Caption, Real-time Caption</p>
+                    <a href="test-staging.html">เปิด Staging Test</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>🔧 Debug & Fix</h3>
+                    <p>ทดสอบการแก้ไขปัญหา Permission และ File Access</p>
+                    <a href="test_transcription_fix.html">เปิด Fix Test</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>🎯 Frontend Integration</h3>
+                    <p>ทดสอบ Frontend Integration และ Complete Workflow</p>
+                    <a href="test-frontend.html">เปิด Frontend Test</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>🔍 Debug Test</h3>
+                    <p>ทดสอบการ Debug และ Troubleshooting</p>
+                    <a href="test_transcription_debug.html">เปิด Debug Test</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>🎬 Real-time Live Caption</h3>
+                    <p>ทดสอบ Live Caption แบบ Real-time พร้อม Video Player</p>
+                    <a href="test-staging.html#realtime-caption">เปิด Real-time Test</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>🔍 Search & History</h3>
+                    <p>ทดสอบการค้นหาข้อความและดูประวัติการแปลงเสียง</p>
+                    <a href="test-staging.html#search-section">เปิด Search Test</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Features Overview -->
+        <div style="margin-top: 40px;">
+            <h2>✨ Features Overview</h2>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>🎬 Real-time Live Caption</h3>
+                <ul>
+                    <li><strong>Video Player:</strong> เล่นวิดีโอพร้อมแสดง Close Caption แบบ real-time</li>
+                    <li><strong>Chunk Display:</strong> แสดงข้อความแบ่งตาม timeline (1 ช่อง = 1 chunk)</li>
+                    <li><strong>Synchronized Playback:</strong> Close Caption แสดงตามจังหวะวิดีโอ</li>
+                    <li><strong>Visual Indicators:</strong> สีต่างกันสำหรับ chunk ปัจจุบัน/ผ่านแล้ว/ยังไม่ถึง</li>
+                </ul>
+                
+                <h3>🔍 Search & History</h3>
+                <ul>
+                    <li><strong>Text Search:</strong> ค้นหาข้อความในวิดีโอที่แปลงแล้ว</li>
+                    <li><strong>Timestamp Results:</strong> แสดงผลการค้นหาพร้อม timestamp</li>
+                    <li><strong>History Management:</strong> ดูประวัติการแปลงเสียงทั้งหมด</li>
+                    <li><strong>Auto Search Test:</strong> ทดสอบค้นหาด้วยคำสุ่ม</li>
+                </ul>
+                
+                <h3>📺 Live Caption</h3>
+                <ul>
+                    <li><strong>Real-time Updates:</strong> แสดงความคืบหน้าการแปลงเสียงแบบ real-time</li>
+                    <li><strong>WebSocket Support:</strong> ใช้ WebSocket สำหรับการอัปเดตแบบ real-time</li>
+                    <li><strong>Polling Fallback:</strong> ใช้ polling เป็น fallback เมื่อ WebSocket ไม่พร้อมใช้งาน</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Additional Tools -->
+        <div style="margin-top: 40px;">
+            <h2>🛠️ Additional Tools</h2>
+            <div class="test-grid">
+                <div class="test-card">
+                    <h3>🐍 Python Tests</h3>
+                    <p>ทดสอบระบบผ่าน Python Scripts</p>
+                    <a href="python-tests/">เปิด Python Tests</a>
+                </div>
+
+                <div class="test-card">
+                    <h3>📊 API Documentation</h3>
+                    <p>ดูเอกสาร API และ Endpoints</p>
+                    <a href="../docs/api/README.md">เปิด API Docs</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Start Guide -->
+        <div style="margin-top: 30px; padding: 20px; background: #e8f5e8; border-radius: 8px; border-left: 4px solid #28a745;">
+            <h3>🚀 Quick Start Guide</h3>
+            <ol>
+                <li><strong>เลือก Environment:</strong> คลิกปุ่ม Local หรือ Staging ด้านบน</li>
+                <li><strong>เปิด Complete Test Suite:</strong> คลิก "เปิด Local Test" หรือ "เปิด Staging Test"</li>
+                <li><strong>อัปโหลดไฟล์:</strong> เลือกไฟล์ MP4, MP3, WAV, หรือ M4A</li>
+                <li><strong>ทดสอบฟีเจอร์:</strong>
+                    <ul>
+                        <li>🚀 <strong>เริ่มแปลงเสียง</strong> - แปลงไฟล์เป็นข้อความ</li>
+                        <li>📺 <strong>Live Caption</strong> - แสดงความคืบหน้าการแปลง</li>
+                        <li>🎬 <strong>Real-time Live Caption</strong> - เล่นวิดีโอพร้อม Close Caption</li>
+                        <li>🔍 <strong>ทดสอบค้นหา</strong> - ค้นหาข้อความในวิดีโอ</li>
+                    </ul>
+                </li>
+            </ol>
         </div>
 
         <!-- Scripts Section -->
@@ -142,30 +259,44 @@
     </div>
 
     <script>
+        // Environment management
+        function showEnvironment(env) {
+            const localTests = document.getElementById('local-tests');
+            const stagingTests = document.getElementById('staging-tests');
+            const localBtn = document.getElementById('local-btn');
+            const stagingBtn = document.getElementById('staging-btn');
+            
+            if (env === 'local') {
+                localTests.style.display = 'block';
+                stagingTests.style.display = 'none';
+                localBtn.style.background = '#28a745';
+                stagingBtn.style.background = '#6c757d';
+                updateEnvironmentInfo('Local', 'http://localhost:8001', 'ws://localhost:8001');
+            } else {
+                localTests.style.display = 'none';
+                stagingTests.style.display = 'block';
+                localBtn.style.background = '#6c757d';
+                stagingBtn.style.background = '#007bff';
+                updateEnvironmentInfo('Staging', 'https://staging-ph2.bms.senate.go.th/transcribe', 'wss://staging-ph2.bms.senate.go.th/transcribe');
+            }
+        }
+
+        function updateEnvironmentInfo(environment, apiBase, wsBase) {
+            document.getElementById('current-env').textContent = environment;
+            document.getElementById('api-base').textContent = apiBase;
+            document.getElementById('ws-base').textContent = wsBase;
+        }
+
         // Auto-detect environment
         function detectEnvironment() {
             const hostname = window.location.hostname;
             const protocol = window.location.protocol;
             
-            let environment, apiBase, wsBase;
-            
             if (hostname.includes('staging') || hostname.includes('senate.go.th')) {
-                environment = 'Staging';
-                apiBase = 'https://staging-ph2.bms.senate.go.th/transcribe';
-                wsBase = 'wss://staging-ph2.bms.senate.go.th/transcribe';
-            } else if (hostname === 'localhost' || hostname === '127.0.0.1') {
-                environment = 'Local';
-                apiBase = 'http://localhost:8001';
-                wsBase = 'ws://localhost:8001';
+                showEnvironment('staging');
             } else {
-                environment = 'Unknown';
-                apiBase = 'Unknown';
-                wsBase = 'Unknown';
+                showEnvironment('local');
             }
-            
-            document.getElementById('current-env').textContent = environment;
-            document.getElementById('api-base').textContent = apiBase;
-            document.getElementById('ws-base').textContent = wsBase;
         }
 
         // Initialize

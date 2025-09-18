@@ -56,8 +56,11 @@ curl -k -f ${STAGING_URL}/transcribe/health || print_warning "API ไม่ต�
 print_info "📊 ทดสอบ stats: ${STAGING_URL}/transcribe/stats"
 curl -k -f ${STAGING_URL}/transcribe/stats || print_warning "Stats API ไม่ตอบสนอง"
 
-print_info "📋 ทดสอบ transcription list: ${STAGING_URL}/transcribe/transcription/list/stored"
-curl -k -f ${STAGING_URL}/transcribe/transcription/list/stored || print_warning "Transcription list API ไม่ตอบสนอง"
+print_info "📋 ทดสอบ transcription list: ${STAGING_URL}/transcribe/transcription/"
+curl -k -f ${STAGING_URL}/transcribe/transcription/ || print_warning "Transcription list API ไม่ตอบสนอง"
+
+print_info "📋 ทดสอบ history API: ${STAGING_URL}/transcribe/history/transcriptions"
+curl -k -f "${STAGING_URL}/transcribe/history/transcriptions?limit=5" || print_warning "History API ไม่ตอบสนอง"
 
 print_info "📋 ทดสอบ queue info: ${STAGING_URL}/transcribe/queue/info"
 curl -k -f ${STAGING_URL}/transcribe/queue/info || print_warning "Queue info API ไม่ตอบสนอง"
@@ -76,10 +79,16 @@ curl -k -f ${STAGING_URL}/transcribe/test-files/test_permission_fix.html > /dev/
 # 3. ตรวจสอบ media-uploads directory
 print_step "ตรวจสอบ Media Uploads Directory..."
 print_info "📁 ตรวจสอบ media-uploads directory: ${STAGING_URL}/media-uploads/"
-curl -k -f ${STAGING_URL}/media-uploads/ > /dev/null || print_warning "Media-uploads directory ไม่สามารถเข้าถึงได้ (ไม่มี Nginx endpoint)"
+curl -k -f ${STAGING_URL}/media-uploads/ > /dev/null || print_warning "Media-uploads directory ไม่สามารถเข้าถึงได้ (ไม่มี endpoint สำหรับ list files)"
 
-print_info "📁 ทดสอบการเข้าถึงไฟล์ที่อัปโหลดแล้ว: ${STAGING_URL}/transcribe/file/"
-print_warning "💡 ต้องเพิ่ม /media-uploads/ endpoint ใน Nginx config หรือใช้ /transcribe/file/{filename} แทน"
+print_info "📁 ทดสอบ upload list API: ${STAGING_URL}/transcribe/upload/list"
+curl -k -f ${STAGING_URL}/transcribe/upload/list > /dev/null && print_success "Upload list API ทำงานได้" || print_warning "Upload list API ไม่ตอบสนอง"
+
+print_info "📁 ทดสอบการเข้าถึงไฟล์ที่อัปโหลดแล้ว: ${STAGING_URL}/media-uploads/test_video.mp4"
+curl -k -f ${STAGING_URL}/media-uploads/test_video.mp4 > /dev/null && print_success "ไฟล์ test_video.mp4 เข้าถึงได้" || print_warning "ไฟล์ test_video.mp4 ไม่สามารถเข้าถึงได้"
+
+print_info "📁 ทดสอบการเข้าถึงผ่าน API: ${STAGING_URL}/transcribe/file/test_video.mp4"
+curl -k -f ${STAGING_URL}/transcribe/file/test_video.mp4 > /dev/null && print_success "ไฟล์เข้าถึงได้ผ่าน API" || print_warning "ไฟล์ไม่สามารถเข้าถึงได้ผ่าน API"
 
 # 4. ทดสอบ file upload (simulation)
 print_step "ทดสอบ File Upload Simulation..."
@@ -92,9 +101,16 @@ if [ -f "test_video.mp4" ]; then
         -H "Content-Type: multipart/form-data" \
         -F "file=@test_video.mp4" \
         || print_warning "Upload test ล้มเหลว"
+elif [ -f "uploads/test_video.mp4" ]; then
+    print_info "📤 ใช้ไฟล์ uploads/test_video.mp4 ที่มีอยู่"
+    curl -k -X POST ${STAGING_URL}/transcribe/upload/ \
+        -H "Content-Type: multipart/form-data" \
+        -F "file=@uploads/test_video.mp4" \
+        || print_warning "Upload test ล้มเหลว"
 else
     print_warning "ไม่พบไฟล์ test_video.mp4 - ข้ามการทดสอบ upload"
-    print_info "💡 สร้างไฟล์ test: touch test_video.mp4"
+    print_info "💡 ไฟล์ที่มีอยู่:"
+    ls -la uploads/*.mp4 2>/dev/null | head -3 || print_info "  ไม่มีไฟล์ .mp4 ใน uploads/"
 fi
 
 # 5. ตรวจสอบ logs

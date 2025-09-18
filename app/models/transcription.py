@@ -22,6 +22,7 @@ class TranscriptionResponse(BaseModel):
     total_duration: Optional[float] = None
     chunks: Optional[List[TranscriptionChunk]] = None
     full_text: Optional[str] = None
+    partial_text: Optional[str] = None  # ข้อความที่แปลงได้ระหว่างประมวลผล
     language: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

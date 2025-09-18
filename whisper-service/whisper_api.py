@@ -51,6 +51,49 @@ async def transcribe_audio(request: TranscriptionRequest):
         
         logger.info(f"เริ่มการแปลงเสียง: {request.audio_path}")
         
+        # ตรวจสอบประเภทไฟล์และแปลงเป็น WAV ถ้าจำเป็น
+        audio_file_path = request.audio_path
+        file_extension = Path(request.audio_path).suffix.lower()
+        
+        # ถ้าเป็นไฟล์ที่ไม่รองรับโดยตรง ให้แปลงเป็น WAV
+        if file_extension in ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4a', '.aac']:
+            logger.info(f"แปลงไฟล์ {file_extension} เป็น WAV")
+            
+            # สร้าง temporary file สำหรับ WAV
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_wav:
+                wav_file_path = tmp_wav.name
+            
+            # ใช้ FFmpeg แปลงไฟล์
+            ffmpeg_cmd = [
+                'ffmpeg', '-i', request.audio_path,
+                '-ar', '16000',  # sample rate 16kHz
+                '-ac', '1',      # mono
+                '-y',            # overwrite output file
+                wav_file_path
+            ]
+            
+            logger.info(f"รันคำสั่ง FFmpeg: {' '.join(ffmpeg_cmd)}")
+            
+            ffmpeg_result = subprocess.run(
+                ffmpeg_cmd,
+                capture_output=True,
+                text=True,
+                timeout=60  # timeout 1 นาที
+            )
+            
+            if ffmpeg_result.returncode != 0:
+                logger.error(f"FFmpeg conversion failed: {ffmpeg_result.stderr}")
+                return TranscriptionResponse(
+                    text="",
+                    segments=[],
+                    language=request.language,
+                    success=False,
+                    error=f"FFmpeg conversion failed: {ffmpeg_result.stderr}"
+                )
+            
+            audio_file_path = wav_file_path
+            logger.info(f"แปลงไฟล์สำเร็จ: {wav_file_path}")
+        
         # สร้าง temporary file สำหรับ output
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
             output_file = tmp_file.name
