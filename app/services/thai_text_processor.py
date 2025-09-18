@@ -195,7 +195,7 @@ class ThaiTextProcessor:
                 confidence = self.get_confidence_score(original_text, corrected_text)
                 
                 processed_chunk = chunk.copy()
-                processed_chunk['text'] = corrected_text
+                processed_chunk['text'] = str(corrected_text) if corrected_text is not None else ""
                 processed_chunk['original_text'] = original_text
                 processed_chunk['correction_confidence'] = confidence
                 processed_chunk['was_corrected'] = (original_text != corrected_text)

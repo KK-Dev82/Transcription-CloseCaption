@@ -20,7 +20,7 @@ class RealtimeCaptionRequest(BaseModel):
     file_path: str
     language: str = "th"
     model_size: str = "base"
-    chunk_duration: int = 10  # วินาที
+    chunk_duration: int = 5  # วินาที
     delay_seconds: float = 0.0  # delay สำหรับการเล่นวิดีโอ
 
 class RealtimeCaptionResponse(BaseModel):

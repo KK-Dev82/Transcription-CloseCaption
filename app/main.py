@@ -6,7 +6,7 @@ import json
 from typing import List, Dict
 import asyncio
 
-from .api import transcription, caption, upload, websocket, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, websocket_status, history
+from .api import transcription, caption, upload, websocket, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, websocket_status, history, realtime_caption
 from .api.websocket import router as websocket_router
 from .services.transcription_service import TranscriptionService
 from .services.caption_service import CaptionService
@@ -111,6 +111,9 @@ app.include_router(websocket_status.router)
 # 📚 History API
 app.include_router(history.router)
 
+# 🎬 Real-time Caption API
+app.include_router(realtime_caption.router)
+
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/test-files", StaticFiles(directory="test-files"), name="test-files")
@@ -174,12 +177,14 @@ async def root():
             "progress_tracking": "/progress",
             "webhook": "/webhook",
             "dashboard": "/dashboard",
-            "caption": "/caption", 
+            "caption": "/caption",
+            "realtime_caption": "/caption/realtime",
             "upload": "/upload",
             "video": "/video",
             "live_streaming": "/live",
             "thai_processing": "/thai",
-            "websocket": "/ws"
+            "websocket": "/ws",
+            "websocket_caption": "/ws/caption"
         },
         "storage": StorageFactory.get_storage_info()
     }

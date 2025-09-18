@@ -27,7 +27,7 @@ class RealtimeCaptionSession:
     """Session สำหรับ real-time caption"""
     def __init__(self, session_id: str, user_id: str, file_path: str, 
                  language: str = "th", model_size: str = "base", 
-                 chunk_duration: int = 10, delay_seconds: float = 0.0):
+                 chunk_duration: int = 5, delay_seconds: float = 0.0):
         self.session_id = session_id
         self.user_id = user_id
         self.file_path = file_path
@@ -57,7 +57,17 @@ class RealtimeCaptionSession:
         
     def to_dict(self) -> Dict:
         """แปลงเป็น dictionary สำหรับ JSON serialization"""
-        return {
+        logger.info(f"🔍 DEBUG_TO_DICT_1: Converting session {self.session_id} to dict")
+        logger.info(f"🔍 DEBUG_TO_DICT_2: partial_text type: {type(self.partial_text)}, value: '{self.partial_text}'")
+        
+        # บังคับให้ partial_text เป็น string ก่อนบันทึก
+        if not isinstance(self.partial_text, str):
+            logger.warning("partial_text was %r, casting to str", type(self.partial_text))
+            self.partial_text = str(self.partial_text) if self.partial_text is not None else ""
+        
+        logger.info(f"🔍 DEBUG_TO_DICT_3: After type check - partial_text: '{self.partial_text}' (type: {type(self.partial_text)})")
+        
+        result = {
             "session_id": self.session_id,
             "user_id": self.user_id,
             "file_path": self.file_path,
@@ -76,6 +86,9 @@ class RealtimeCaptionSession:
             "chunks": self.chunks,
             "error_message": self.error_message
         }
+        
+        logger.info(f"🔍 DEBUG_TO_DICT_4: Final dict partial_text: '{result['partial_text']}' (type: {type(result['partial_text'])})")
+        return result
 
 class ChunkBroadcaster:
     """Broadcaster สำหรับส่ง chunks แบบ real-time"""
@@ -165,7 +178,20 @@ class ChunkBroadcaster:
 class RealtimeCaptionService:
     """Service หลักสำหรับ real-time close caption"""
     
+    def safe_join_text(self, a, b) -> str:
+        """
+        ต่อสตริงแบบกันตาย + ตัดช่องว่างเกิน
+        """
+        sa = "" if a is None else (a if isinstance(a, str) else str(a))
+        sb = "" if b is None else (b if isinstance(b, str) else str(b))
+        s = (sa + " " + sb).strip()
+        return s
+    
     def __init__(self):
+        # ลายเซ็นเวอร์ชันโค้ด
+        SERVICE_VERSION = "realtime_caption_service@2025-09-18T15:10Z"
+        logger.info("Loaded %s", SERVICE_VERSION)
+        
         self.file_service = FileService()
         self.whisper_service = WhisperService()
         self.video_service = VideoService()
@@ -189,7 +215,7 @@ class RealtimeCaptionService:
     
     async def start_realtime_caption(self, user_id: str, file_path: str, 
                                    language: str = "th", model_size: str = "base",
-                                   chunk_duration: int = 10, delay_seconds: float = 0.0) -> str:
+                                   chunk_duration: int = 5, delay_seconds: float = 0.0) -> str:
         """เริ่ม real-time caption session"""
         
         # สร้าง session
@@ -271,6 +297,13 @@ class RealtimeCaptionService:
         session.status = "processing"
         session.started_at = datetime.now()
         
+        # 🔍 DEBUG: ตรวจสอบข้อมูลที่เข้ามา
+        logger.info(f"🔍 DEBUG_INPUT_1: session_id={session_id} (type: {type(session_id)})")
+        logger.info(f"🔍 DEBUG_INPUT_2: session.file_path={session.file_path} (type: {type(session.file_path)})")
+        logger.info(f"🔍 DEBUG_INPUT_3: session.chunk_duration={session.chunk_duration} (type: {type(session.chunk_duration)})")
+        logger.info(f"🔍 DEBUG_INPUT_4: session.language={session.language} (type: {type(session.language)})")
+        logger.info(f"🔍 DEBUG_INPUT_5: session.model_size={session.model_size} (type: {type(session.model_size)})")
+        
         try:
             # ตรวจสอบไฟล์
             if not Path(session.file_path).exists():
@@ -297,9 +330,20 @@ class RealtimeCaptionService:
             # แปลงเสียงแต่ละ chunk แบบ real-time
             logger.info(f"🎤 Processing {len(chunks)} chunks for real-time caption...")
             
+            # การันตีชนิดก่อนเข้าลูป
+            if not isinstance(session.partial_text, str):
+                logger.warning("partial_text type=%r -> casting to str: %r", type(session.partial_text), session.partial_text)
+                session.partial_text = str(session.partial_text)
+            
             for i, chunk_path in enumerate(chunks):
                 if session.status == "stopped":
                     break
+                
+                # 🔍 DEBUG: ตรวจสอบข้อมูลก่อนประมวลผล
+                logger.info(f"🔍 DEBUG_CHUNK_1: i={i} (type: {type(i)})")
+                logger.info(f"🔍 DEBUG_CHUNK_2: chunk_path={chunk_path} (type: {type(chunk_path)})")
+                logger.info(f"🔍 DEBUG_CHUNK_3: session.model_size={session.model_size} (type: {type(session.model_size)})")
+                logger.info(f"🔍 DEBUG_CHUNK_4: session.language={session.language} (type: {type(session.language)})")
                 
                 try:
                     logger.info(f"🔄 Processing chunk {i+1}/{len(chunks)}")
@@ -313,9 +357,48 @@ class RealtimeCaptionService:
                     if result and "segments" in result and result["segments"]:
                         # สร้าง chunk data
                         for segment in result["segments"]:
+                            # 🔍 DEBUG: ตรวจสอบ segment data
+                            logger.info(f"🔍 DEBUG_SEGMENT_1: segment={segment}")
+                            logger.info(f"🔍 DEBUG_SEGMENT_2: segment.get('start', 0)={segment.get('start', 0)} (type: {type(segment.get('start', 0))})")
+                            logger.info(f"🔍 DEBUG_SEGMENT_3: segment.get('end', 0)={segment.get('end', 0)} (type: {type(segment.get('end', 0))})")
+                            logger.info(f"🔍 DEBUG_SEGMENT_4: segment.get('text', '')={segment.get('text', '')} (type: {type(segment.get('text', ''))})")
+                            logger.info(f"🔍 DEBUG_SEGMENT_5: i={i} (type: {type(i)})")
+                            logger.info(f"🔍 DEBUG_SEGMENT_6: session.chunk_duration={session.chunk_duration} (type: {type(session.chunk_duration)})")
+                            
+                            # แปลง time format จาก '00:00:00,000' เป็น float
+                            def parse_time_to_seconds(time_str):
+                                """แปลง time string เป็น seconds (float)"""
+                                if isinstance(time_str, (int, float)):
+                                    return float(time_str)
+                                
+                                if isinstance(time_str, str):
+                                    # แปลง '00:00:05,300' เป็น 5.3
+                                    try:
+                                        # แยกส่วน time และ milliseconds
+                                        if ',' in time_str:
+                                            time_part, ms_part = time_str.split(',')
+                                        else:
+                                            time_part, ms_part = time_str, '000'
+                                        
+                                        # แยก hh:mm:ss
+                                        time_components = time_part.split(':')
+                                        if len(time_components) == 3:
+                                            hours, minutes, seconds = map(int, time_components)
+                                            total_seconds = hours * 3600 + minutes * 60 + seconds
+                                            # เพิ่ม milliseconds
+                                            milliseconds = int(ms_part)
+                                            return total_seconds + (milliseconds / 1000.0)
+                                    except (ValueError, IndexError):
+                                        pass
+                                
+                                return 0.0
+                            
+                            start_seconds = parse_time_to_seconds(segment.get("start", 0))
+                            end_seconds = parse_time_to_seconds(segment.get("end", 0))
+                            
                             chunk_data = {
-                                "start_time": segment.get("start", 0) + (i * session.chunk_duration),
-                                "end_time": segment.get("end", 0) + (i * session.chunk_duration),
+                                "start_time": start_seconds + (i * session.chunk_duration),
+                                "end_time": end_seconds + (i * session.chunk_duration),
                                 "text": segment.get("text", ""),
                                 "confidence": segment.get("avg_logprob"),
                                 "chunk_index": i,
@@ -324,8 +407,23 @@ class RealtimeCaptionService:
                             
                             # เพิ่มใน session
                             session.chunks.append(chunk_data)
-                            session.partial_text += " " + chunk_data["text"]
-                            session.partial_text = session.partial_text.strip()
+                            
+                            # ตรวจสอบและแปลง text เป็น string
+                            raw_text = chunk_data.get("text", "")
+                            if not isinstance(raw_text, str):
+                                logger.warning("segment.text type=%r -> casting to str: %r", type(raw_text), raw_text)
+                            text_value = str(raw_text) if raw_text is not None else ""
+                            
+                            # Close Caption: ไม่ต้องต่อข้อความทุก Chunk
+                            # แค่เก็บ Chunk ไว้ใน session.chunks
+                            # Frontend จะแสดงข้อความตามเวลาของแต่ละ Chunk
+                            
+                            # คำนวณ duration อย่างปลอดภัย
+                            start_time = float(chunk_data.get('start_time', 0))
+                            end_time = float(chunk_data.get('end_time', 0))
+                            duration = end_time - start_time
+                            
+                            logger.info(f"🎬 Close Caption Chunk {i+1}: '{text_value}' (duration: {duration:.1f}s)")
                             
                             # ส่ง chunk ทันที (ไม่รอ delay)
                             await self.chunk_broadcaster.broadcast_chunk(session_id, chunk_data)
@@ -342,7 +440,11 @@ class RealtimeCaptionService:
                     logger.info(f"✅ Completed chunk {i+1}/{len(chunks)} - Progress: {session.progress}%")
                     
                 except Exception as e:
-                    logger.error(f"❌ Error processing chunk {i}: {e}")
+                    logger.error(f"❌ DEBUG_ERROR_1: Error processing chunk {i}: {e}")
+                    logger.error(f"❌ DEBUG_ERROR_2: Error type: {type(e)}")
+                    logger.error(f"❌ DEBUG_ERROR_3: Error args: {e.args}")
+                    logger.error(f"❌ DEBUG_ERROR_4: Session partial_text: '{session.partial_text}' (type: {type(session.partial_text)})")
+                    logger.error(f"❌ DEBUG_ERROR_5: Session chunks count: {len(session.chunks)}")
                     # ส่ง error chunk
                     error_chunk = {
                         "start_time": i * session.chunk_duration,
@@ -356,9 +458,22 @@ class RealtimeCaptionService:
                     session.chunks.append(error_chunk)
                     await self.chunk_broadcaster.broadcast_chunk(session_id, error_chunk)
             
-            # เสร็จสิ้น
+            # เสร็จสิ้น - ไม่รวมข้อความทั้งหมดจาก chunks
             session.status = "completed"
             session.completed_at = datetime.now()
+            
+            # Comment การรวมข้อความทั้งหมดจาก chunks (Close Caption)
+            # total_text = ""
+            # for chunk in session.chunks:
+            #     if chunk.get("text"):
+            #         total_text += " " + str(chunk["text"])
+            # session.partial_text = total_text.strip()
+            
+            # แค่เก็บ chunks ไว้ใน session.partial_text เป็น JSON string
+            import json
+            session.partial_text = json.dumps([chunk for chunk in session.chunks if chunk.get("text")], ensure_ascii=False, indent=2)
+            
+            logger.info(f"🎬 Close Caption Complete: {len(session.chunks)} chunks, {len(session.partial_text)} characters")
             
             # ส่งข้อมูลสุดท้าย
             final_data = {

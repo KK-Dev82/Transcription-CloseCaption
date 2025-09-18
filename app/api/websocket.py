@@ -138,6 +138,128 @@ async def handle_websocket_message(websocket: WebSocket, user_id: str, message: 
             "message": f"Unknown message type: {message_type}"
         }))
 
+@router.websocket("/ws/caption/{user_id}")
+async def websocket_caption_endpoint(
+    websocket: WebSocket, 
+    user_id: str,
+    session_id: Optional[str] = Query(None)
+):
+    """
+    WebSocket endpoint สำหรับ real-time close caption
+    
+    Usage:
+    - ws://localhost:8001/ws/caption/{user_id}
+    - ws://localhost:8001/ws/caption/{user_id}?session_id={session_id}
+    """
+    try:
+        # เชื่อมต่อ user
+        await websocket_manager.connect_user(websocket, user_id)
+        
+        # Subscribe session ถ้ามี
+        if session_id:
+            await websocket_manager.subscribe_task(user_id, session_id)
+        
+        # รอรับข้อความจาก client พร้อม keepalive
+        async def heartbeat():
+            """ส่ง ping ทุก 30 วินาที"""
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    await websocket.send_text(json.dumps({
+                        "type": "ping",
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                except Exception:
+                    break
+        
+        # เริ่ม heartbeat task
+        heartbeat_task = asyncio.create_task(heartbeat())
+        
+        try:
+            while True:
+                try:
+                    # รอ message หรือ timeout ใน 60 วินาที
+                    data = await asyncio.wait_for(
+                        websocket.receive_text(), 
+                        timeout=60.0
+                    )
+                    message = json.loads(data)
+                    
+                    # Handle different message types
+                    await handle_caption_websocket_message(websocket, user_id, message)
+                    
+                except asyncio.TimeoutError:
+                    # ไม่มี message ใน 60 วินาที - ส่ง ping
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "message": "Connection active"
+                    }))
+                    continue
+                    
+                except json.JSONDecodeError:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Invalid JSON format"
+                    }))
+                except WebSocketDisconnect:
+                    break
+        finally:
+            heartbeat_task.cancel()
+                
+    except WebSocketDisconnect:
+        logger.info(f"Caption WebSocket disconnected for user {user_id}")
+    except Exception as e:
+        logger.error(f"Caption WebSocket error for user {user_id}: {e}")
+    finally:
+        await websocket_manager.disconnect_user(websocket, user_id)
+
+async def handle_caption_websocket_message(websocket: WebSocket, user_id: str, message: dict):
+    """จัดการข้อความที่ได้รับจาก Caption WebSocket client"""
+    
+    message_type = message.get("type")
+    
+    if message_type == "subscribe":
+        # Subscribe ใหม่
+        session_id = message.get("session_id")
+        if session_id:
+            await websocket_manager.subscribe_task(user_id, session_id)
+        else:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": "session_id required for subscription"
+            }))
+    
+    elif message_type == "unsubscribe":
+        # Unsubscribe
+        session_id = message.get("session_id")
+        if session_id:
+            await websocket_manager.unsubscribe_task(user_id, session_id)
+    
+    elif message_type == "ping":
+        # Health check
+        await websocket.send_text(json.dumps({
+            "type": "pong",
+            "timestamp": message.get("timestamp")
+        }))
+    
+    elif message_type == "pong":
+        # Acknowledge pong response from client
+        logger.debug(f"Received pong from caption user {user_id}")
+    
+    elif message_type == "get_stats":
+        # ส่งสถิติ (สำหรับ admin)
+        stats = websocket_manager.get_stats()
+        await websocket.send_text(json.dumps({
+            "type": "stats",
+            "data": stats
+        }))
+    
+    else:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": f"Unknown message type: {message_type}"
+        }))
+
 @router.get("/ws/stats")
 async def get_websocket_stats():
     """API endpoint สำหรับดู WebSocket statistics"""

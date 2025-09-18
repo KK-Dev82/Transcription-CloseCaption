@@ -27,6 +27,7 @@ class TranscriptionService:
         self.rabbitmq_service = RabbitMQService()
         self.webhook_service = webhook_service
         self.json_storage = JSONStorage()
+        
         self.tasks: Dict[str, TranscriptionResponse] = {}
         
         # API server URL สำหรับ notifications
@@ -40,6 +41,15 @@ class TranscriptionService:
             self.api_server_url = "http://api:8001"
         else:  # production
             self.api_server_url = "http://transcription-api:8001"
+    
+    def _safe_cat(self, a, b) -> str:
+        """
+        ต่อสตริงแบบกันตาย + ตัดช่องว่างเกิน
+        """
+        sa = "" if a is None else str(a)
+        sb = "" if b is None else str(b)
+        s = (sa + " " + sb).strip()
+        return s
     
     async def start_transcription(self, file_path: str, language: str = "th",
                                 model_size: str = "base", chunk_duration: int = 30) -> str:
@@ -162,8 +172,15 @@ class TranscriptionService:
                     
                     # รวมข้อความที่แปลงได้
                     if result and result.get("text"):
-                        partial_text += " " + result.get("text")
-                        partial_text = partial_text.strip()
+                        text_value = result.get("text")
+                        if text_value is not None:
+                            # แปลงเป็น string ถ้าไม่ใช่
+                            if not isinstance(text_value, str):
+                                text_value = str(text_value)
+                            
+                            # ใช้ _safe_cat สำหรับการต่อข้อความที่ปลอดภัย
+                            partial_text = self._safe_cat(partial_text, text_value)
+                            partial_text = partial_text.strip()
                     
                     # เก็บ partial results ใน task
                     task.partial_text = partial_text
@@ -175,9 +192,26 @@ class TranscriptionService:
                     task.status = f"processing_chunk_{i+1}_of_{total_chunks}"
                     self.json_storage.save_transcription(task_id, task.__dict__)
                     
-                    # 🌐 WebSocket: แจ้งเตือน progress (ทุก 25% หรือ chunk สุดท้าย)
-                    if progress % 25 == 0 or i == total_chunks - 1:
-                        try:
+                    # 🌐 WebSocket: ส่ง chunk ทันทีที่ประมวลผลเสร็จ (ไม่รอ 25%)
+                    try:
+                        # ส่ง chunk ทันที
+                        await self._notify_api_server("chunk_completed", task_id, {
+                            "progress": progress,
+                            "status": task.status,
+                            "stage": f"processing_chunk_{i+1}_of_{total_chunks}",
+                            "partial_text": partial_text,
+                            "chunks": partial_chunks,
+                            "current_chunk_index": i + 1,
+                            "total_chunks": total_chunks,
+                            "chunk_data": {
+                                "chunk_index": i,
+                                "chunk_duration": chunk_duration,
+                                "processed_at": datetime.now().isoformat()
+                            }
+                        })
+                        
+                        # ส่ง progress update ทุก 25% หรือ chunk สุดท้าย
+                        if progress % 25 == 0 or i == total_chunks - 1:
                             await self._notify_api_server("progress", task_id, {
                                 "progress": progress,
                                 "status": task.status,
@@ -185,8 +219,9 @@ class TranscriptionService:
                                 "partial_text": partial_text,
                                 "chunks": partial_chunks
                             })
-                        except Exception as e:
-                            logger.warning(f"WebSocket notification failed (progress): {e}")
+                            
+                    except Exception as e:
+                        logger.warning(f"WebSocket notification failed (chunk): {e}")
                     
                     logger.info(f"เสร็จ chunk {i+1}/{total_chunks} - Progress: {progress}%")
                     

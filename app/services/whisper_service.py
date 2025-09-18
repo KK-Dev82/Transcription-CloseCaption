@@ -222,7 +222,7 @@ class WhisperService:
                 processed_chunks = processor.process_transcription_chunks(chunks)
                 
                 # รวมข้อความที่แก้ไขแล้ว
-                corrected_text = " ".join([chunk["text"] for chunk in processed_chunks if chunk.get("text")])
+                corrected_text = " ".join([str(chunk["text"]) for chunk in processed_chunks if chunk.get("text")])
                 
                 # อัปเดตผลลัพธ์
                 transcription_result["text"] = corrected_text
@@ -272,7 +272,10 @@ class WhisperService:
                 
             # รวมข้อความ
             if "text" in trans:
-                merged["text"] += " " + trans["text"].strip()
+                text_value = trans["text"]
+                if not isinstance(text_value, str):
+                    text_value = str(text_value) if text_value is not None else ""
+                merged["text"] += " " + text_value.strip()
             
             # รวม segments
             if "segments" in trans:

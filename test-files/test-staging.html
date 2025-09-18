@@ -176,6 +176,9 @@
                 <button onclick="startRealtimeCaptionMode()" id="realtime-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #28a745;">
                     🎬 Real-time Live Caption
                 </button>
+                <button onclick="startNewRealtimeCaption()" id="new-realtime-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #17a2b8;">
+                    🚀 New Real-time Caption API
+                </button>
                 <button onclick="testSearchFeature()" id="search-test-btn" style="flex: 1; padding: 12px; margin: 5px 0; background: #6f42c1;">
                     🔍 ทดสอบค้นหา
                 </button>
@@ -345,6 +348,12 @@
         let currentChunkIndex = 0;
         let videoDuration = 0;
         let realtimeTaskId = null;
+        
+        // New Real-time Caption State
+        let newRealtimeSessionId = null;
+        let newRealtimeWebSocket = null;
+        let newRealtimeChunks = [];
+        let newRealtimeDelay = 0;
         
         // Staging environment configuration
         const API_BASE = 'https://staging-ph2.bms.senate.go.th/transcribe';
@@ -1480,8 +1489,323 @@ ${data.results.full_text || 'ไม่พบข้อความ'}
                 document.getElementById('transcribe-btn').disabled = false;
                 document.getElementById('live-caption-btn').disabled = false;
                 document.getElementById('realtime-caption-btn').disabled = false;
+                document.getElementById('new-realtime-caption-btn').disabled = false;
                 log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
             }
+        }
+
+        // New Real-time Caption API Functions
+        async function startNewRealtimeCaption() {
+            if (!selectedFile) {
+                log('❌ No file selected for new real-time caption', 'error');
+                return;
+            }
+
+            try {
+                log('🚀 Starting new real-time caption API...', 'info');
+                
+                // 1. Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // 2. Start real-time caption session
+                const captionResponse = await fetch(`${API_BASE}/caption/realtime/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base',
+                        chunk_duration: 10,
+                        delay_seconds: 0.0
+                    })
+                });
+                
+                if (!captionResponse.ok) {
+                    throw new Error(`Real-time caption failed: ${captionResponse.status}`);
+                }
+                
+                const captionResult = await captionResponse.json();
+                newRealtimeSessionId = captionResult.session_id;
+                
+                log(`✅ New real-time caption started: ${newRealtimeSessionId}`, 'success');
+                
+                // 3. Connect to WebSocket
+                await connectNewRealtimeWebSocket();
+                
+                // 4. Show real-time caption section
+                showNewRealtimeCaptionSection();
+                
+            } catch (error) {
+                log(`❌ New real-time caption error: ${error.message}`, 'error');
+            }
+        }
+
+        async function connectNewRealtimeWebSocket() {
+            try {
+                const wsUrl = `${WS_BASE}/ws/caption/${userId}?session_id=${newRealtimeSessionId}`;
+                log(`🔌 Connecting to new real-time WebSocket: ${wsUrl}`);
+                
+                newRealtimeWebSocket = new WebSocket(wsUrl);
+                
+                newRealtimeWebSocket.onopen = () => {
+                    log('✅ New real-time WebSocket connected', 'success');
+                    
+                    // Subscribe to session
+                    newRealtimeWebSocket.send(JSON.stringify({
+                        type: 'subscribe',
+                        session_id: newRealtimeSessionId
+                    }));
+                };
+                
+                newRealtimeWebSocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 New real-time message: ${data.type}`, 'info');
+                    handleNewRealtimeMessage(data);
+                };
+                
+                newRealtimeWebSocket.onclose = (event) => {
+                    log(`🔴 New real-time WebSocket closed: ${event.code}`, 'warning');
+                };
+                
+                newRealtimeWebSocket.onerror = (error) => {
+                    log('❌ New real-time WebSocket error', 'error');
+                };
+                
+            } catch (error) {
+                log(`❌ New real-time WebSocket connection failed: ${error.message}`, 'error');
+            }
+        }
+
+        function handleNewRealtimeMessage(data) {
+            switch (data.type) {
+                case 'caption.started':
+                    log('🎬 New real-time caption started', 'success');
+                    updateNewRealtimeStatus('started', data);
+                    break;
+                    
+                case 'caption.chunk':
+                    log(`📝 New real-time chunk received: ${data.chunk_data?.text?.substring(0, 50)}...`, 'info');
+                    addNewRealtimeChunk(data.chunk_data);
+                    break;
+                    
+                case 'caption.progress':
+                    log(`📊 New real-time progress: ${data.progress}%`, 'info');
+                    updateNewRealtimeProgress(data.progress);
+                    break;
+                    
+                case 'caption.completed':
+                    log('✅ New real-time caption completed', 'success');
+                    updateNewRealtimeStatus('completed', data);
+                    break;
+                    
+                case 'caption.error':
+                    log(`❌ New real-time caption error: ${data.error}`, 'error');
+                    updateNewRealtimeStatus('error', data);
+                    break;
+                    
+                case 'caption.delay_updated':
+                    log(`⏱️ Delay updated: ${data.delay_seconds}s`, 'info');
+                    newRealtimeDelay = data.delay_seconds;
+                    break;
+                    
+                case 'pong':
+                    log('🏓 New real-time pong received', 'info');
+                    break;
+                    
+                default:
+                    log(`📨 Unknown new real-time message: ${data.type}`, 'warning');
+            }
+        }
+
+        function showNewRealtimeCaptionSection() {
+            // Create new real-time caption section
+            const sectionHtml = `
+                <div class="container" id="new-realtime-caption-section" style="display:block;">
+                    <h3>🚀 New Real-time Close Caption API</h3>
+                    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                        <!-- Session Info -->
+                        <div style="background: #e3f2fd; padding: 15px; border-radius: 6px; margin-bottom: 20px;">
+                            <h4 style="margin: 0 0 10px 0;">📊 Session Information</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em;">
+                                <div><strong>Session ID:</strong> <span id="new-session-id">${newRealtimeSessionId}</span></div>
+                                <div><strong>Status:</strong> <span id="new-session-status">Starting...</span></div>
+                                <div><strong>Progress:</strong> <span id="new-session-progress">0%</span></div>
+                                <div><strong>Delay:</strong> <span id="new-session-delay">0.0s</span></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Delay Control -->
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 10px; font-weight: bold;">⏱️ Delay Control (0-30 seconds):</label>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <input type="range" id="delay-slider" min="0" max="30" step="0.5" value="0" 
+                                       style="flex: 1; height: 6px; background: #ddd; border-radius: 3px; outline: none;"
+                                       onchange="updateNewRealtimeDelay(this.value)">
+                                <span id="delay-value" style="font-weight: bold; color: #007bff;">0.0s</span>
+                                <button onclick="updateNewRealtimeDelay(document.getElementById('delay-slider').value)" 
+                                        style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                    Update
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Real-time Chunks Display -->
+                        <div style="background: white; padding: 20px; border-radius: 6px; min-height: 200px; border-left: 4px solid #17a2b8;">
+                            <h4 style="margin: 0 0 15px 0;">📝 Real-time Caption Chunks</h4>
+                            <div id="new-realtime-chunks" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
+                                <div style="text-align: center; color: #666; font-style: italic;">
+                                    กำลังรอการแปลงเสียง... chunks จะแสดงแบบ real-time
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Controls -->
+                        <div style="margin-top: 20px; text-align: center;">
+                            <button onclick="stopNewRealtimeCaption()" 
+                                    style="padding: 12px 24px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">
+                                ⏹️ หยุด Real-time Caption
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Insert after the existing real-time caption section
+            const existingSection = document.getElementById('realtime-caption-section');
+            if (existingSection) {
+                existingSection.insertAdjacentHTML('afterend', sectionHtml);
+            } else {
+                document.body.insertAdjacentHTML('beforeend', sectionHtml);
+            }
+        }
+
+        function updateNewRealtimeStatus(status, data) {
+            const statusElement = document.getElementById('new-session-status');
+            if (statusElement) {
+                statusElement.textContent = status;
+                statusElement.style.color = status === 'completed' ? '#28a745' : 
+                                          status === 'error' ? '#dc3545' : '#007bff';
+            }
+        }
+
+        function updateNewRealtimeProgress(progress) {
+            const progressElement = document.getElementById('new-session-progress');
+            if (progressElement) {
+                progressElement.textContent = `${progress}%`;
+            }
+        }
+
+        function addNewRealtimeChunk(chunkData) {
+            const chunksContainer = document.getElementById('new-realtime-chunks');
+            if (!chunksContainer) return;
+            
+            // Clear initial message
+            if (chunksContainer.children.length === 1 && chunksContainer.children[0].style.fontStyle === 'italic') {
+                chunksContainer.innerHTML = '';
+            }
+            
+            const chunkDiv = document.createElement('div');
+            chunkDiv.style.cssText = `
+                padding: 12px; 
+                margin: 8px 0; 
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+                border-left: 4px solid #17a2b8; 
+                border-radius: 8px;
+                transition: all 0.3s ease;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                animation: slideIn 0.5s ease-out;
+            `;
+            
+            chunkDiv.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="font-size: 0.9em; color: #666; font-weight: 600;">
+                        🎵 Chunk ${newRealtimeChunks.length + 1}
+                    </div>
+                    <div style="font-size: 0.8em; color: #17a2b8; background: #e3f2fd; padding: 2px 8px; border-radius: 12px;">
+                        ${formatTime(chunkData.start_time || 0)} - ${formatTime(chunkData.end_time || 0)}
+                    </div>
+                </div>
+                <div style="line-height: 1.6; color: #333; font-size: 14px;">${chunkData.text || 'No text'}</div>
+            `;
+            
+            chunksContainer.appendChild(chunkDiv);
+            newRealtimeChunks.push(chunkData);
+            
+            // Scroll to latest chunk
+            chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            
+            log(`✅ Added new real-time chunk: ${chunkData.text?.substring(0, 50)}...`, 'success');
+        }
+
+        async function updateNewRealtimeDelay(delaySeconds) {
+            if (!newRealtimeSessionId) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/caption/realtime/delay/${newRealtimeSessionId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delay_seconds: parseFloat(delaySeconds) })
+                });
+                
+                if (response.ok) {
+                    newRealtimeDelay = parseFloat(delaySeconds);
+                    document.getElementById('delay-value').textContent = `${delaySeconds}s`;
+                    document.getElementById('new-session-delay').textContent = `${delaySeconds}s`;
+                    log(`✅ Delay updated to ${delaySeconds}s`, 'success');
+                } else {
+                    log(`❌ Failed to update delay: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error updating delay: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopNewRealtimeCaption() {
+            if (newRealtimeSessionId) {
+                try {
+                    const response = await fetch(`${API_BASE}/caption/realtime/stop/${newRealtimeSessionId}`, {
+                        method: 'POST'
+                    });
+                    
+                    if (response.ok) {
+                        log('✅ New real-time caption stopped', 'success');
+                    } else {
+                        log(`❌ Failed to stop caption: ${response.status}`, 'error');
+                    }
+                } catch (error) {
+                    log(`❌ Error stopping caption: ${error.message}`, 'error');
+                }
+            }
+            
+            if (newRealtimeWebSocket) {
+                newRealtimeWebSocket.close();
+                newRealtimeWebSocket = null;
+            }
+            
+            // Hide section
+            const section = document.getElementById('new-realtime-caption-section');
+            if (section) {
+                section.remove();
+            }
+            
+            // Reset state
+            newRealtimeSessionId = null;
+            newRealtimeChunks = [];
+            newRealtimeDelay = 0;
         }
 
         // Start when page loads

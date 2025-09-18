@@ -1,9 +1,7 @@
 services:
   # Main API Service
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
+    image: kk-transcription:local-dev
     container_name: transcription-api-local
     ports:
       - "8001:8001"
@@ -44,9 +42,7 @@ services:
 
   # Video Processing Worker 1
   video-worker-1:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
+    image: kk-transcription:local-dev
     container_name: video-worker-1-local
     command: python -m app.workers.video_worker
     volumes:
@@ -85,9 +81,7 @@ services:
 
   # Video Processing Worker 2
   video-worker-2:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
+    image: kk-transcription:local-dev
     container_name: video-worker-2-local
     command: python -m app.workers.video_worker
     volumes:
@@ -126,9 +120,7 @@ services:
 
   # Video Processing Worker 3
   video-worker-3:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
+    image: kk-transcription:local-dev
     container_name: video-worker-3-local
     command: python -m app.workers.video_worker
     volumes:
@@ -211,7 +203,7 @@ services:
 
   # Whisper.cpp สำหรับ transcription (Local)
   whisper:
-    image: whisper-arm64
+    image: whisper-arm64:latest
     container_name: transcription-whisper-local
     ports:
       - "8002:8002"
@@ -239,7 +231,7 @@ services:
 
   # Whisper สำหรับ Live Streaming
   whisper-live:
-    image: whisper-arm64
+    image: whisper-arm64:latest
     container_name: transcription-whisper-live-local
     ports:
       - "8003:8002"
