@@ -170,6 +170,29 @@ class WebSocketManager:
             except Exception as e:
                 logger.warning(f"Redis publish failed: {e}")
 
+    async def broadcast_to_all(self, message: dict):
+        """ส่ง message ไปยังทุก user ที่เชื่อมต่ออยู่"""
+        total_users = 0
+        successful_sends = 0
+        
+        for user_id, connections in self.user_connections.items():
+            total_users += len(connections)
+            if await self.send_to_user(user_id, message):
+                successful_sends += len(connections)
+        
+        logger.info(f"ส่ง broadcast message ไปยัง {successful_sends}/{total_users} connections")
+        
+        # Publish ไปยัง Redis สำหรับ multi-instance
+        if self.redis_client:
+            try:
+                await self.redis_client.publish(
+                    "broadcast", 
+                    json.dumps(message, ensure_ascii=False)
+                )
+                logger.debug(f"Published broadcast to Redis")
+            except Exception as e:
+                logger.warning(f"Failed to publish broadcast to Redis: {e}")
+
     async def notify_transcription_started(self, task_id: str, file_path: str, language: str):
         """แจ้งเตือนเริ่ม transcription"""
         await self.broadcast_task_update(task_id, {

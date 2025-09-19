@@ -11,6 +11,7 @@ import time
 
 from .file_service import FileService
 from .rabbitmq_service import RabbitMQService
+from .whisper_service import WhisperService
 from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class VideoService:
         self.file_service = FileService()
         self.json_storage = JSONStorage()
         self.rabbitmq_service = RabbitMQService()
+        self.whisper_service = WhisperService()
         self.tasks: Dict[str, Dict] = {}
         self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
     

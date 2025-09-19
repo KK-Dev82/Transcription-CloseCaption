@@ -14,8 +14,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=local
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
@@ -53,8 +53,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=local
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
@@ -92,8 +92,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=local
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
@@ -131,8 +131,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=local
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin

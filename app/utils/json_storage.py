@@ -441,12 +441,22 @@ class JSONStorage:
         return video_tasks
     
     def delete_transcription(self, task_id: str) -> bool:
-        """ลบ transcription"""
-        file_path = self.storage_dir / "transcriptions" / f"{task_id}.json"
+        """ลบ transcription (รองรับ folder structure ใหม่)"""
+        transcription_dir = self.storage_dir / "transcriptions"
         
+        # วิธีใหม่: ลบ folder ทั้งหมด
+        task_folder = transcription_dir / task_id
+        if task_folder.exists() and task_folder.is_dir():
+            import shutil
+            shutil.rmtree(task_folder)
+            logger.info(f"ลบ transcription folder: {task_id}")
+            return True
+        
+        # วิธีเก่า: ลบไฟล์เดียว (backward compatibility)
+        file_path = transcription_dir / f"{task_id}.json"
         if file_path.exists():
             file_path.unlink()
-            logger.info(f"ลบ transcription: {task_id}")
+            logger.info(f"ลบ transcription file: {task_id}")
             return True
         
         return False

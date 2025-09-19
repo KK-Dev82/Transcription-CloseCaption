@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
 import logging
 from typing import List, Optional
+from datetime import datetime
 
 from ..models.transcription import TranscriptionRequest, TranscriptionResponse
 from ..services.transcription_service import TranscriptionService
@@ -245,6 +246,20 @@ async def delete_transcription_permanent(task_id: str):
                 status_code=404,
                 detail="ไม่พบ transcription ที่จะลบ"
             )
+        
+        # Send WebSocket notification about task deletion
+        try:
+            from ..services.websocket_service import websocket_manager
+            logger.info(f"🔍 Attempting to send WebSocket notification for task deletion: {task_id}")
+            await websocket_manager.broadcast_to_all({
+                "type": "task.deleted",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info(f"📡 WebSocket notification sent for task deletion: {task_id}")
+        except Exception as ws_error:
+            logger.error(f"❌ Failed to send WebSocket notification: {ws_error}")
+            logger.error(f"❌ WebSocket error details: {type(ws_error).__name__}: {str(ws_error)}")
         
         return {"message": "ลบ transcription สำเร็จ"}
         

@@ -17,7 +17,7 @@ router = APIRouter(prefix="/caption/realtime", tags=["realtime-caption"])
 class RealtimeCaptionRequest(BaseModel):
     """Request model สำหรับเริ่ม real-time caption"""
     user_id: str
-    file_path: str
+    file_path: str = ""
     language: str = "th"
     model_size: str = "base"
     chunk_duration: int = 5  # วินาที

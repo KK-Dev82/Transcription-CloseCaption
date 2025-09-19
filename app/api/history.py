@@ -9,11 +9,14 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from ..utils.json_storage import JSONStorage
+from ..utils.sqlite_storage import SQLiteStorage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/history", tags=["History"])
 
+# Use SQLite instead of JSON storage
 json_storage = JSONStorage()
+sqlite_storage = SQLiteStorage()
 
 class HistoryFilter(BaseModel):
     status: Optional[str] = None  # completed, failed, processing
@@ -32,8 +35,10 @@ async def get_transcription_history(
     📚 ดูประวัติการ transcription ทั้งหมด
     """
     try:
-        # ดึงข้อมูลทั้งหมด
+        # ดึงข้อมูลทั้งหมด (JSON first, then SQLite fallback)
         all_transcriptions = json_storage.list_all_transcriptions()
+        if not all_transcriptions:
+            all_transcriptions = sqlite_storage.list_all_transcriptions()
         
         # กรองตามเงื่อนไข
         filtered_transcriptions = all_transcriptions
@@ -71,6 +76,7 @@ async def get_transcription_history(
             history_items.append({
                 "task_id": item.get("task_id"),
                 "filename": item.get("filename"),
+                "file_path": item.get("file_path"),  # Add file path
                 "status": item.get("status"),
                 "progress": item.get("progress", 0),
                 "created_at": item.get("created_at"),
@@ -237,10 +243,29 @@ async def delete_transcription_history(task_id: str):
     🗑️ ลบประวัติการ transcription
     """
     try:
+        # Try JSON first (since data is there), then SQLite as fallback
         success = json_storage.delete_transcription(task_id)
         
         if not success:
+            # Fallback to SQLite storage
+            success = sqlite_storage.delete_transcription(task_id)
+        
+        if not success:
             raise HTTPException(status_code=404, detail=f"Transcription {task_id} not found")
+        
+        # Send WebSocket notification about task deletion
+        try:
+            from ..services.websocket_service import websocket_manager
+            logger.info(f"🔍 Attempting to send WebSocket notification for task deletion: {task_id}")
+            await websocket_manager.broadcast_to_all({
+                "type": "task.deleted",
+                "task_id": task_id,
+                "timestamp": datetime.now().isoformat()
+            })
+            logger.info(f"📡 WebSocket notification sent for task deletion: {task_id}")
+        except Exception as ws_error:
+            logger.error(f"❌ Failed to send WebSocket notification: {ws_error}")
+            logger.error(f"❌ WebSocket error details: {type(ws_error).__name__}: {str(ws_error)}")
         
         return {
             "status": "success",
