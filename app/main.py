@@ -116,10 +116,12 @@ app.include_router(realtime_caption.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/media-uploads", StaticFiles(directory="uploads"), name="media-uploads")  # For staging compatibility
 app.mount("/test-files", StaticFiles(directory="test-files"), name="test-files")
 
 # Mount test frontend
 from fastapi.responses import FileResponse
+from fastapi import HTTPException
 from pathlib import Path
 import os
 
@@ -137,13 +139,28 @@ async def serve_uploaded_file(file_path: str):
         
         # Check if file exists and is within uploads directory
         if not full_path.exists():
-            raise HTTPException(status_code=404, detail="File not found")
+            # Try alternative paths for compatibility
+            alternative_paths = [
+                Path("uploads") / file_path,
+                Path("storage") / "videos" / file_path,
+                Path("storage") / "uploads" / file_path
+            ]
+            
+            for alt_path in alternative_paths:
+                if alt_path.exists():
+                    full_path = alt_path
+                    break
+            else:
+                raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
         
         # Resolve path to prevent directory traversal
         resolved_path = full_path.resolve()
         uploads_path = Path("uploads").resolve()
+        storage_path = Path("storage").resolve()
         
-        if not str(resolved_path).startswith(str(uploads_path)):
+        # Allow access to files in uploads or storage directories
+        if not (str(resolved_path).startswith(str(uploads_path)) or 
+                str(resolved_path).startswith(str(storage_path))):
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Determine media type
@@ -152,7 +169,9 @@ async def serve_uploaded_file(file_path: str):
             '.mp4': 'video/mp4',
             '.mp3': 'audio/mpeg',
             '.wav': 'audio/wav',
-            '.m4a': 'audio/mp4'
+            '.m4a': 'audio/mp4',
+            '.avi': 'video/x-msvideo',
+            '.mov': 'video/quicktime'
         }.get(file_ext, 'application/octet-stream')
         
         return FileResponse(
@@ -160,9 +179,74 @@ async def serve_uploaded_file(file_path: str):
             media_type=media_type,
             filename=full_path.name
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error serving file {file_path}: {e}")
         raise HTTPException(status_code=500, detail="Error serving file")
+
+@app.get("/metadata/{task_id}")
+async def get_file_metadata(task_id: str):
+    """Get file metadata for a specific task"""
+    try:
+        # Get transcription data
+        transcription = storage.get_transcription(task_id)
+        
+        if not transcription:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        # Get file info
+        file_path = transcription.get("file_path")
+        if not file_path:
+            raise HTTPException(status_code=404, detail="File path not found in task data")
+        
+        # Clean file path (remove uploads/ prefix if present)
+        clean_path = file_path.replace("uploads/", "") if file_path.startswith("uploads/") else file_path
+        
+        # Check if file exists
+        full_path = Path("uploads") / clean_path
+        if not full_path.exists():
+            # Try alternative paths
+            alternative_paths = [
+                Path("uploads") / clean_path,
+                Path("storage") / "videos" / clean_path,
+                Path("storage") / "uploads" / clean_path
+            ]
+            
+            for alt_path in alternative_paths:
+                if alt_path.exists():
+                    full_path = alt_path
+                    break
+            else:
+                raise HTTPException(status_code=404, detail=f"File not found: {clean_path}")
+        
+        # Get file stats
+        file_stats = full_path.stat()
+        
+        return {
+            "task_id": task_id,
+            "file_path": str(full_path),
+            "file_name": full_path.name,
+            "file_size": file_stats.st_size,
+            "file_exists": True,
+            "urls": {
+                "local": f"/file/{clean_path}",
+                "staging": f"/media-uploads/{clean_path}",
+                "uploads": f"/uploads/{clean_path}"
+            },
+            "transcription_info": {
+                "status": transcription.get("status"),
+                "progress": transcription.get("progress", 0),
+                "filename": transcription.get("filename"),
+                "language": transcription.get("language", "th")
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting metadata for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error getting file metadata")
 
 @app.get("/")
 async def root():

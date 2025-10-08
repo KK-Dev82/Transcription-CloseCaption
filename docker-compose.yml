@@ -21,6 +21,7 @@ services:
       - RABBITMQ_PASSWORD=admin123
       - WHISPER_API_URL=http://whisper:8002
       - REDIS_URL=redis://redis:6379
+    # user: "1001:1001"  # ใช้ user ID เดียวกันกับ host (kscdev) - เอาออกเพราะ container ไม่มี user 1001
     depends_on:
       - redis
       - rabbitmq
@@ -60,6 +61,7 @@ services:
       - RABBITMQ_PASSWORD=admin123
       - WHISPER_API_URL=http://whisper:8002
       - REDIS_URL=redis://redis:6379
+    # user: "1001:1001"  # ใช้ user ID เดียวกันกับ host (kscdev) - เอาออกเพราะ container ไม่มี user 1001
     depends_on:
       - rabbitmq
       - redis
@@ -99,6 +101,7 @@ services:
       - RABBITMQ_PASSWORD=admin123
       - WHISPER_API_URL=http://whisper:8002
       - REDIS_URL=redis://redis:6379
+    # user: "1001:1001"  # ใช้ user ID เดียวกันกับ host (kscdev) - เอาออกเพราะ container ไม่มี user 1001
     depends_on:
       - rabbitmq
       - redis
@@ -138,6 +141,10 @@ services:
       - RABBITMQ_PASSWORD=admin123
       - WHISPER_API_URL=http://whisper:8002
       - REDIS_URL=redis://redis:6379
+      - WORKER_THREADS=2
+      - MAX_CONCURRENT_TASKS=3
+      - OPTIMIZE_PERFORMANCE=true
+    # user: "1001:1001"  # ใช้ user ID เดียวกันกับ host (kscdev) - เอาออกเพราะ container ไม่มี user 1001
     depends_on:
       - rabbitmq
       - redis
@@ -153,12 +160,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: '0.5'
+          memory: 6G
+          cpus: '1.0'
 
   # RabbitMQ สำหรับ message queue
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3-management
     container_name: transcription-rabbitmq-staging
     ports:
       - "5672:5672"
@@ -179,12 +186,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: '0.5'
+          memory: 4G
+          cpus: '1.0'
 
   # Redis สำหรับ caching และ queue
   redis:
-    image: redis:7-alpine
+    image: redis:7
     container_name: transcription-redis-staging
     ports:
       - "6379:6379"
@@ -213,6 +220,9 @@ services:
     environment:
       - WHISPER_MODEL_PATH=/app/models
       - ENVIRONMENT=staging
+      - WHISPER_THREADS=4
+      - WHISPER_BATCH_SIZE=32
+      - WHISPER_OPTIMIZE=true
     networks:
       - app-network
     restart: unless-stopped

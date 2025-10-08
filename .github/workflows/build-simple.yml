@@ -3,9 +3,7 @@ name: Build and Push Images
 on:
   push:
     branches: 
-      - staging
-      - "staging/**"
-      - "feat/**"
+      - no-build
       
   workflow_dispatch:
 
