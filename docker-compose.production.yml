@@ -1,11 +1,8 @@
 services:
   # Main API Service
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
-    image: kk-transcription:local-dev
-    container_name: transcription-api-local
+    image: kksenateacr.azurecr.io/kk-transcription:production
+    container_name: transcription-api
     ports:
       - "8001:8001"
     volumes:
@@ -16,10 +13,11 @@ services:
       - ./test-files:/app/test-files
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      # Backend Server (10.200.22.61)
+      - RABBITMQ_HOST=10.200.22.61
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -30,8 +28,6 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8001/health', timeout=5)"]
       interval: 30s
@@ -46,11 +42,8 @@ services:
 
   # Video Processing Worker 1
   video-worker-1:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
-    image: kk-transcription:local-dev
-    container_name: video-worker-1-local
+    image: kksenateacr.azurecr.io/kk-transcription:production
+    container_name: video-worker-1
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -59,10 +52,11 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      # Backend Server (10.200.22.61)
+      - RABBITMQ_HOST=10.200.22.61
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -73,14 +67,12 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     deploy:
       resources:
         limits:
@@ -89,11 +81,8 @@ services:
 
   # Video Processing Worker 2
   video-worker-2:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
-    image: kk-transcription:local-dev
-    container_name: video-worker-2-local
+    image: kksenateacr.azurecr.io/kk-transcription:production
+    container_name: video-worker-2
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -102,10 +91,11 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      # Backend Server (10.200.22.61)
+      - RABBITMQ_HOST=10.200.22.61
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -116,14 +106,12 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     deploy:
       resources:
         limits:
@@ -132,11 +120,8 @@ services:
 
   # Video Processing Worker 3
   video-worker-3:
-    build:
-      context: .
-      dockerfile: Dockerfile.optimized
-    image: kk-transcription:local-dev
-    container_name: video-worker-3-local
+    image: kksenateacr.azurecr.io/kk-transcription:production
+    container_name: video-worker-3
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
@@ -145,10 +130,11 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      # Backend Server (10.200.22.61)
+      - RABBITMQ_HOST=10.200.22.61
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -159,30 +145,26 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     deploy:
       resources:
         limits:
           memory: 4G
-          cpus: '0.5'
-
-  # RabbitMQ ย้ายไป Backend API แล้ว
+          cpus: '1.0'
 
   # Redis สำหรับ caching และ queue
   redis:
     image: redis:7-alpine
-    container_name: transcription-redis-local
+    container_name: transcription-redis
     ports:
       - "6380:6379"
     volumes:
-      - redis_data_local:/data
+      - redis_data:/data
     networks:
       - app-network
     restart: unless-stopped
@@ -193,13 +175,10 @@ services:
           memory: 2G
           cpus: '0.5'
 
-  # Whisper.cpp สำหรับ transcription (Local)
+  # Whisper.cpp สำหรับ transcription
   whisper:
-    build:
-      context: ./whisper-service
-      dockerfile: Dockerfile.arm64
-    image: kk-transcription-whisper:local-dev
-    container_name: transcription-whisper-local
+    image: kksenateacr.azurecr.io/whisper-arm64:production
+    container_name: transcription-whisper
     ports:
       - "8002:8002"
     volumes:
@@ -208,7 +187,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
     networks:
       - app-network
     restart: unless-stopped
@@ -226,11 +205,8 @@ services:
 
   # Whisper สำหรับ Live Streaming
   whisper-live:
-    build:
-      context: ./whisper-service
-      dockerfile: Dockerfile.arm64
-    image: kk-transcription-whisper:local-dev
-    container_name: transcription-whisper-live-local
+    image: kksenateacr.azurecr.io/whisper-arm64:production
+    container_name: transcription-whisper-live
     ports:
       - "8003:8002"
     volumes:
@@ -239,7 +215,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=local
+      - ENVIRONMENT=production
     networks:
       - app-network
     restart: unless-stopped
@@ -256,10 +232,8 @@ services:
           cpus: '1.0'
 
 volumes:
-  redis_data_local:
+  redis_data:
 
 networks:
   app-network:
     driver: bridge
-  senate-backend_kk-network:
-    external: true

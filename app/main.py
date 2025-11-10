@@ -6,8 +6,11 @@ import json
 from typing import List, Dict
 import asyncio
 
-from .api import transcription, caption, upload, websocket, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, websocket_status, history, realtime_caption
-from .api.websocket import router as websocket_router
+from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
+# from .api import websocket
+# from .api.websocket import router as websocket_router
+# from .api import websocket_status
 from .services.transcription_service import TranscriptionService
 from .services.caption_service import CaptionService
 from .services.video_service import VideoService
@@ -83,8 +86,9 @@ caption_service = CaptionService()
 video_service = VideoService()
 storage = get_storage()
 
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket connections for migration to separate service
 # WebSocket connections
-active_connections: List[WebSocket] = []
+# active_connections: List[WebSocket] = []
 
 # รวม API routes
 app.include_router(transcription.router)
@@ -94,8 +98,9 @@ app.include_router(webhook.router)
 app.include_router(dashboard.router)
 app.include_router(caption.router)
 app.include_router(upload.router)
-app.include_router(websocket.router)
-app.include_router(websocket_router)
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket routers for migration to separate service
+# app.include_router(websocket.router)
+# app.include_router(websocket_router)
 app.include_router(video.router)
 app.include_router(queue.router)
 app.include_router(live_streaming.router)
@@ -105,8 +110,9 @@ app.include_router(internal.router)
 # 🔄 Polling API (Fallback สำหรับ WebSocket)
 app.include_router(polling.router)
 
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Status API for migration to separate service
 # 📡 WebSocket Status API
-app.include_router(websocket_status.router)
+# app.include_router(websocket_status.router)
 
 # 📚 History API
 app.include_router(history.router)
@@ -267,8 +273,9 @@ async def root():
             "video": "/video",
             "live_streaming": "/live",
             "thai_processing": "/thai",
-            "websocket": "/ws",
-            "websocket_caption": "/ws/caption"
+            # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket endpoints for migration to separate service
+            # "websocket": "/ws",
+            # "websocket_caption": "/ws/caption"
         },
         "storage": StorageFactory.get_storage_info()
     }
@@ -314,7 +321,8 @@ async def get_stats():
                 "completed": completed_video_tasks,
                 "pending": total_video_tasks - completed_video_tasks
             },
-            "active_websocket_connections": len(active_connections)
+            # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket connections count for migration to separate service
+            # "active_websocket_connections": len(active_connections)
         }
         
     except Exception as e:
@@ -337,102 +345,104 @@ async def cleanup_system():
         logger.error(f"เกิดข้อผิดพลาดในการลบไฟล์เก่า: {e}")
         return {"error": str(e)}
 
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket endpoint for migration to separate service
 # WebSocket endpoint สำหรับติดตามความคืบหน้า
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    active_connections.append(websocket)
-    
-    try:
-        while True:
-            # รับข้อความจาก client
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            # จัดการข้อความตามประเภท
-            if message.get("type") == "subscribe_task":
-                task_id = message.get("task_id")
-                task_type = message.get("task_type", "transcription")
-                
-                # ส่งสถานะปัจจุบัน
-                if task_type == "transcription":
-                    task = storage.load_transcription(task_id)
-                elif task_type == "caption":
-                    task = storage.load_caption(task_id)
-                elif task_type == "video":
-                    task = storage.load_video_task(task_id)
-                else:
-                    task = None
-                
-                if task:
-                    await websocket.send_text(json.dumps({
-                        "type": "task_status",
-                        "task_id": task_id,
-                        "task_type": task_type,
-                        "status": task.get("status"),
-                        "progress": task.get("progress", 0)
-                    }))
-                else:
-                    await websocket.send_text(json.dumps({
-                        "type": "error",
-                        "message": f"ไม่พบ task: {task_id}"
-                    }))
-            
-            elif message.get("type") == "ping":
-                await websocket.send_text(json.dumps({
-                    "type": "pong",
-                    "timestamp": asyncio.get_event_loop().time()
-                }))
-                
-    except WebSocketDisconnect:
-        active_connections.remove(websocket)
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดใน WebSocket: {e}")
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+# @app.websocket("/ws")
+# async def websocket_endpoint(websocket: WebSocket):
+#     await websocket.accept()
+#     active_connections.append(websocket)
+#     
+#     try:
+#         while True:
+#             # รับข้อความจาก client
+#             data = await websocket.receive_text()
+#             message = json.loads(data)
+#             
+#             # จัดการข้อความตามประเภท
+#             if message.get("type") == "subscribe_task":
+#                 task_id = message.get("task_id")
+#                 task_type = message.get("task_type", "transcription")
+#                 
+#                 # ส่งสถานะปัจจุบัน
+#                 if task_type == "transcription":
+#                     task = storage.load_transcription(task_id)
+#                 elif task_type == "caption":
+#                     task = storage.load_caption(task_id)
+#                 elif task_type == "video":
+#                     task = storage.load_video_task(task_id)
+#                 else:
+#                     task = None
+#                 
+#                 if task:
+#                     await websocket.send_text(json.dumps({
+#                         "type": "task_status",
+#                         "task_id": task_id,
+#                         "task_type": task_type,
+#                         "status": task.get("status"),
+#                         "progress": task.get("progress", 0)
+#                     }))
+#                 else:
+#                     await websocket.send_text(json.dumps({
+#                         "type": "error",
+#                         "message": f"ไม่พบ task: {task_id}"
+#                     }))
+#             
+#             elif message.get("type") == "ping":
+#                 await websocket.send_text(json.dumps({
+#                     "type": "pong",
+#                     "timestamp": asyncio.get_event_loop().time()
+#                 }))
+#                 
+#     except WebSocketDisconnect:
+#         active_connections.remove(websocket)
+#         logger.info("WebSocket client disconnected")
+#     except Exception as e:
+#         logger.error(f"เกิดข้อผิดพลาดใน WebSocket: {e}")
+#         if websocket in active_connections:
+#             active_connections.remove(websocket)
 
+# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket broadcast functions for migration to separate service
 # ฟังก์ชันสำหรับส่งข้อความไปยัง WebSocket clients
-async def broadcast_message(message: Dict):
-    """ส่งข้อความไปยัง WebSocket clients ทั้งหมด"""
-    if not active_connections:
-        return
-    
-    message_text = json.dumps(message)
-    disconnected = []
-    
-    for connection in active_connections:
-        try:
-            await connection.send_text(message_text)
-        except:
-            disconnected.append(connection)
-    
-    # ลบ connections ที่ขาด
-    for connection in disconnected:
-        if connection in active_connections:
-            active_connections.remove(connection)
+# async def broadcast_message(message: Dict):
+#     """ส่งข้อความไปยัง WebSocket clients ทั้งหมด"""
+#     if not active_connections:
+#         return
+#     
+#     message_text = json.dumps(message)
+#     disconnected = []
+#     
+#     for connection in active_connections:
+#         try:
+#             await connection.send_text(message_text)
+#         except:
+#             disconnected.append(connection)
+#     
+#     # ลบ connections ที่ขาด
+#     for connection in disconnected:
+#         if connection in active_connections:
+#             active_connections.remove(connection)
 
 # ฟังก์ชันสำหรับส่งการอัปเดตสถานะ task
-async def broadcast_task_update(task_id: str, task_type: str, status: str, progress: float = 0):
-    """ส่งการอัปเดตสถานะ task ไปยัง WebSocket clients"""
-    await broadcast_message({
-        "type": "task_update",
-        "task_id": task_id,
-        "task_type": task_type,
-        "status": status,
-        "progress": progress,
-        "timestamp": asyncio.get_event_loop().time()
-    })
+# async def broadcast_task_update(task_id: str, task_type: str, status: str, progress: float = 0):
+#     """ส่งการอัปเดตสถานะ task ไปยัง WebSocket clients"""
+#     await broadcast_message({
+#         "type": "task_update",
+#         "task_id": task_id,
+#         "task_type": task_type,
+#         "status": status,
+#         "progress": progress,
+#         "timestamp": asyncio.get_event_loop().time()
+#     })
 
 # ฟังก์ชันสำหรับส่งการแจ้งเตือน
-async def broadcast_notification(message: str, notification_type: str = "info"):
-    """ส่งการแจ้งเตือนไปยัง WebSocket clients"""
-    await broadcast_message({
-        "type": "notification",
-        "message": message,
-        "notification_type": notification_type,
-        "timestamp": asyncio.get_event_loop().time()
-    })
+# async def broadcast_notification(message: str, notification_type: str = "info"):
+#     """ส่งการแจ้งเตือนไปยัง WebSocket clients"""
+#     await broadcast_message({
+#         "type": "notification",
+#         "message": message,
+#         "notification_type": notification_type,
+#         "timestamp": asyncio.get_event_loop().time()
+#     })
 
 # ฟังก์ชั่น startup สำหรับ cleanup temp folders เก่า
 @app.on_event("startup")
@@ -449,13 +459,14 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ ไม่สามารถลบ temp folders เก่า: {e}")
     
+    # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
     # 🔌 เริ่มต้น WebSocket Service
-    try:
-        from .services.websocket_service import initialize_websocket_service
-        await initialize_websocket_service()
-        logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
-    except Exception as e:
-        logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
+    # try:
+    #     from .services.websocket_service import initialize_websocket_service
+    #     await initialize_websocket_service()
+    #     logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
+    # except Exception as e:
+    #     logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
     
     logger.info("✅ API Server พร้อมใช้งาน")
 

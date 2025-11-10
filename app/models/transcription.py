@@ -8,6 +8,9 @@ class TranscriptionRequest(BaseModel):
     model_size: Optional[str] = "base"  # tiny, base, small, medium, large
     chunk_duration: Optional[int] = 30  # ความยาวของ chunk (วินาที)
     enable_timestamps: Optional[bool] = True
+    callback_url: Optional[str] = None  # URL สำหรับ callback เมื่อเสร็จ (จาก Backend)
+    job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)
+    user_id: Optional[str] = None  # User ID (ถ้ามี)
 
 class TranscriptionChunk(BaseModel):
     start_time: float

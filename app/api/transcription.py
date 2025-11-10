@@ -30,7 +30,10 @@ async def start_transcription(request: TranscriptionRequest):
             file_path=request.file_path,
             language=request.language,
             model_size=request.model_size,
-            chunk_duration=request.chunk_duration
+            chunk_duration=request.chunk_duration,
+            callback_url=request.callback_url,
+            job_id=request.job_id,
+            user_id=request.user_id
         )
         
         # ดึง task status

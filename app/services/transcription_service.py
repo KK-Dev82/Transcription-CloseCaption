@@ -52,7 +52,9 @@ class TranscriptionService:
         return s
     
     async def start_transcription(self, file_path: str, language: str = "th",
-                                model_size: str = "base", chunk_duration: int = 30) -> str:
+                                model_size: str = "base", chunk_duration: int = 30,
+                                callback_url: str = None, job_id: int = None,
+                                user_id: str = None) -> str:
         """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
         # ส่งไปยัง RabbitMQ queue และรับ task_id
@@ -61,7 +63,10 @@ class TranscriptionService:
                 file_path=file_path,
                 language=language,
                 model_size=model_size,
-                chunk_duration=chunk_duration
+                chunk_duration=chunk_duration,
+                callback_url=callback_url,
+                job_id=job_id,
+                user_id=user_id
             )
             
             # สร้าง task response
@@ -72,6 +77,14 @@ class TranscriptionService:
                 language=language,
                 created_at=datetime.now()
             )
+            
+            # เก็บ callback_url, job_id สำหรับ callback ภายหลัง
+            if callback_url:
+                task.callback_url = callback_url
+            if job_id:
+                task.job_id = job_id
+            if user_id:
+                task.user_id = user_id
             
             self.tasks[task_id] = task
             
@@ -304,6 +317,13 @@ class TranscriptionService:
             except Exception as e:
                 logger.warning(f"WebSocket notification failed (completed): {e}")
             
+            # 📞 Callback to Backend (ถ้ามี callback_url)
+            if hasattr(task, 'callback_url') and task.callback_url:
+                try:
+                    await self._send_callback(task, "completed")
+                except Exception as e:
+                    logger.warning(f"Backend callback failed: {e}")
+            
             # บันทึกข้อมูลสุดท้าย - ครั้งเดียวเท่านั้น
             logger.info("กำลังบันทึกผลลัพธ์สุดท้าย...")
             final_data = {
@@ -430,4 +450,50 @@ class TranscriptionService:
                         logger.warning(f"⚠️ WebSocket notification failed: {response.status}")
                         
         except Exception as e:
-            logger.error(f"❌ Failed to send WebSocket notification: {e}") 
+            logger.error(f"❌ Failed to send WebSocket notification: {e}")
+    
+    async def _send_callback(self, task, status: str):
+        """ส่ง callback ไปยัง Backend เมื่อเสร็จสิ้น"""
+        import httpx
+        
+        try:
+            callback_url = task.callback_url
+            if not callback_url:
+                return
+            
+            # เตรียมข้อมูลสำหรับ callback
+            segments = []
+            if hasattr(task, 'chunks') and task.chunks:
+                segments = [
+                    {
+                        "start_time": chunk.start_time,
+                        "end_time": chunk.end_time,
+                        "text": chunk.text,
+                        "confidence": getattr(chunk, 'confidence', None)
+                    }
+                    for chunk in task.chunks
+                ]
+            
+            payload = {
+                "job_id": getattr(task, 'job_id', None),
+                "task_id": task.task_id,
+                "status": status,
+                "text": getattr(task, 'full_text', ''),
+                "segments": segments,
+                "audio_duration": getattr(task, 'total_duration', None),
+                "word_count": len(task.full_text.split()) if hasattr(task, 'full_text') and task.full_text else 0,
+                "average_confidence": None,  # คำนวณได้ถ้าต้องการ
+                "completed_at": datetime.now().isoformat()
+            }
+            
+            # ส่ง callback
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(callback_url, json=payload)
+                
+                if response.status_code == 200:
+                    logger.info(f"✅ Backend callback sent successfully to {callback_url}")
+                else:
+                    logger.warning(f"⚠️ Backend callback failed: {response.status_code}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Failed to send backend callback: {e}") 
