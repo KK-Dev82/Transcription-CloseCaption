@@ -37,20 +37,57 @@ class JSONStorage:
                 pass
         
         # รวมข้อมูลเดิมกับข้อมูลใหม่
+        def _ensure_iso(value):
+            if isinstance(value, datetime):
+                return value.isoformat()
+            if isinstance(value, (int, float)):
+                try:
+                    return datetime.fromtimestamp(value).isoformat()
+                except Exception:
+                    return None
+            return value
+        
         data = {
             "task_id": task_id,
             "created_at": existing_data.get("created_at", datetime.now().isoformat()),
             "updated_at": datetime.now().isoformat(),
             "file_path": transcription_data.get("file_path", existing_data.get("file_path")),
+            "file_url": transcription_data.get("file_url", existing_data.get("file_url")),
+            "file_name": transcription_data.get("file_name", existing_data.get("file_name")),
             "language": transcription_data.get("language", existing_data.get("language")),
             "total_duration": transcription_data.get("total_duration", existing_data.get("total_duration")),
+            "partial_text": transcription_data.get("partial_text", existing_data.get("partial_text")),
             "chunks": transcription_data.get("chunks", existing_data.get("chunks", [])),
             "full_text": transcription_data.get("full_text", existing_data.get("full_text", "")),
             "status": transcription_data.get("status", existing_data.get("status", "pending")),
             "progress": transcription_data.get("progress", existing_data.get("progress", 0)),
             "error_message": transcription_data.get("error_message", existing_data.get("error_message")),
-            "completed_at": transcription_data.get("completed_at", existing_data.get("completed_at"))
+            "completed_at": _ensure_iso(transcription_data.get("completed_at", existing_data.get("completed_at"))),
+            "job_id": transcription_data.get("job_id", existing_data.get("job_id")),
+            "user_id": transcription_data.get("user_id", existing_data.get("user_id")),
+            "callback_url": transcription_data.get("callback_url", existing_data.get("callback_url"))
         }
+        
+        # แปลง progress ให้เป็นตัวเลขเสมอ
+        try:
+            data["progress"] = int(data.get("progress", 0))
+        except Exception:
+            data["progress"] = 0
+        
+        # แปลง total_duration เป็น float ถ้าเป็น string
+        total_duration = data.get("total_duration")
+        if isinstance(total_duration, str):
+            try:
+                data["total_duration"] = float(total_duration)
+            except ValueError:
+                try:
+                    data["total_duration"] = float(total_duration.replace(",", "."))
+                except ValueError:
+                    data["total_duration"] = existing_data.get("total_duration")
+        
+        # ป้องกันไม่ให้ partial_text เป็น None
+        if data.get("partial_text") is None:
+            data["partial_text"] = existing_data.get("partial_text")
         
         # บันทึก metadata.json
         with open(metadata_path, 'w', encoding='utf-8') as f:

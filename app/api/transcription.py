@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 import logging
 from typing import List, Optional
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 from ..models.transcription import TranscriptionRequest, TranscriptionResponse
 from ..services.transcription_service import TranscriptionService
@@ -12,22 +13,24 @@ router = APIRouter(prefix="/transcribe", tags=["transcription"])
 
 transcription_service = TranscriptionService()
 
+
+class CleanupRequest(BaseModel):
+    max_age_hours: int = Field(default=24, ge=0, description="ลบรายการที่เก่ากว่า (ชั่วโมง)")
+    statuses: Optional[List[str]] = Field(
+        default=None,
+        description="ระบุสถานะที่ต้องการลบ (ค่าเริ่มต้น: completed, failed, cancelled)"
+    )
+
 @router.post("/", response_model=TranscriptionResponse)
 async def start_transcription(request: TranscriptionRequest):
     """เริ่มการแปลงเสียงเป็นข้อความ"""
     
     try:
-        # ตรวจสอบไฟล์
-        from pathlib import Path
-        if not Path(request.file_path).exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"ไม่พบไฟล์: {request.file_path}"
-            )
-        
         # เริ่มการแปลงเสียง
         task_id = await transcription_service.start_transcription(
             file_path=request.file_path,
+            file_url=str(request.file_url) if request.file_url else None,
+            file_name=request.file_name,
             language=request.language,
             model_size=request.model_size,
             chunk_duration=request.chunk_duration,
@@ -68,6 +71,22 @@ async def get_all_transcriptions():
     """ดึงรายการ transcription tasks ทั้งหมด"""
     
     return transcription_service.get_all_tasks()
+
+@router.post("/cleanup")
+async def cleanup_transcription_tasks(request: CleanupRequest):
+    """ลบ transcription tasks ออกจาก storage/cache ตามเงื่อนไขที่กำหนด"""
+    try:
+        removed = transcription_service.cleanup_tasks(
+            statuses=request.statuses,
+            max_age_hours=request.max_age_hours
+        )
+        return {"removed": removed, "statuses": request.statuses or ["completed", "failed", "cancelled"]}
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการ cleanup transcription tasks: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการ cleanup transcription tasks: {str(e)}"
+        )
 
 @router.delete("/{task_id}")
 async def cancel_transcription(task_id: str):
@@ -272,11 +291,3 @@ async def delete_transcription_permanent(task_id: str):
             status_code=500,
             detail=f"เกิดข้อผิดพลาดในการลบ transcription: {str(e)}"
         )
-
-@router.post("/cleanup")
-async def cleanup_old_tasks(background_tasks: BackgroundTasks):
-    """ลบ tasks เก่า"""
-    
-    background_tasks.add_task(transcription_service.cleanup_completed_tasks)
-    
-    return {"message": "เริ่มการลบ tasks เก่า"} 

@@ -19,7 +19,7 @@ services:
       - ENVIRONMENT=local
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -29,6 +29,7 @@ services:
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -62,7 +63,7 @@ services:
       - ENVIRONMENT=local
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -72,6 +73,7 @@ services:
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -105,7 +107,7 @@ services:
       - ENVIRONMENT=local
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -115,6 +117,7 @@ services:
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -148,7 +151,7 @@ services:
       - ENVIRONMENT=local
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/app/storage
-      - RABBITMQ_HOST=host.docker.internal
+      - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
@@ -158,6 +161,7 @@ services:
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

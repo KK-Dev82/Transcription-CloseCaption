@@ -1,9 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, AnyHttpUrl, root_validator
 from typing import Optional, List
 from datetime import datetime
 
 class TranscriptionRequest(BaseModel):
-    file_path: str
+    file_path: Optional[str] = None
+    file_url: Optional[AnyHttpUrl] = None
+    file_name: Optional[str] = None
     language: Optional[str] = "th"  # ภาษาไทยเป็น default
     model_size: Optional[str] = "base"  # tiny, base, small, medium, large
     chunk_duration: Optional[int] = 30  # ความยาวของ chunk (วินาที)
@@ -11,6 +13,14 @@ class TranscriptionRequest(BaseModel):
     callback_url: Optional[str] = None  # URL สำหรับ callback เมื่อเสร็จ (จาก Backend)
     job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)
     user_id: Optional[str] = None  # User ID (ถ้ามี)
+
+    @root_validator(skip_on_failure=True)
+    def validate_source(cls, values):
+        file_path = values.get("file_path")
+        file_url = values.get("file_url")
+        if not file_path and not file_url:
+            raise ValueError("ต้องระบุอย่างน้อยหนึ่งค่าระหว่าง file_path หรือ file_url")
+        return values
 
 class TranscriptionChunk(BaseModel):
     start_time: float
@@ -22,6 +32,11 @@ class TranscriptionResponse(BaseModel):
     task_id: str
     status: str  # pending, processing, completed, failed
     file_path: str
+    file_url: Optional[str] = None
+    file_name: Optional[str] = None
+    job_id: Optional[int] = None
+    user_id: Optional[str] = None
+    callback_url: Optional[str] = None
     total_duration: Optional[float] = None
     chunks: Optional[List[TranscriptionChunk]] = None
     full_text: Optional[str] = None
