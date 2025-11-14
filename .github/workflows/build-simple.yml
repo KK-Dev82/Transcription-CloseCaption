@@ -41,8 +41,8 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push whisper service
         uses: docker/build-push-action@v5
@@ -52,8 +52,8 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:cache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:cache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Output build info
         run: |
