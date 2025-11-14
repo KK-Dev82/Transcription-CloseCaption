@@ -7,7 +7,7 @@ on:
       - production
       - staging
       - 'production/**'
-  workflow_dispatch:  # ให้รันได้ด้วยมือ
+  workflow_dispatch:  # ให้รันได้ด้วยมือ-
 
 env:
   IMAGE_NAME: kk-transcription
