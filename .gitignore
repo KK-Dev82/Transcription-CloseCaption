@@ -181,7 +181,8 @@ ehthumbs.db
 Thumbs.db
 
 # Docker
-.dockerignore
+# Note: .dockerignore should be committed to git (like .gitignore)
+# It's part of the build configuration
 
 # Redis
 dump.rdb

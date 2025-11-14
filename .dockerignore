@@ -1,0 +1,135 @@
+# Git
+.git
+.github
+.gitignore
+
+# Documentation
+README.md
+Deployment.md
+RABBITMQ_SETUP.md
+staging_checklist.md
+
+# Test files
+test_*.py
+test_*.mp4
+test_*.txt
+test_*.json
+test-frontend.html
+
+# Development files
+dev-setup.sh
+rebuild-dev.sh
+staging-deploy.sh
+create_test_video.py
+run_worker.py
+
+# Examples
+examples/
+
+# Scripts
+scripts/
+
+# Logs
+*.log
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Environment
+.env
+env.staging
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Large media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.aac
+*.ogg
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Runtime data directories (mounted as volumes, not needed in image)
+uploads/
+storage/
+temp/
+test-files/
+venv/
+__pycache__/
+
+# Model files (downloaded at runtime, not in build)
+# Note: models/ directory is mounted as volume in docker-compose
+models/
+*.bin
+*.ggml
+*.gguf
+
+# Large media files (should not be in build context)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+trimmed.mp4
+trimmed.wav
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Source code backup files
+*.backup
+*.bak
+main.py.backup
