@@ -15,7 +15,7 @@ echo ""
 # Step 1: Build Main API Image
 echo "Building Main API Image: kk-transcription:local-dev"
 docker build \
-    -f Dockerfile.optimized \
+    -f Dockerfile \
     -t kk-transcription:local-dev \
     --build-arg BUILDKIT_INLINE_CACHE=1 \
     .

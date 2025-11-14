@@ -2,10 +2,11 @@ name: Build and Push Images
 
 on:
   push:
-    branches: 
-      - no-build
-      
-  workflow_dispatch:
+    branches:
+      - main
+      - production
+      - 'production/**'
+  workflow_dispatch:  # ให้รันได้ด้วยมือ
 
 env:
   IMAGE_NAME: kk-transcription
@@ -35,7 +36,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile.optimized
+          file: Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
@@ -46,7 +47,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ./whisper-service
-          file: ./whisper-service/Dockerfile
+          file: ./whisper-service/Dockerfile.linux
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64

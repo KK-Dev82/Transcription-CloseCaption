@@ -59,7 +59,7 @@ print_success "Docker พร้อมใช้งาน"
 # 2. Build Main API Image (ใช้ cache)
 print_step "Build Main API Image (ใช้ layer caching)..."
 docker build \
-    -f Dockerfile.optimized \
+    -f Dockerfile \
     -t ${MAIN_IMAGE} \
     --build-arg BUILDKIT_INLINE_CACHE=1 \
     .

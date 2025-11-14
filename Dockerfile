@@ -1,12 +1,38 @@
-# ใช้ Python 3.11 slim image
-FROM python:3.11-slim
+# Multi-stage build สำหรับลดขนาด image
+FROM python:3.11-slim as builder
 
 # ตั้งค่า environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DEBIAN_FRONTEND=noninteractive
 
-# อัปเดต package manager และติดตั้ง dependencies
+# ติดตั้ง build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# สร้าง working directory
+WORKDIR /app
+
+# คัดลอก requirements และติดตั้ง Python dependencies (ไม่ติดตั้ง PyTorch)
+COPY docs/requirements-core.txt .
+RUN pip install --no-cache-dir --user -r requirements-core.txt
+
+# Production stage
+FROM python:3.11-slim
+
+# ตั้งค่า environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.local/bin:$PATH"
+
+# ติดตั้ง runtime dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libmagic1 \
@@ -14,30 +40,24 @@ RUN apt-get update && apt-get install -y \
     libportaudio2 \
     libasound2-dev \
     portaudio19-dev \
-    python3-dev \
-    gcc \
-    g++ \
-    make \
     curl \
-    git \
-    cmake \
-    wget \
     && rm -rf /var/lib/apt/lists/*
-
-
 
 # สร้าง working directory
 WORKDIR /app
 
-# คัดลอก requirements และติดตั้ง Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# คัดลอก Python packages จาก builder stage
+COPY --from=builder /root/.local /root/.local
 
 # คัดลอก source code
 COPY . .
 
 # สร้างโฟลเดอร์ที่จำเป็น
-RUN mkdir -p uploads temp storage models
+RUN mkdir -p uploads temp storage models test-files
+
+# คัดลอก entrypoint script (path ภายใน container ไม่เกี่ยวกับ host OS)
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # ตั้งค่า permissions
 RUN chmod +x main.py
@@ -49,5 +69,8 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
+# ใช้ entrypoint script (path ภายใน container)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
 # รัน application
-CMD ["sh", "-c", "if [ \"$ENVIRONMENT\" = \"development\" ]; then uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --log-level info; else uvicorn app.main:app --host 0.0.0.0 --port 8001 --log-level info; fi"] 
+CMD ["sh", "-c", "if [ \"$ENVIRONMENT\" = \"development\" ]; then uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --log-level info; else uvicorn app.main:app --host 0.0.0.0 --port 8001 --log-level info; fi"]

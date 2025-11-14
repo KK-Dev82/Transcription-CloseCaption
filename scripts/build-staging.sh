@@ -16,7 +16,7 @@ echo "🚀 Building and pushing images to ACR..."
 echo "📦 Building main API image..."
 docker buildx build \
     --platform linux/amd64 \
-    -f Dockerfile.optimized \
+    -f Dockerfile \
     -t ${REGISTRY_URL}/kk-transcription:${IMAGE_TAG} \
     --push \
     .
