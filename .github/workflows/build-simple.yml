@@ -7,7 +7,7 @@ on:
       - production
       - staging
       - 'production/**'
-  workflow_dispatch:  # ให้รันได้ด้วยมือ-
+  workflow_dispatch:  # ให้รันได้ด้วยมือ
 
 env:
   IMAGE_NAME: kk-transcription
@@ -18,6 +18,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    
+    # เพิ่ม timeout เพื่อรองรับ build ที่ใช้เวลานาน
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -25,9 +28,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-          driver-opts: image=moby/buildkit:latest
 
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
@@ -44,8 +44,9 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          # Cache removed temporarily to avoid driver issues
+          # Will add back later if needed
+          # Note: Build context is optimized via .dockerignore to reduce size
 
       - name: Build and push whisper service
         uses: docker/build-push-action@v5
@@ -55,8 +56,9 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache,mode=max
+          # Cache removed temporarily to avoid driver issues
+          # Will add back later if needed
+          # Note: Whisper model is downloaded during build, not from context
 
       - name: Output build info
         run: |
