@@ -11,6 +11,7 @@ import time
 
 from .file_service import FileService
 from .rabbitmq_service import RabbitMQService
+from .whisper_service import WhisperService
 from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class VideoService:
         self.file_service = FileService()
         self.json_storage = JSONStorage()
         self.rabbitmq_service = RabbitMQService()
+        self.whisper_service = WhisperService()
         self.tasks: Dict[str, Dict] = {}
         self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
     
@@ -654,8 +656,10 @@ class VideoService:
             temp_dir = Path("temp") / task_folder
             temp_dir.mkdir(parents=True, exist_ok=True)
             
-            # สร้าง chunks
-            for i, start_time in enumerate(range(0, int(duration), chunk_duration - overlap)):
+            # สร้าง chunks พร้อม overlap
+            start_time = 0
+            i = 0
+            while start_time < duration:
                 end_time = min(start_time + chunk_duration, duration)
                 
                 # สร้างชื่อไฟล์ chunk
@@ -681,6 +685,14 @@ class VideoService:
                     logger.error(f"ไฟล์ chunk {i+1} ไม่ถูกสร้าง: {chunk_path}")
                 
                 chunk_paths.append(str(chunk_path))
+                
+                # เลื่อนไปยัง chunk ถัดไป (ลบ overlap)
+                start_time = end_time - overlap
+                i += 1
+                
+                # หยุดถ้าเหลือน้อยกว่า chunk_duration
+                if start_time + chunk_duration >= duration:
+                    break
             
             logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_paths)} chunks")
             return chunk_paths

@@ -1,0 +1,61 @@
+name: Build and Push Images
+
+on:
+  push:
+    branches:
+      - main
+      - production
+      - 'production/**'
+  workflow_dispatch:  # ให้รันได้ด้วยมือ
+
+env:
+  IMAGE_NAME: kk-transcription
+  WHISPER_IMAGE_NAME: kk-transcription-whisper
+  REGISTRY: kksenateacr.azurecr.io
+  VERSION: alpha-dev
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push main image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+          platforms: linux/amd64
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache,mode=max
+
+      - name: Build and push whisper service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./whisper-service
+          file: ./whisper-service/Dockerfile.linux
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
+          platforms: linux/amd64
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:cache,mode=max
+
+      - name: Output build info
+        run: |
+          echo "✅ Images built and pushed successfully!"
+          echo "Main App: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}"
+          echo "Whisper: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}"

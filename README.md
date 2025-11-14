@@ -1,396 +1,207 @@
-# 🎬 Transcription & Close Caption Service
+# 🎤 Transcription Close Caption Service
 
-บริการ API สำหรับการแปลงเสียงเป็นข้อความและสร้าง close caption แบบ real-time พร้อมระบบ Video Processing ที่ครบครันด้วย RabbitMQ
+ระบบแปลงเสียงเป็นข้อความและสร้าง Close Caption สำหรับวิดีโอ
 
-## ✨ Features
+## 📁 โครงสร้างโปรเจค
 
-### 🎵 Transcription & Caption
-- **Real-time Transcription**: แปลงเสียงเป็นข้อความแบบ real-time ด้วย Whisper
-- **Close Caption Generation**: สร้าง subtitle หลายรูปแบบ (SRT, VTT, ASS)
-- **Multi-language Support**: รองรับหลายภาษา
-- **Chunk Processing**: ประมวลผลไฟล์ขนาดใหญ่แบบ chunk
-- **Search Functionality**: ค้นหาข้อความใน transcription
-
-### 🎬 Video Processing
-- **Trim Video**: ตัดวิดีโอตามช่วงเวลา
-- **Merge Videos**: รวมวิดีโอหลายไฟล์
-- **Convert Format**: แปลงรูปแบบไฟล์ (MP4, AVI, MOV, MKV, etc.)
-- **Resize Video**: ปรับขนาดวิดีโอ
-- **Batch Processing**: ประมวลผลหลายไฟล์พร้อมกัน
-- **Quality Control**: ตั้งค่าคุณภาพ (High, Medium, Low)
-
-### 🔧 Technical Features
-- **Async Processing**: ประมวลผลแบบ asynchronous ด้วย RabbitMQ
-- **Message Queue**: ใช้ RabbitMQ สำหรับจัดการ video processing tasks
-- **Video Worker**: Worker process สำหรับประมวลผลวิดีโอ
-- **WebSocket Support**: Real-time status updates
-- **File Management**: จัดการไฟล์อัปโหลดและผลลัพธ์
-- **JSON Storage**: เก็บข้อมูลในรูปแบบ JSON
-- **Docker Support**: รองรับการ deploy ด้วย Docker
-- **Health Monitoring**: ตรวจสอบสถานะระบบ
-
-## 🏗️ Architecture
-
-### Development Environment Architecture
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   FastAPI       │    │   RabbitMQ      │
-│   (React/Vue)   │◄──►│   Backend       │◄──►│   Message Queue │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                              │                        │
-                              ▼                        ▼
-                       ┌─────────────────┐    ┌─────────────────┐
-                       │   Whisper API   │    │   Video Worker  │
-                       │   (Container)   │    │   (FFmpeg)      │
-                       │   Port 8002     │    │   (Container)   │
-                       └─────────────────┘    └─────────────────┘
-                              │                        │
-                              ▼                        ▼
-                       ┌─────────────────┐    ┌─────────────────┐
-                       │   JSON Storage  │    │   Processed     │
-                       │   (File-based)  │    │   Video Files   │
-                       └─────────────────┘    └─────────────────┘
+transcription-close-caption-service/
+├── app/                          # แอปพลิเคชันหลัก
+│   ├── api/                      # API endpoints
+│   ├── models/                   # Data models
+│   ├── services/                 # Business logic
+│   ├── utils/                    # Utilities
+│   └── workers/                  # Background workers
+├── scripts/                      # Scripts สำหรับจัดการระบบ
+│   ├── fix_staging_permissions.sh  # แก้ไข permission ใน staging
+│   ├── download-models.sh          # ดาวน์โหลด Whisper models
+│   └── fix_permissions.py          # แก้ไข permission (Python)
+├── test-files/                   # ไฟล์ทดสอบ
+│   ├── index.html               ← หน้าแรกสำหรับเลือก test
+│   ├── test-staging.html        ← HTML Tests
+│   ├── test-frontend.html
+│   ├── test-local.html
+│   ├── test_permission_fix.html
+│   └── python-tests/            ← Python Tests
+│       ├── index.html           ← หน้าแรกสำหรับ Python Tests
+│       ├── run_all_tests.py     ← รัน tests ทั้งหมด
+│       ├── test_api_endpoints.py
+│       ├── test_transcription.py
+│       └── ...
+├── docs/                         # เอกสาร
+│   ├── README.md
+│   ├── Deployment.md
+│   └── *.json
+├── whisper-service/              # Whisper service
+├── models/                       # Whisper AI models
+│   └── ggml-base.bin            ← Whisper base model (148MB)
+├── storage/                      # ข้อมูลที่เก็บ
+├── uploads/                      # ไฟล์ที่อัปโหลด
+├── temp/                         # ไฟล์ชั่วคราว
+└── requirements*.txt             # Dependencies
 ```
 
-### Container Separation
-- **API Container**: ทำ video processing (FFmpeg) และ audio extraction
-- **Whisper Container**: ทำ transcription เท่านั้น (ไม่มี FFmpeg)
-- **Shared Volumes**: temp, uploads, models, storage
+## 🚀 การใช้งาน
 
-### Queue Architecture
-```
-API Service → RabbitMQ Queues → Video Workers
-     │              │              │
-     │              ▼              ▼
-     │        ┌─────────────┐  ┌─────────────┐
-     │        │ Trim Queue  │  │ Worker 1    │
-     │        ├─────────────┤  ├─────────────┤
-     │        │ Merge Queue │  │ Worker 2    │
-     │        ├─────────────┤  ├─────────────┤
-     │        │Convert Queue│  │ Worker N    │
-     │        ├─────────────┤  └─────────────┘
-     │        │Resize Queue │
-     │        └─────────────┘
-     ▼
-JSON Storage ← Task Status Updates
-```
+### 1. **Post-Deployment Setup (หลัง Deploy ขึ้น Server)**
 
-## 📦 Installation
-
-### Prerequisites
-- Python 3.11+
-- FFmpeg
-- RabbitMQ
-- Redis (optional)
-
-### 1. Clone Repository
+#### **Step 1: เตรียม Whisper Models**
 ```bash
-git clone <repository-url>
-cd transcription-close-caption-service
+# ดาวน์โหลด Whisper models
+cd scripts/
+chmod +x download-models.sh
+./download-models.sh
+
+# ตรวจสอบ model file
+ls -la models/
+# ควรเห็น: ggml-base.bin (ประมาณ 148MB)
 ```
 
-### 2. Install Dependencies
+#### **Step 2: แก้ไข File Permissions**
 ```bash
-pip install -r requirements.txt
+# แก้ไข permission สำหรับ Docker containers
+chmod +x fix_staging_permissions.sh
+./fix_staging_permissions.sh
+
+# ตรวจสอบ permissions
+ls -la uploads/ temp/ storage/ models/
 ```
 
-### 3. Install FFmpeg
+#### **Step 3: ตั้งค่า Environment Variables**
 ```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install ffmpeg
+# ตรวจสอบ environment variables ใน docker-compose.yml
+cat docker-compose.yml | grep -A 5 -B 5 environment
 
-# macOS
-brew install ffmpeg
-
-# Windows
-# ดาวน์โหลดจาก https://ffmpeg.org/download.html
+# หรือตรวจสอบใน container
+docker exec transcription-api-staging env | grep -E "(API_URL|REDIS|RABBITMQ)"
 ```
 
-### 4. Install RabbitMQ
-```bash
-# Ubuntu/Debian
-sudo apt-get install rabbitmq-server
-
-# macOS
-brew install rabbitmq
-
-# เริ่มต้น RabbitMQ
-sudo systemctl start rabbitmq-server
-# หรือ
-brew services start rabbitmq
-```
-
-### 5. Create Directories
-```bash
-mkdir -p uploads temp storage models
-```
-
-## 🚀 Quick Start
-
-### Development Environment (แนะนำ)
-
-1. **Setup Development Environment:**
-   ```bash
-   ./dev-setup.sh
-   ```
-
-2. **Rebuild และ Start Development Services:**
-   ```bash
-   ./rebuild-dev.sh
-   ```
-
-3. **Start Development Services (ถ้า build แล้ว):**
-   ```bash
-   docker-compose -f docker-compose.dev.yml up -d
-   ```
-
-4. **View Logs:**
-   ```bash
-   docker-compose -f docker-compose.dev.yml logs -f api
-   docker-compose -f docker-compose.dev.yml logs -f whisper
-   ```
-
-### Development Mode (Local)
-```bash
-# รัน API Service
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
-
-# รัน Video Worker (ใน terminal อื่น)
-python run_worker.py
-
-# หรือรันหลาย workers
-python run_worker.py &
-python run_worker.py &
-```
-
-### Production Docker Mode
-```bash
-# รันระบบทั้งหมด (API + RabbitMQ + Workers)
-docker-compose up --build
-
-# ดู logs
-docker-compose logs -f video-worker
-docker-compose logs -f rabbitmq
-```
-
-### Access Services
-- API Documentation: http://localhost:8001/docs
-- Whisper API: http://localhost:8002/health
-- RabbitMQ Management: http://localhost:15672 (admin/admin123)
-
-## 📚 API Usage
-
-### Video Processing with RabbitMQ
-
-#### 1. อัปโหลดไฟล์วิดีโอ
-```python
-import requests
-
-# อัปโหลดไฟล์
-with open('video.mp4', 'rb') as f:
-    files = {'file': ('video.mp4', f, 'video/mp4')}
-    response = requests.post('http://localhost:8001/upload', files=files)
-    
-result = response.json()
-file_path = result['file_path']
-```
-
-#### 2. ตัดวิดีโอ (ส่งไปยัง RabbitMQ)
-```python
-# ตัดวิดีโอช่วง 10-30 วินาที
-data = {
-    'input_file': file_path,
-    'start_time': 10.0,
-    'end_time': 30.0,
-    'output_format': 'mp4',
-    'quality': 'medium'
+#### **Step 4: ตั้งค่า Proxy/Port (สำหรับ Frontend)**
+```nginx
+# ตัวอย่าง nginx config สำหรับ WebSocket
+location /transcribe/ {
+    proxy_pass http://localhost:8001/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
-
-response = requests.post('http://localhost:8001/video/trim', data=data)
-task_id = response.json()['task_id']
-print(f"Task ID: {task_id}")  # ส่งไปยัง RabbitMQ queue
 ```
 
-#### 3. ตรวจสอบสถานะ
-```python
-# ตรวจสอบสถานะ task
-response = requests.get(f'http://localhost:8001/video/status/{task_id}')
-status = response.json()
-print(f"สถานะ: {status['status']}")
-
-# รอให้เสร็จสิ้น
-while status['status'] == 'pending':
-    time.sleep(5)
-    response = requests.get(f'http://localhost:8001/video/status/{task_id}')
-    status = response.json()
-    print(f"สถานะ: {status['status']}")
-```
-
-#### 4. Queue Management
-```python
-# ตรวจสอบสถานะ queue
-response = requests.get('http://localhost:8001/queue/info')
-queues = response.json()
-print("Queue Status:", queues)
-
-# ตรวจสอบสุขภาพ RabbitMQ
-response = requests.get('http://localhost:8001/queue/health')
-health = response.json()
-print("RabbitMQ Health:", health)
-```
-
-### Queue Operations
-
-#### ตรวจสอบ Queue Status
+#### **Step 5: เริ่มระบบและตรวจสอบ**
 ```bash
-# ผ่าน API
-curl http://localhost:8001/queue/info
+# เริ่ม services
+docker compose up -d
 
-# ผ่าน RabbitMQ Management UI
-# เข้าไปที่ http://localhost:15672
-```
+# ตรวจสอบ logs
+docker logs transcription-api-staging
+docker logs transcription-whisper-staging
+docker logs transcription-redis-staging
+docker logs transcription-rabbitmq-staging
 
-#### ลบ Messages ใน Queue
-```bash
-curl -X POST http://localhost:8001/queue/purge/video_trim_queue
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-```bash
-# RabbitMQ Configuration
-RABBITMQ_HOST=localhost
-RABBITMQ_PORT=5672
-RABBITMQ_USER=admin
-RABBITMQ_PASSWORD=admin123
-
-# API Configuration
-ENVIRONMENT=production
-PYTHONPATH=/app
-```
-
-### Docker Configuration
-```yaml
-# docker-compose.yml
-services:
-  api:
-    ports:
-      - "8001:8001"
-    environment:
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
-  
-  video-worker:
-    deploy:
-      replicas: 2  # รัน 2 workers
-  
-  rabbitmq:
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-```
-
-## 📊 Monitoring
-
-### Queue Monitoring
-```python
-# ตรวจสอบสถิติ queue
-response = requests.get('http://localhost:8001/queue/stats')
-stats = response.json()
-print("Queue Statistics:", stats)
-```
-
-### Worker Monitoring
-```bash
-# ดู worker logs
-docker-compose logs -f video-worker
-
-# ตรวจสอบ worker processes
-ps aux | grep video_worker
-```
-
-### Health Checks
-```bash
-# API Health
+# ตรวจสอบ health
 curl http://localhost:8001/health
-
-# Queue Health
-curl http://localhost:8001/queue/health
 ```
 
-## 🚀 Scaling
+### 2. **ทดสอบระบบ**
+- **Test Index:** `http://localhost:8001/test-files/` หรือ `https://staging-ph2.bms.senate.go.th/transcribe/test-files/`
+- **HTML Tests:** `test-staging.html`, `test-local.html`, `test_permission_fix.html`
+- **Python Tests:** `test-files/python-tests/` หรือ `python test-files/python-tests/run_all_tests.py`
 
-### เพิ่ม Workers
+### 3. **API Endpoints**
+- **Health Check:** `GET /health`
+- **Upload File:** `POST /upload/`
+- **Start Transcription:** `POST /transcribe-enhanced/start`
+- **Get Results:** `GET /history/transcriptions/{task_id}`
+- **WebSocket:** `WS /ws/transcription` (สำหรับ real-time updates)
+
+## 🔧 การแก้ไขปัญหา
+
+### **Permission Issues**
 ```bash
-# ใน docker-compose.yml
-video-worker:
-  deploy:
-    replicas: 5  # เพิ่มเป็น 5 workers
+# ใช้ script แก้ไข permission
+./scripts/fix_staging_permissions.sh
 
-# หรือรัน workers แยก
-python run_worker.py &
-python run_worker.py &
-python run_worker.py &
+# ตรวจสอบ container user
+docker exec transcription-api-staging id
+docker exec transcription-whisper-staging id
+
+# ตรวจสอบ file ownership
+ls -la uploads/ temp/ storage/ models/
 ```
 
-### Load Balancing
-```yaml
-# ใช้ nginx สำหรับ load balancing
-nginx:
-  ports:
-    - "80:80"
-  depends_on:
-    - api
-```
-
-## 🔍 Troubleshooting
-
-### RabbitMQ Issues
+### **Model Loading Issues**
 ```bash
-# ตรวจสอบสถานะ RabbitMQ
-sudo systemctl status rabbitmq-server
+# ตรวจสอบ model file
+file models/ggml-base.bin
+ls -la models/ggml-base.bin
 
-# เริ่มต้นใหม่
-sudo systemctl restart rabbitmq-server
+# Re-download model หากจำเป็น
+./scripts/download-models.sh
 
-# ตรวจสอบ queue
-rabbitmqctl list_queues
+# ตรวจสอบ Whisper service logs
+docker logs transcription-whisper-staging --tail 20
 ```
 
-### Worker Issues
+### **WebSocket Issues**
 ```bash
-# ตรวจสอบ worker logs
-docker-compose logs video-worker
+# ตรวจสอบ WebSocket connection
+curl -i -N -H "Connection: Upgrade" \
+     -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Key: test" \
+     -H "Sec-WebSocket-Version: 13" \
+     http://localhost:8001/ws/transcription
 
-# ตรวจสอบ queue messages
-curl http://localhost:8001/queue/info
+# ดู logs ใน browser console
+# ตรวจสอบ nginx proxy settings สำหรับ WebSocket
 ```
 
-### Performance Issues
+### **Transcription Issues**
 ```bash
-# ตรวจสอบ CPU/Memory usage
-docker stats
+# ตรวจสอบ service status
+docker ps | grep transcription
 
-# ตรวจสอบ queue backlog
-curl http://localhost:8001/queue/stats
+# ดู logs ของแต่ละ service
+docker logs transcription-api-staging --tail 20
+docker logs transcription-whisper-staging --tail 20
+docker logs video-worker-1-staging --tail 20
+
+# ตรวจสอบ database
+docker exec transcription-api-staging ls -la /app/storage/
 ```
 
-## 📖 Documentation
+### **Environment Variables Issues**
+```bash
+# ตรวจสอบ env ใน container
+docker exec transcription-api-staging env | grep -E "(API_URL|REDIS|RABBITMQ|WHISPER)"
 
-- [RabbitMQ Setup Guide](RABBITMQ_SETUP.md)
-- [API Documentation](http://localhost:8001/docs)
-- [Video Processing Examples](examples/video_processing_example.py)
+# ตรวจสอบ docker-compose environment
+cat docker-compose.yml | grep -A 10 -B 2 environment
+```
 
-## 🤝 Contributing
+## 📝 หมายเหตุ
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+### **File Permissions**
+- **Directories:** `drwxrwxrwx` (777) - `uploads/`, `temp/`, `storage/`, `models/`
+- **Files:** `rw-r--r--` (644) - ไฟล์ที่อัปโหลด
+- **Owner:** `kscdev:kscdev` (1001:1001) บน host, `root:root` (0:0) ใน container
 
-## 📄 License
+### **Performance**
+- **ไฟล์ 4 วินาที:** ใช้เวลาประมาณ 1-2 นาที (อัตราส่วน ~20x)
+- **Model size:** ggml-base.bin = 148MB
+- **Memory usage:** ประมาณ 1-2GB RAM สำหรับ Whisper service
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+### **Network & Ports**
+- **API:** Port 8001 (HTTP/WebSocket)
+- **Whisper:** Port 8002 (HTTP)
+- **Redis:** Port 6379
+- **RabbitMQ:** Port 5672 (AMQP), 15672 (Management UI)
+- **WebSocket:** รองรับ `wss://` และ `ws://`
+
+### **Cleanup**
+- ไฟล์ใน `temp/` จะถูกลบอัตโนมัติหลัง 24 ชั่วโมง
+- ระบบรองรับ WebSocket และ Polling fallback
+- Database cleanup ทำได้ผ่าน API endpoints

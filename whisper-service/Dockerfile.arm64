@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM --platform=linux/arm64 ubuntu:22.04
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -42,4 +42,4 @@ COPY whisper_api.py /app/whisper_api.py
 EXPOSE 8002
 
 # Default command
-CMD ["python3", "/app/whisper_api.py"] 
+CMD ["python3", "/app/whisper_api.py"]

@@ -29,7 +29,23 @@ async def poll_task_status(task_id: str):
         # ดึงข้อมูลจาก memory ก่อน
         if task_id in transcription_service.tasks:
             task = transcription_service.tasks[task_id]
-            return {
+            
+            # ดึงข้อมูล transcription ที่มีอยู่
+            partial_text = ""
+            chunks = []
+            
+            if hasattr(task, 'partial_text') and task.partial_text:
+                partial_text = task.partial_text
+                
+            if hasattr(task, 'chunks') and task.chunks:
+                # แปลง chunks เป็น dict ถ้าเป็น objects
+                if isinstance(task.chunks, list) and len(task.chunks) > 0:
+                    if hasattr(task.chunks[0], 'dict'):
+                        chunks = [chunk.dict() for chunk in task.chunks]
+                    else:
+                        chunks = task.chunks
+                
+            response_data = {
                 "task_id": task_id,
                 "status": task.status,
                 "progress": task.progress or 0,
@@ -38,12 +54,29 @@ async def poll_task_status(task_id: str):
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
                 "error_message": task.error_message,
                 "stage": getattr(task, 'current_stage', 'unknown'),
-                "results_available": task.status == "completed"
+                "results_available": task.status == "completed",
+                "partial_text": partial_text,
+                "chunks": chunks
             }
+            
+            # Debug logging
+            logger.info(f"Polling response for {task_id}: partial_text={len(partial_text)} chars, chunks={len(chunks)}")
+            
+            return response_data
         
         # ถ้าไม่มีใน memory ให้ดึงจาก storage
         task_data = json_storage.get_transcription(task_id)
         if task_data:
+            # ดึงข้อมูล transcription ที่มีอยู่
+            partial_text = ""
+            chunks = []
+            
+            if task_data.get("partial_text"):
+                partial_text = task_data.get("partial_text")
+                
+            if task_data.get("chunks"):
+                chunks = task_data.get("chunks")
+                
             return {
                 "task_id": task_id,
                 "status": task_data.get("status", "unknown"),
@@ -53,7 +86,9 @@ async def poll_task_status(task_id: str):
                 "completed_at": task_data.get("completed_at"),
                 "error_message": task_data.get("error_message"),
                 "stage": task_data.get("current_stage", "completed" if task_data.get("status") == "completed" else "unknown"),
-                "results_available": task_data.get("status") == "completed"
+                "results_available": task_data.get("status") == "completed",
+                "partial_text": partial_text,
+                "chunks": chunks
             }
         
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
