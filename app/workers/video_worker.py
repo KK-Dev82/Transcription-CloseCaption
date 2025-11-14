@@ -522,21 +522,32 @@ class VideoWorker:
                 task_id=task_data['task_id'],
                 status="processing",
                 file_path=file_path,
+                file_url=task_data.get('file_url'),
+                file_name=task_data.get('file_name'),
                 language=language,
                 created_at=datetime.now()
             )
+            task.job_id = task_data.get('job_id')
+            task.user_id = task_data.get('user_id')
+            task.callback_url = task_data.get('callback_url')
             
             # เพิ่ม task เข้าไปใน transcription service
             self.transcription_service.tasks[task_data['task_id']] = task
             
             # เรียกใช้ transcription service
             await self.transcription_service._process_transcription(
-                task_data['task_id'], file_path, language, model_size, chunk_duration
+                task_data['task_id'],
+                file_path,
+                language,
+                model_size,
+                chunk_duration,
+                file_url=task_data.get('file_url'),
+                file_name=task_data.get('file_name')
             )
             
             # อัปเดต task
             task_data['status'] = 'completed'
-            task_data['completed_at'] = asyncio.get_event_loop().time()
+            task_data['completed_at'] = datetime.now().isoformat()
             
             # บันทึกลง JSON storage
             self.json_storage.save_transcription(task_data['task_id'], task_data)
@@ -545,7 +556,7 @@ class VideoWorker:
             logger.error(f"เกิดข้อผิดพลาดในการ transcription: {e}")
             task_data['status'] = 'failed'
             task_data['error_message'] = str(e)
-            task_data['completed_at'] = asyncio.get_event_loop().time()
+            task_data['completed_at'] = datetime.now().isoformat()
             self.json_storage.save_transcription(task_data['task_id'], task_data)
     
     def run(self):

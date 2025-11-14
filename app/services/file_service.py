@@ -27,6 +27,13 @@ class FileService:
         async with aiofiles.open(file_path, 'wb') as f:
             await f.write(file_content)
         
+        # ตั้งค่า permission ให้ไฟล์สามารถอ่านได้
+        try:
+            os.chmod(file_path, 0o644)  # rw-r--r--
+            logger.info(f"Set file permission for: {file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to set file permission: {e}")
+        
         return str(file_path)
     
     def get_file_info(self, file_path: str) -> dict:

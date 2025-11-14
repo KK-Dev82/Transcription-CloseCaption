@@ -50,21 +50,16 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
 async def get_enhanced_status(task_id: str):
     """ดูสถานะและใช้ Thai processing ถ้าเสร็จแล้ว"""
     try:
-        # ใช้ regular transcription API
-        import requests
+        # ใช้ polling function แทนการเรียก HTTP
+        from ..api.polling import poll_task_status
         
-        response = requests.get(f"http://localhost:8001/transcribe/status/{task_id}")
-        if response.status_code == 404:
-            raise HTTPException(status_code=404, detail="ไม่พบ task")
-        elif response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="เกิดข้อผิดพลาด")
-        
-        task_data = response.json()
+        task_data = await poll_task_status(task_id)
         
         # ถ้าเสร็จแล้ว และยังไม่ได้ Thai processing
-        if task_data.get("status") == "completed" and not task_data.get("thai_processed"):
-            logger.info(f"Applying Thai processing to completed task: {task_id}")
-            task_data = await _apply_thai_processing_to_task(task_id, task_data)
+        # ชั่วคราว skip Thai processing เพื่อทดสอบ
+        # if task_data.get("status") == "completed" and not task_data.get("thai_processed"):
+        #     logger.info(f"Applying Thai processing to completed task: {task_id}")
+        #     task_data = await _apply_thai_processing_to_task(task_id, task_data)
         
         return task_data
         

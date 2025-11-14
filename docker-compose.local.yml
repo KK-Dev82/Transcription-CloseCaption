@@ -1,8 +1,11 @@
 services:
   # Main API Service
   api:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: transcription-api-staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kk-transcription:local-dev
+    container_name: transcription-api-local
     ports:
       - "8001:8001"
     volumes:
@@ -10,25 +13,26 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
+      - ./test-files:/app/test-files
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=admin
-      - RABBITMQ_PASSWORD=admin123
-      - WHISPER_API_URL=http://transcription-whisper-staging:8002
-      - REDIS_URL=redis://transcription-redis-staging:6379
+      - RABBITMQ_USER=senate
+      - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
+      - WHISPER_API_URL=http://whisper:8002
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - redis
-      - rabbitmq
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -43,33 +47,42 @@ services:
 
   # Video Processing Worker 1
   video-worker-1:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-1-staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kk-transcription:local-dev
+    container_name: video-worker-1-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=admin
-      - RABBITMQ_PASSWORD=admin123
-      - WHISPER_API_URL=http://transcription-whisper-staging:8002
-      - REDIS_URL=redis://transcription-redis-staging:6379
+      - RABBITMQ_USER=senate
+      - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
+      - WHISPER_API_URL=http://whisper:8002
+      - REDIS_URL=redis://redis:6379
     depends_on:
-      - rabbitmq
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -78,33 +91,42 @@ services:
 
   # Video Processing Worker 2
   video-worker-2:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-2-staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kk-transcription:local-dev
+    container_name: video-worker-2-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=admin
-      - RABBITMQ_PASSWORD=admin123
-      - WHISPER_API_URL=http://transcription-whisper-staging:8002
-      - REDIS_URL=redis://transcription-redis-staging:6379
+      - RABBITMQ_USER=senate
+      - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
+      - WHISPER_API_URL=http://whisper:8002
+      - REDIS_URL=redis://redis:6379
     depends_on:
-      - rabbitmq
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -113,73 +135,58 @@ services:
 
   # Video Processing Worker 3
   video-worker-3:
-    image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-    container_name: video-worker-3-staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kk-transcription:local-dev
+    container_name: video-worker-3-local
     command: python -m app.workers.video_worker
     volumes:
       - ./uploads:/app/uploads
       - ./storage:/app/storage
       - ./temp:/app/temp
       - ./models:/app/models
-    env_file:
-      - env.staging
     environment:
       - PYTHONPATH=/app
-      - ENVIRONMENT=staging
-      - STORAGE_TYPE=sqlite
-      - SQLITE_DB_PATH=/app/storage/database.db
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=admin
-      - RABBITMQ_PASSWORD=admin123
-      - WHISPER_API_URL=http://transcription-whisper-staging:8002
-      - REDIS_URL=redis://transcription-redis-staging:6379
+      - RABBITMQ_USER=senate
+      - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
+      - WHISPER_API_URL=http://whisper:8002
+      - REDIS_URL=redis://redis:6379
     depends_on:
-      - rabbitmq
       - redis
     networks:
       - app-network
+      - senate-backend_kk-network
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
           memory: 4G
           cpus: '0.5'
 
-  # RabbitMQ สำหรับ message queue
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: transcription-rabbitmq-staging
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      - RABBITMQ_DEFAULT_USER=admin
-      - RABBITMQ_DEFAULT_PASS=admin123
-    volumes:
-      - rabbitmq_data_staging:/var/lib/rabbitmq
-    networks:
-      - app-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '0.5'
+  # RabbitMQ ย้ายไป Backend API แล้ว
 
   # Redis สำหรับ caching และ queue
   redis:
     image: redis:7-alpine
-    container_name: transcription-redis-staging
+    container_name: transcription-redis-local
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
-      - redis_data_staging:/data
+      - redis_data_local:/data
     networks:
       - app-network
     restart: unless-stopped
@@ -190,10 +197,13 @@ services:
           memory: 2G
           cpus: '0.5'
 
-  # Whisper.cpp สำหรับ transcription (Staging)
+  # Whisper.cpp สำหรับ transcription (Local)
   whisper:
-    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
-    container_name: transcription-whisper-staging
+    build:
+      context: ./whisper-service
+      dockerfile: Dockerfile.arm64
+    image: kk-transcription-whisper:local-dev
+    container_name: transcription-whisper-local
     ports:
       - "8002:8002"
     volumes:
@@ -202,7 +212,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
     networks:
       - app-network
     restart: unless-stopped
@@ -220,8 +230,11 @@ services:
 
   # Whisper สำหรับ Live Streaming
   whisper-live:
-    image: kksenateacr.azurecr.io/kk-transcription-whisper:alpha-dev
-    container_name: transcription-whisper-live-staging
+    build:
+      context: ./whisper-service
+      dockerfile: Dockerfile.arm64
+    image: kk-transcription-whisper:local-dev
+    container_name: transcription-whisper-live-local
     ports:
       - "8003:8002"
     volumes:
@@ -230,7 +243,7 @@ services:
       - ./models:/app/models
     environment:
       - WHISPER_MODEL_PATH=/app/models
-      - ENVIRONMENT=staging
+      - ENVIRONMENT=local
     networks:
       - app-network
     restart: unless-stopped
@@ -247,9 +260,10 @@ services:
           cpus: '1.0'
 
 volumes:
-  redis_data_staging:
-  rabbitmq_data_staging:
+  redis_data_local:
 
 networks:
   app-network:
     driver: bridge
+  senate-backend_kk-network:
+    external: true

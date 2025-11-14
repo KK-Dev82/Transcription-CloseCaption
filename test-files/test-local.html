@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧪 Local Transcription Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .status { 
+            display: flex; 
+            gap: 20px; 
+            margin-bottom: 30px; 
+            flex-wrap: wrap;
+        }
+        .status-card { 
+            flex: 1; 
+            min-width: 200px;
+            padding: 15px; 
+            border-radius: 8px; 
+            text-align: center;
+        }
+        .connected { background: #d4edda; border: 1px solid #c3e6cb; }
+        .disconnected { background: #f8d7da; border: 1px solid #f5c6cb; }
+        .polling { background: #fff3cd; border: 1px solid #ffeaa7; }
+        
+        .upload-section { 
+            margin-bottom: 30px; 
+            border: 2px solid #007bff;
+            border-radius: 12px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+        .file-input { 
+            width: 100%; 
+            padding: 15px; 
+            border: 2px dashed #007bff; 
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            background: white;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+        .file-input:hover { border-color: #007bff; }
+        
+        button { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 12px 24px; 
+            border-radius: 6px; 
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        
+        .progress-section { margin-bottom: 30px; }
+        .progress-bar { 
+            width: 100%; 
+            height: 20px; 
+            background: #e9ecef; 
+            border-radius: 10px; 
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill { 
+            height: 100%; 
+            background: linear-gradient(90deg, #28a745, #20c997); 
+            transition: width 0.3s ease;
+        }
+        
+        .logs { 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            border-radius: 6px; 
+            padding: 15px; 
+            height: 300px; 
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry { 
+            margin-bottom: 5px; 
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .log-info { background: #d1ecf1; }
+        .log-success { background: #d4edda; }
+        .log-error { background: #f8d7da; }
+        .log-warning { background: #fff3cd; }
+        
+        .environment-info {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+        
+        .realtime-update {
+            animation: pulse 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 Local Transcription Test</h1>
+            <p>ทดสอบระบบ Transcription บน Local Environment (เปิดจากไฟล์)</p>
+        </div>
+
+        <!-- Environment Info -->
+        <div class="environment-info">
+            <h3>🌍 Environment Information</h3>
+            <div id="env-info">
+                <div><strong>Environment:</strong> <span id="env-type">Local File</span></div>
+                <div><strong>API Base:</strong> <span id="api-base">http://localhost:8001</span></div>
+                <div><strong>WebSocket Base:</strong> <span id="ws-base">ws://localhost:8001</span></div>
+                <div><strong>User ID:</strong> <span id="user-id">-</span></div>
+                <div><strong>Status:</strong> <span id="server-status">Checking...</span></div>
+            </div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="status">
+            <div class="status-card" id="connection-status">
+                <h3>🔌 Connection</h3>
+                <div id="connection-type">Checking...</div>
+                <div id="connection-details"></div>
+            </div>
+            <div class="status-card" id="api-status">
+                <h3>🌐 API Health</h3>
+                <div id="api-health">Checking...</div>
+            </div>
+            <div class="status-card" id="websocket-status">
+                <h3>📡 WebSocket</h3>
+                <div id="ws-health">Checking...</div>
+            </div>
+        </div>
+
+        <!-- File Upload -->
+        <div class="upload-section">
+            <h3>🎬 อัปโหลดและแปลงไฟล์</h3>
+            <div class="file-input" onclick="document.getElementById('file').click()">
+                <input type="file" id="file" accept=".mp4,.mp3,.wav,.m4a" style="display:none" onchange="handleFileSelect(event)">
+                <span id="file-text">📁 คลิกเพื่อเลือกไฟล์ (MP4, MP3, WAV, M4A)</span>
+            </div>
+            <div id="selectedFile" style="display:none; margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 6px;">
+                <strong>ไฟล์ที่เลือก:</strong> <span id="fileName"></span> 
+                (<span id="fileSize"></span>)
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button onclick="startTranscription()" id="transcribe-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0;">
+                    🚀 เริ่มแปลงเสียง
+                </button>
+                <button onclick="startLiveCaption()" id="live-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #17a2b8;">
+                    📺 Live Caption
+                </button>
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                <button onclick="startRealtimeCaptionMode()" id="realtime-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #28a745;">
+                    🎬 Real-time Live Caption
+                </button>
+                <button onclick="startNewRealtimeCaption()" id="new-realtime-caption-btn" disabled style="flex: 1; padding: 12px; margin: 5px 0; background: #17a2b8;">
+                    🚀 New Real-time Caption API
+                </button>
+                <button onclick="testSearchFeature()" id="search-test-btn" style="flex: 1; padding: 12px; margin: 5px 0; background: #6f42c1;">
+                    🔍 ทดสอบค้นหา
+                </button>
+            </div>
+            <button onclick="testWithSampleFile()" style="width: 100%; padding: 8px; background: #6c757d;">
+                🎬 ทดสอบด้วยไฟล์ตัวอย่าง
+            </button>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-section" id="progress-section" style="display:none">
+            <h3>⏳ ความคืบหน้าการแปลง</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                <div><strong>Task ID:</strong> <span id="current-task-id">-</span></div>
+                <div><strong>สถานะ:</strong> <span id="current-status">-</span></div>
+                <div><strong>ขั้นตอน:</strong> <span id="current-stage">-</span></div>
+            </div>
+            <div class="progress-bar" style="background: #e9ecef; height: 25px; border-radius: 12px; overflow: hidden; margin: 15px 0;">
+                <div class="progress-fill" id="progress-fill" style="background: linear-gradient(45deg, #007bff, #0056b3); height: 100%; width: 0%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 12px;"></div>
+            </div>
+            <div style="text-align: center; margin: 10px 0;"><strong>ความคืบหน้า:</strong> <span id="progress-text">0%</span></div>
+        </div>
+
+        <!-- Transcription Results -->
+        <div class="results-section" id="results-section" style="display:none">
+            <h3>📝 ผลการแปลงเสียง</h3>
+            <div id="transcription-result" style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin: 15px 0;">
+                <div id="transcription-text" style="white-space: pre-wrap; line-height: 1.8; font-size: 16px; margin-bottom: 15px; min-height: 50px; background: white; padding: 15px; border-radius: 6px; border: 2px solid #e3f2fd; transition: all 0.3s ease;">
+                    <div style="text-align: center; color: #666; font-style: italic;">
+                        กำลังรอการแปลงเสียง... ผลลัพธ์จะแสดงแบบ real-time
+                    </div>
+                </div>
+                <div id="transcription-stats" style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.9em; color: #666;">
+                    <div><strong>จำนวนคำ:</strong> <span id="word-count">0</span></div>
+                    <div><strong>ระยะเวลา:</strong> <span id="duration">-</span> วินาที</div>
+                    <div><strong>โมเดล:</strong> <span id="model-used">-</span></div>
+                    <div><strong>ภาษา:</strong> <span id="language">-</span></div>
+                </div>
+            </div>
+            
+            <!-- Real-time Chunks Display -->
+            <div id="realtime-chunks-section" style="display:none; margin-top: 20px;">
+                <h4>🎵 ผลลัพธ์แบบ Real-time</h4>
+                <div id="caption-chunks" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: white;">
+                    <!-- Chunks will be displayed here in real-time -->
+                </div>
+            </div>
+        </div>
+
+        <!-- History Section -->
+        <div class="container">
+            <h3>📚 ประวัติการแปลงเสียง</h3>
+            <div style="margin-bottom: 15px;">
+                <button onclick="loadHistory()" style="margin-right: 10px;">🔄 โหลดประวัติ</button>
+                <button onclick="clearHistoryView()">🗑️ ล้างการแสดงผล</button>
+            </div>
+            <div id="history-section" style="display:none;">
+                <div id="history-stats" style="background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 0.9em;"></div>
+                <div id="history-list" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px;"></div>
+            </div>
+            <div id="history-loading" style="display:none; text-align: center; padding: 20px; color: #666;">
+                🔄 กำลังโหลดประวัติ...
+            </div>
+        </div>
+
+        <!-- Search Section -->
+        <div class="container">
+            <h3>🔍 ค้นหาข้อความในวิดีโอ</h3>
+            <div style="margin-bottom: 15px;">
+                <input type="text" id="search-input" placeholder="พิมพ์คำที่ต้องการค้นหา..." style="width: 70%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px;">
+                <button onclick="searchInVideos()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    🔍 ค้นหา
+                </button>
+                <button onclick="clearSearch()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">
+                    🗑️ ล้าง
+                </button>
+            </div>
+            <div id="search-results" style="display:none;">
+                <h4>🎯 ผลการค้นหา</h4>
+                <div id="search-results-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: white;"></div>
+            </div>
+        </div>
+
+        <!-- Live Caption Section -->
+        <div class="container" id="live-caption-section" style="display:none;">
+            <h3>📺 Live Close Caption</h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                <div id="live-caption-display" style="background: white; padding: 20px; border-radius: 6px; min-height: 100px; border-left: 4px solid #17a2b8; font-size: 18px; line-height: 1.6;">
+                    <div style="text-align: center; color: #666;">กำลังรอการแปลงเสียง...</div>
+                </div>
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="stopLiveCaption()" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        ⏹️ หยุด Live Caption
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real-time Live Caption Section -->
+        <div class="container" id="realtime-caption-section" style="display:none;">
+            <h3>🎬 Real-time Live Close Caption</h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                <!-- Video Player -->
+                <div id="video-player-container" style="margin-bottom: 20px;">
+                    <video id="preview-video" controls style="width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                        <p style="color: #666;">เบราว์เซอร์ของคุณไม่รองรับการเล่นวิดีโอ</p>
+                    </video>
+                </div>
+                
+                <!-- Live Caption Display -->
+                <div id="realtime-caption-display" style="background: white; padding: 20px; border-radius: 6px; min-height: 200px; border-left: 4px solid #17a2b8;">
+                    <div style="text-align: center; color: #666; margin-bottom: 20px;">
+                        📺 เลือกวีดิโอเพื่อเริ่ม Live Caption
+                    </div>
+                    
+                    <!-- Caption Chunks -->
+                    <div id="caption-chunks" style="max-height: 300px; overflow-y: auto;">
+                        <!-- Caption chunks will be displayed here -->
+                    </div>
+                </div>
+                
+                <!-- Controls -->
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="startRealtimeCaption()" id="start-realtime-btn" style="padding: 10px 20px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">
+                        ▶️ เริ่ม Live Caption
+                    </button>
+                    <button onclick="pauseRealtimeCaption()" id="pause-realtime-btn" style="padding: 10px 20px; background: #ffc107; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; display: none;">
+                        ⏸️ หยุดชั่วคราว
+                    </button>
+                    <button onclick="stopRealtimeCaption()" id="stop-realtime-btn" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        ⏹️ หยุด Live Caption
+                    </button>
+                </div>
+                
+                <!-- Progress -->
+                <div style="margin-top: 15px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span id="current-time">00:00</span>
+                        <span id="total-time">00:00</span>
+                    </div>
+                    <div style="background: #e9ecef; height: 6px; border-radius: 3px; overflow: hidden;">
+                        <div id="video-progress" style="background: #17a2b8; height: 100%; width: 0%; transition: width 0.1s ease;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Detail View Modal -->
+        <div id="detail-modal" style="display:none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;" onclick="closeDetailModal()">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 12px; max-width: 80%; max-height: 80%; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.3);" onclick="event.stopPropagation()">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 id="detail-title">📝 รายละเอียดการแปลง</h3>
+                    <button onclick="closeDetailModal()" style="background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer;">✕ ปิด</button>
+                </div>
+                <div id="detail-content"></div>
+            </div>
+        </div>
+
+        <!-- Logs -->
+        <div style="margin-top: 30px;">
+            <h3>📝 Logs</h3>
+            <button onclick="clearLogs()">Clear Logs</button>
+            <div class="logs" id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let selectedFile = null;
+        let currentTaskId = null;
+        let websocket = null;
+        let connectionType = 'disconnected';
+        let pollingInterval = null;
+        
+        // Real-time Caption State
+        let realtimeCaptionActive = false;
+        let videoElement = null;
+        let captionChunks = [];
+        let currentChunkIndex = 0;
+        let videoDuration = 0;
+        let realtimeTaskId = null;
+        
+        // New Real-time Caption State
+        let newRealtimeSessionId = null;
+        let newRealtimeWebSocket = null;
+        let newRealtimeChunks = [];
+        let newRealtimeDelay = 0;
+        
+        // Local environment configuration
+        const API_BASE = 'http://localhost:8001';
+        const WS_BASE = 'ws://localhost:8001';
+        const userId = 'local_test_' + Math.random().toString(36).substr(2, 9);
+
+        // Logging
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // File handling
+        function handleFileSelect(event) {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-text').textContent = `📁 ${selectedFile.name}`;
+                document.getElementById('fileName').textContent = selectedFile.name;
+                document.getElementById('fileSize').textContent = formatFileSize(selectedFile.size);
+                document.getElementById('selectedFile').style.display = 'block';
+                document.getElementById('transcribe-btn').disabled = false;
+                document.getElementById('live-caption-btn').disabled = false;
+                log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // WebSocket connection
+        function connectWebSocket() {
+            try {
+                const wsUrl = `${WS_BASE}/ws/transcription/${userId}`;
+                log(`Connecting to WebSocket: ${wsUrl}`);
+                
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = () => {
+                    log('✅ WebSocket connected', 'success');
+                    connectionType = 'websocket';
+                    updateConnectionStatus();
+                };
+                
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 WebSocket message: ${data.type}`, 'info');
+                    
+                    if (data.type === 'ping') {
+                        websocket.send(JSON.stringify({
+                            type: 'pong',
+                            timestamp: data.timestamp
+                        }));
+                        log('🏓 Sent pong response', 'info');
+                        return;
+                    }
+                    
+                    if (data.task_id && data.task_id === currentTaskId) {
+                        updateTaskProgress(data);
+                    }
+                };
+                
+                websocket.onclose = (event) => {
+                    log(`🔴 WebSocket closed: ${event.code}`, 'warning');
+                    connectionType = 'disconnected';
+                    updateConnectionStatus();
+                    
+                    // Start polling fallback
+                    setTimeout(() => {
+                        log('🔄 Starting polling fallback', 'info');
+                        startPolling();
+                    }, 2000);
+                };
+                
+                websocket.onerror = (error) => {
+                    log('❌ WebSocket error', 'error');
+                };
+                
+            } catch (error) {
+                log(`❌ WebSocket connection failed: ${error.message}`, 'error');
+                startPolling();
+            }
+        }
+
+        // Polling fallback
+        function startPolling() {
+            if (pollingInterval) return;
+            
+            connectionType = 'polling';
+            updateConnectionStatus();
+            log('🔄 Polling mode active', 'warning');
+            
+            pollingInterval = setInterval(async () => {
+                if (currentTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${currentTaskId}`);
+                        const data = await response.json();
+                        updateTaskProgress(data);
+                    } catch (error) {
+                        log(`❌ Polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 3000);
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // Task progress updates
+        function updateTaskProgress(data) {
+            document.getElementById('current-task-id').textContent = data.task_id?.slice(0, 8) || '-';
+            document.getElementById('current-status').textContent = data.status || '-';
+            document.getElementById('current-stage').textContent = data.stage || '-';
+            
+            const progress = data.progress || 0;
+            document.getElementById('progress-text').textContent = `${progress}%`;
+            document.getElementById('progress-fill').style.width = `${progress}%`;
+            document.getElementById('progress-fill').textContent = `${progress}%`;
+            
+            // Show results section if not already shown
+            document.getElementById('results-section').style.display = 'block';
+            
+            // Update transcription text in real-time if available
+            if (data.partial_text || (data.chunks && data.chunks.length > 0)) {
+                log(`📝 Updating real-time text: ${data.partial_text?.length || 0} chars, ${data.chunks?.length || 0} chunks`, 'info');
+                updateTranscriptionText(data.partial_text || '', data.chunks || []);
+            }
+            
+            if (data.status === 'completed') {
+                log('✅ Transcription completed!', 'success');
+                stopPolling();
+                // Fetch final results
+                fetchTranscriptionResults(data.task_id);
+            } else if (data.status === 'failed') {
+                log(`❌ Transcription failed: ${data.error_message || 'Unknown error'}`, 'error');
+                stopPolling();
+            }
+        }
+
+        async function fetchTranscriptionResults(taskId) {
+            try {
+                log('🔍 Fetching transcription results...', 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    displayTranscriptionResults(data);
+                } else {
+                    log('⚠️ No transcription results found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to fetch results: ${error.message}`, 'error');
+            }
+        }
+
+        function updateTranscriptionText(partialText, chunks = []) {
+            const textElement = document.getElementById('transcription-text');
+            if (partialText) {
+                textElement.innerHTML = `<div style="color: #333; font-weight: 500;" class="realtime-update">${partialText}</div>`;
+                log(`📝 Updated transcription text: ${partialText.length} characters`, 'info');
+                
+                // Add pulse animation
+                textElement.classList.add('realtime-update');
+                setTimeout(() => {
+                    textElement.classList.remove('realtime-update');
+                }, 500);
+            }
+            
+            // Update word count
+            const wordCount = partialText ? partialText.split(/\s+/).length : 0;
+            document.getElementById('word-count').textContent = wordCount;
+            
+            // Update chunks if available
+            if (chunks.length > 0) {
+                updateChunksDisplay(chunks);
+                // Show real-time chunks section
+                document.getElementById('realtime-chunks-section').style.display = 'block';
+            }
+        }
+
+        function updateChunksDisplay(chunks) {
+            const chunksContainer = document.getElementById('caption-chunks');
+            if (!chunksContainer) {
+                log('❌ Chunks container not found', 'error');
+                return;
+            }
+            
+            log(`🎵 Updating chunks display: ${chunks.length} chunks`, 'info');
+            
+            chunksContainer.innerHTML = '';
+            
+            chunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.id = `realtime-chunk-${index}`;
+                chunkDiv.style.cssText = `
+                    padding: 12px; 
+                    margin: 8px 0; 
+                    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+                    border-left: 4px solid #17a2b8; 
+                    border-radius: 8px;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    animation: slideIn 0.5s ease-out;
+                `;
+                
+                chunkDiv.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-size: 0.9em; color: #666; font-weight: 600;">
+                            🎵 Chunk ${index + 1}
+                        </div>
+                        <div style="font-size: 0.8em; color: #17a2b8; background: #e3f2fd; padding: 2px 8px; border-radius: 12px;">
+                            ${formatTime(chunk.start_time || 0)} - ${formatTime(chunk.end_time || 0)}
+                        </div>
+                    </div>
+                    <div style="line-height: 1.6; color: #333; font-size: 14px;">${chunk.text || 'No text'}</div>
+                `;
+                
+                chunksContainer.appendChild(chunkDiv);
+                
+                // Scroll to latest chunk
+                chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+            
+            log(`✅ Chunks display updated with ${chunks.length} chunks`, 'success');
+        }
+
+        function displayTranscriptionResults(data) {
+            // Show results section
+            document.getElementById('results-section').style.display = 'block';
+            
+            // Display transcription text
+            document.getElementById('transcription-text').textContent = data.results.full_text || 'ไม่พบข้อความ';
+            
+            // Display stats
+            document.getElementById('word-count').textContent = data.results.word_count || 0;
+            document.getElementById('duration').textContent = data.file_info?.total_duration || '-';
+            document.getElementById('model-used').textContent = data.basic_info?.model_size || '-';
+            document.getElementById('language').textContent = data.basic_info?.language || '-';
+            
+            // Display chunks if available
+            if (data.results.chunks && data.results.chunks.length > 0) {
+                updateChunksDisplay(data.results.chunks);
+            }
+            
+            log('🎉 Results displayed successfully!', 'success');
+        }
+
+        // Connection status
+        function updateConnectionStatus() {
+            const statusEl = document.getElementById('connection-status');
+            const typeEl = document.getElementById('connection-type');
+            
+            statusEl.className = 'status-card';
+            
+            switch (connectionType) {
+                case 'websocket':
+                    statusEl.classList.add('connected');
+                    typeEl.textContent = '🟢 WebSocket (Real-time)';
+                    break;
+                case 'polling':
+                    statusEl.classList.add('polling');
+                    typeEl.textContent = '🟡 Polling (Fallback)';
+                    break;
+                default:
+                    statusEl.classList.add('disconnected');
+                    typeEl.textContent = '🔴 Disconnected';
+            }
+        }
+
+        // API functions
+        async function startTranscription() {
+            if (!selectedFile) {
+                log('❌ No file selected', 'error');
+                return;
+            }
+
+            try {
+                // 1. Upload file
+                log(`📤 Uploading ${selectedFile.name}...`);
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+
+                // 2. Start transcription
+                log('🎤 Starting transcription...');
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                currentTaskId = transcribeResult.task_id;
+                
+                log(`✅ Transcription started: ${currentTaskId}`, 'success');
+                
+                // Show progress section
+                document.getElementById('progress-section').style.display = 'block';
+                
+                // Subscribe to WebSocket updates
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        type: 'subscribe',
+                        task_id: currentTaskId
+                    }));
+                    log('📝 Subscribed to WebSocket updates');
+                }
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testWithSampleFile() {
+            log('🎬 Testing with sample file...');
+            // Create a small test file
+            const testContent = 'This is a test audio file for transcription testing.';
+            const testFile = new File([testContent], 'test.txt', { type: 'text/plain' });
+            
+            // Simulate file selection
+            selectedFile = testFile;
+            document.getElementById('file-text').textContent = `📁 ${testFile.name}`;
+            document.getElementById('fileName').textContent = testFile.name;
+            document.getElementById('fileSize').textContent = formatFileSize(testFile.size);
+            document.getElementById('selectedFile').style.display = 'block';
+            document.getElementById('transcribe-btn').disabled = false;
+            
+            log(`Sample file created: ${testFile.name} (${formatFileSize(testFile.size)})`);
+        }
+
+        // Health checks
+        async function checkAPIHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('api-health').textContent = '🟢 Healthy';
+                    document.getElementById('api-status').className = 'status-card connected';
+                    document.getElementById('server-status').textContent = 'Server is running';
+                    log('✅ API health check passed', 'success');
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                document.getElementById('api-health').textContent = '🔴 Unhealthy';
+                document.getElementById('api-status').className = 'status-card disconnected';
+                document.getElementById('server-status').textContent = 'Server not running';
+                log(`❌ API health check failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkWebSocketHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/ws/stats`);
+                const data = await response.json();
+                
+                if (data.status === 'active') {
+                    document.getElementById('ws-health').textContent = '🟢 Healthy';
+                    document.getElementById('websocket-status').className = 'status-card connected';
+                } else {
+                    document.getElementById('ws-health').textContent = '🔴 Unhealthy';
+                    document.getElementById('websocket-status').className = 'status-card disconnected';
+                }
+                
+                document.getElementById('connection-details').textContent = 
+                    `${data.websocket_stats?.active_connections || 0} connections`;
+                    
+            } catch (error) {
+                document.getElementById('ws-health').textContent = '🔴 Error';
+                document.getElementById('websocket-status').className = 'status-card disconnected';
+                log(`❌ WebSocket health check failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize
+        async function init() {
+            log('🚀 Initializing local test frontend...');
+            log(`🔗 API Base: ${API_BASE}`);
+            log(`📡 WebSocket Base: ${WS_BASE}`);
+            log(`👤 User ID: ${userId}`);
+            
+            // Update environment info
+            document.getElementById('user-id').textContent = userId;
+            
+            // Check API health
+            await checkAPIHealth();
+            await checkWebSocketHealth();
+            
+            // Try WebSocket connection
+            connectWebSocket();
+            
+            // Update status every 30 seconds
+            setInterval(() => {
+                checkAPIHealth();
+                checkWebSocketHealth();
+            }, 30000);
+            
+            log('✅ Local test frontend ready!', 'success');
+        }
+
+        // History functions
+        async function loadHistory() {
+            const historyLoading = document.getElementById('history-loading');
+            const historySection = document.getElementById('history-section');
+            
+            historyLoading.style.display = 'block';
+            historySection.style.display = 'none';
+            
+            try {
+                log('🔄 Loading transcription history...', 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions`);
+                const data = await response.json();
+                
+                if (data.history && data.history.length > 0) {
+                    displayHistory(data);
+                    historySection.style.display = 'block';
+                    log(`✅ Loaded ${data.history.length} transcription records`, 'success');
+                } else {
+                    log('⚠️ No transcription history found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to load history: ${error.message}`, 'error');
+            } finally {
+                historyLoading.style.display = 'none';
+            }
+        }
+
+        function displayHistory(data) {
+            const historyStats = document.getElementById('history-stats');
+            const historyList = document.getElementById('history-list');
+            
+            // Display stats
+            const totalTasks = data.history.length;
+            const completedTasks = data.history.filter(t => t.status === 'completed').length;
+            const totalWords = data.history.reduce((sum, t) => sum + (t.word_count || 0), 0);
+            
+            historyStats.innerHTML = `
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div><strong>📊 รวม:</strong> ${totalTasks} รายการ</div>
+                    <div><strong>✅ เสร็จแล้ว:</strong> ${completedTasks} รายการ</div>
+                    <div><strong>📝 รวมคำ:</strong> ${totalWords.toLocaleString()} คำ</div>
+                </div>
+            `;
+            
+            // Display history list
+            historyList.innerHTML = '';
+            
+            data.history.forEach((item, index) => {
+                const historyItem = document.createElement('div');
+                historyItem.style.cssText = `
+                    padding: 15px; 
+                    border-bottom: 1px solid #eee; 
+                    cursor: pointer; 
+                    transition: background-color 0.2s ease;
+                `;
+                
+                historyItem.onmouseover = () => historyItem.style.backgroundColor = '#f8f9fa';
+                historyItem.onmouseout = () => historyItem.style.backgroundColor = 'white';
+                historyItem.onclick = () => showTranscriptionDetail(item.task_id);
+                
+                const statusColor = item.status === 'completed' ? '#28a745' : 
+                                   item.status === 'failed' ? '#dc3545' : '#ffc107';
+                
+                const createdDate = new Date(item.created_at).toLocaleDateString('th-TH', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                
+                historyItem.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: bold; margin-bottom: 5px;">
+                                🎬 Task #${index + 1}: ${item.task_id.slice(0, 8)}...
+                                <span style="color: ${statusColor}; font-size: 0.9em; margin-left: 10px;">
+                                    ${item.status === 'completed' ? '✅ เสร็จแล้ว' : 
+                                      item.status === 'failed' ? '❌ ล้มเหลว' : '⏳ กำลังดำเนินการ'}
+                                </span>
+                            </div>
+                            <div style="font-size: 0.9em; color: #666;">
+                                📅 ${createdDate} | 
+                                📝 ${item.word_count || 0} คำ | 
+                                ⏱️ ${item.duration || 0} วิ | 
+                                🔤 ${item.language || 'th'}
+                            </div>
+                        </div>
+                        <div style="font-size: 1.2em;">👁️</div>
+                    </div>
+                `;
+                
+                historyList.appendChild(historyItem);
+            });
+        }
+
+        async function showTranscriptionDetail(taskId) {
+            try {
+                log(`🔍 Loading details for task ${taskId.slice(0, 8)}...`, 'info');
+                
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    displayTranscriptionDetail(data);
+                } else {
+                    log('⚠️ No transcription results found for this task', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to load task details: ${error.message}`, 'error');
+            }
+        }
+
+        function displayTranscriptionDetail(data) {
+            const modal = document.getElementById('detail-modal');
+            const title = document.getElementById('detail-title');
+            const content = document.getElementById('detail-content');
+            
+            title.textContent = `📝 รายละเอียดการแปลง - ${data.task_id.slice(0, 8)}...`;
+            
+            const createdDate = new Date(data.timestamps.created_at).toLocaleDateString('th-TH', {
+                year: 'numeric', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+            
+            content.innerHTML = `
+                <!-- Task Info -->
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0;">📊 ข้อมูลงาน</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em;">
+                        <div><strong>Task ID:</strong> ${data.task_id}</div>
+                        <div><strong>สถานะ:</strong> <span style="color: #28a745;">${data.basic_info.status}</span></div>
+                        <div><strong>วันที่สร้าง:</strong> ${createdDate}</div>
+                        <div><strong>ความคืบหน้า:</strong> ${data.basic_info.progress}%</div>
+                        <div><strong>ภาษา:</strong> ${data.basic_info.language || 'th'}</div>
+                        <div><strong>โมเดล:</strong> ${data.basic_info.model_size || 'base'}</div>
+                        <div><strong>ระยะเวลา:</strong> ${data.file_info.total_duration || 0} วินาที</div>
+                        <div><strong>จำนวนคำ:</strong> ${data.results.word_count || 0} คำ</div>
+                    </div>
+                </div>
+
+                <!-- Video Player -->
+                ${data.file_info.file_path ? `
+                <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 15px 0;">🎬 วิดีโอต้นฉบับ</h4>
+                    <div style="text-align: center;">
+                        <video 
+                            controls 
+                            style="max-width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
+                            onloadstart="log('📹 Loading video...', 'info')"
+                            onloadeddata="log('✅ Video loaded successfully', 'success')"
+                            onerror="log('❌ Failed to load video', 'error')"
+                        >
+                            <source src="/file/${data.file_info.file_path.replace('uploads/', '')}" type="video/mp4">
+                            <p style="color: #666;">เบราว์เซอร์ของคุณไม่รองรับการเล่นวิดีโอ</p>
+                        </video>
+                        <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            📁 ${data.file_info.file_path.split('/').pop()} | 
+                            ⏱️ ${data.file_info.total_duration || 0} วินาที
+                        </div>
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Transcription Text -->
+                <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #007bff; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 15px 0;">📝 ข้อความที่แปลงได้</h4>
+                    <div style="line-height: 1.8; font-size: 16px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; background: #f8f9fa; padding: 15px; border-radius: 6px;">
+${data.results.full_text || 'ไม่พบข้อความ'}
+                    </div>
+                </div>
+
+                <!-- Chunks -->
+                <div>
+                    <h4 style="margin: 0 0 15px 0;">🎵 แบ่งตาม Timeline</h4>
+                    <div style="max-height: 300px; overflow-y: auto;">
+                        ${data.results.chunks && data.results.chunks.length > 0 ? 
+                            data.results.chunks.map((chunk, index) => `
+                                <div style="padding: 10px; margin: 5px 0; background: #f8f9fa; border-left: 3px solid #007bff; border-radius: 4px;">
+                                    <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                                        <strong>Chunk ${index + 1}:</strong> ${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}
+                                    </div>
+                                    <div style="line-height: 1.6;">${chunk.text}</div>
+                                </div>
+                            `).join('') : 
+                            '<div style="padding: 20px; text-align: center; color: #666;">ไม่มีข้อมูล chunks</div>'
+                        }
+                    </div>
+                </div>
+            `;
+            
+            modal.style.display = 'block';
+            log('🎉 Task details displayed', 'success');
+        }
+
+        function closeDetailModal() {
+            document.getElementById('detail-modal').style.display = 'none';
+        }
+
+        function clearHistoryView() {
+            document.getElementById('history-section').style.display = 'none';
+            document.getElementById('history-loading').style.display = 'none';
+            log('🗑️ History view cleared', 'info');
+        }
+
+        // Search functions
+        async function searchInVideos() {
+            const searchTerm = document.getElementById('search-input').value.trim();
+            if (!searchTerm) {
+                log('❌ กรุณาใส่คำค้นหา', 'error');
+                return;
+            }
+
+            try {
+                log(`🔍 Searching for: "${searchTerm}"`, 'info');
+                const response = await fetch(`${API_BASE}/history/transcriptions?search=${encodeURIComponent(searchTerm)}`);
+                const data = await response.json();
+                
+                if (data.history && data.history.length > 0) {
+                    displaySearchResults(data.history, searchTerm);
+                    document.getElementById('search-results').style.display = 'block';
+                    log(`✅ Found ${data.history.length} results`, 'success');
+                } else {
+                    log('⚠️ No results found', 'warning');
+                    document.getElementById('search-results').style.display = 'block';
+                    document.getElementById('search-results-list').innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">ไม่พบผลการค้นหา</div>';
+                }
+            } catch (error) {
+                log(`❌ Search failed: ${error.message}`, 'error');
+            }
+        }
+
+        function displaySearchResults(results, searchTerm) {
+            const resultsList = document.getElementById('search-results-list');
+            resultsList.innerHTML = '';
+            
+            results.forEach((item, index) => {
+                const resultItem = document.createElement('div');
+                resultItem.style.cssText = `
+                    padding: 15px; 
+                    border-bottom: 1px solid #eee; 
+                    cursor: pointer; 
+                    transition: background-color 0.2s ease;
+                `;
+                
+                resultItem.onmouseover = () => resultItem.style.backgroundColor = '#f8f9fa';
+                resultItem.onmouseout = () => resultItem.style.backgroundColor = 'white';
+                resultItem.onclick = () => showTranscriptionDetail(item.task_id);
+                
+                const createdDate = new Date(item.created_at).toLocaleDateString('th-TH', {
+                    year: 'numeric', month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+                
+                resultItem.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: bold; margin-bottom: 5px;">
+                                🎬 Task #${index + 1}: ${item.task_id.slice(0, 8)}...
+                                <span style="color: #28a745; font-size: 0.9em; margin-left: 10px;">✅ เสร็จแล้ว</span>
+                            </div>
+                            <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                                📅 ${createdDate} | 
+                                📝 ${item.word_count || 0} คำ | 
+                                ⏱️ ${item.duration || 0} วิ
+                            </div>
+                            <div style="font-size: 0.9em; color: #007bff;">
+                                🔍 ค้นหา: "${searchTerm}"
+                            </div>
+                        </div>
+                        <div style="font-size: 1.2em;">👁️</div>
+                    </div>
+                `;
+                
+                resultsList.appendChild(resultItem);
+            });
+        }
+
+        function clearSearch() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('search-results').style.display = 'none';
+            log('🗑️ Search cleared', 'info');
+        }
+
+        // Live Caption functions
+        async function startLiveCaption() {
+            if (!selectedFile) {
+                log('❌ No file selected for live caption', 'error');
+                return;
+            }
+
+            try {
+                log('📺 Starting live caption...', 'info');
+                
+                // Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // Start transcription for live caption
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                currentTaskId = transcribeResult.task_id;
+                
+                log(`✅ Live caption started: ${currentTaskId}`, 'success');
+                
+                // Show live caption section
+                document.getElementById('live-caption-section').style.display = 'block';
+                
+                // Start polling for live updates
+                startLiveCaptionPolling();
+                
+            } catch (error) {
+                log(`❌ Live caption error: ${error.message}`, 'error');
+            }
+        }
+
+        function startLiveCaptionPolling() {
+            if (pollingInterval) return;
+            
+            pollingInterval = setInterval(async () => {
+                if (currentTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${currentTaskId}`);
+                        const data = await response.json();
+                        
+                        // Update live caption display
+                        updateLiveCaptionDisplay(data);
+                        
+                        if (data.status === 'completed') {
+                            stopLiveCaption();
+                            log('✅ Live caption completed!', 'success');
+                        } else if (data.status === 'failed') {
+                            stopLiveCaption();
+                            log(`❌ Live caption failed: ${data.error_message || 'Unknown error'}`, 'error');
+                        }
+                    } catch (error) {
+                        log(`❌ Live caption polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 2000);
+        }
+
+        function updateLiveCaptionDisplay(data) {
+            const display = document.getElementById('live-caption-display');
+            
+            if (data.stage === 'transcribing' && data.progress > 0) {
+                display.innerHTML = `
+                    <div style="text-align: center; color: #17a2b8; margin-bottom: 10px;">
+                        📺 Live Caption - ${data.progress}%
+                    </div>
+                    <div style="text-align: center; color: #666;">
+                        กำลังแปลงเสียง... กรุณารอสักครู่
+                    </div>
+                `;
+            } else if (data.status === 'completed') {
+                // Fetch final results
+                fetchTranscriptionResults(data.task_id).then(() => {
+                    display.innerHTML = `
+                        <div style="text-align: center; color: #28a745; margin-bottom: 10px;">
+                            ✅ Live Caption เสร็จสิ้น
+                        </div>
+                        <div style="line-height: 1.6;">
+                            การแปลงเสียงเสร็จสิ้นแล้ว สามารถดูผลลัพธ์ได้ในส่วนผลการแปลงเสียง
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        function stopLiveCaption() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            document.getElementById('live-caption-section').style.display = 'none';
+            log('⏹️ Live caption stopped', 'info');
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Real-time Caption Functions
+        async function startRealtimeCaptionMode() {
+            if (!selectedFile) {
+                log('❌ No file selected for real-time caption', 'error');
+                return;
+            }
+
+            try {
+                log('🎬 Starting real-time caption mode...', 'info');
+                
+                // Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // Start transcription for real-time caption
+                const transcribeResponse = await fetch(`${API_BASE}/transcribe-enhanced/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base'
+                    })
+                });
+                
+                if (!transcribeResponse.ok) {
+                    throw new Error(`Transcription failed: ${transcribeResponse.status}`);
+                }
+                
+                const transcribeResult = await transcribeResponse.json();
+                realtimeTaskId = transcribeResult.task_id;
+                
+                log(`✅ Real-time caption started: ${realtimeTaskId}`, 'success');
+                
+                // Setup video player
+                setupVideoPlayer(uploadResult.file_path);
+                
+                // Show real-time caption section
+                document.getElementById('realtime-caption-section').style.display = 'block';
+                
+                // Start polling for chunks
+                startRealtimeCaptionPolling();
+                
+            } catch (error) {
+                log(`❌ Real-time caption error: ${error.message}`, 'error');
+            }
+        }
+
+        function setupVideoPlayer(filePath) {
+            videoElement = document.getElementById('preview-video');
+            videoElement.src = `/file/${filePath.replace('uploads/', '')}`;
+            
+            videoElement.addEventListener('loadedmetadata', () => {
+                videoDuration = videoElement.duration;
+                document.getElementById('total-time').textContent = formatTime(videoDuration);
+                log(`📹 Video loaded: ${formatTime(videoDuration)}`, 'info');
+            });
+            
+            videoElement.addEventListener('timeupdate', () => {
+                updateVideoProgress();
+                updateCaptionDisplay();
+            });
+            
+            videoElement.addEventListener('play', () => {
+                if (realtimeCaptionActive) {
+                    log('▶️ Video playing with live captions', 'info');
+                }
+            });
+            
+            videoElement.addEventListener('pause', () => {
+                log('⏸️ Video paused', 'info');
+            });
+        }
+
+        function startRealtimeCaptionPolling() {
+            if (pollingInterval) return;
+            
+            pollingInterval = setInterval(async () => {
+                if (realtimeTaskId) {
+                    try {
+                        const response = await fetch(`${API_BASE}/polling/task/${realtimeTaskId}`);
+                        const data = await response.json();
+                        
+                        if (data.status === 'completed') {
+                            // Fetch transcription results
+                            await fetchRealtimeCaptionResults();
+                            stopRealtimeCaptionPolling();
+                        } else if (data.status === 'failed') {
+                            log(`❌ Real-time caption failed: ${data.error_message || 'Unknown error'}`, 'error');
+                            stopRealtimeCaptionPolling();
+                        }
+                    } catch (error) {
+                        log(`❌ Real-time caption polling failed: ${error.message}`, 'error');
+                    }
+                }
+            }, 2000);
+        }
+
+        async function fetchRealtimeCaptionResults() {
+            try {
+                const response = await fetch(`${API_BASE}/history/transcriptions/${realtimeTaskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.chunks) {
+                    captionChunks = data.results.chunks;
+                    log(`✅ Loaded ${captionChunks.length} caption chunks`, 'success');
+                    displayCaptionChunks();
+                } else {
+                    log('⚠️ No caption chunks found', 'warning');
+                }
+            } catch (error) {
+                log(`❌ Failed to fetch caption results: ${error.message}`, 'error');
+            }
+        }
+
+        function displayCaptionChunks() {
+            const chunksContainer = document.getElementById('caption-chunks');
+            chunksContainer.innerHTML = '';
+            
+            captionChunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.id = `chunk-${index}`;
+                chunkDiv.style.cssText = `
+                    padding: 10px; 
+                    margin: 5px 0; 
+                    background: #f8f9fa; 
+                    border-left: 3px solid #17a2b8; 
+                    border-radius: 4px;
+                    opacity: 0.5;
+                    transition: all 0.3s ease;
+                `;
+                
+                chunkDiv.innerHTML = `
+                    <div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                        <strong>Chunk ${index + 1}:</strong> ${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}
+                    </div>
+                    <div style="line-height: 1.6;">${chunk.text}</div>
+                `;
+                
+                chunksContainer.appendChild(chunkDiv);
+            });
+        }
+
+        function updateVideoProgress() {
+            if (!videoElement) return;
+            
+            const currentTime = videoElement.currentTime;
+            const progress = (currentTime / videoDuration) * 100;
+            
+            document.getElementById('current-time').textContent = formatTime(currentTime);
+            document.getElementById('video-progress').style.width = `${progress}%`;
+        }
+
+        function updateCaptionDisplay() {
+            if (!videoElement || captionChunks.length === 0) return;
+            
+            const currentTime = videoElement.currentTime;
+            
+            // Find current chunk
+            let activeChunkIndex = -1;
+            for (let i = 0; i < captionChunks.length; i++) {
+                const chunk = captionChunks[i];
+                if (currentTime >= chunk.start_time && currentTime <= chunk.end_time) {
+                    activeChunkIndex = i;
+                    break;
+                }
+            }
+            
+            // Update chunk display
+            document.querySelectorAll('[id^="chunk-"]').forEach((chunkDiv, index) => {
+                if (index === activeChunkIndex) {
+                    chunkDiv.style.opacity = '1';
+                    chunkDiv.style.background = '#e3f2fd';
+                    chunkDiv.style.borderLeftColor = '#2196f3';
+                    chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else if (index < activeChunkIndex) {
+                    chunkDiv.style.opacity = '0.7';
+                    chunkDiv.style.background = '#d4edda';
+                    chunkDiv.style.borderLeftColor = '#28a745';
+                } else {
+                    chunkDiv.style.opacity = '0.5';
+                    chunkDiv.style.background = '#f8f9fa';
+                    chunkDiv.style.borderLeftColor = '#17a2b8';
+                }
+            });
+        }
+
+        function startRealtimeCaption() {
+            if (!videoElement) {
+                log('❌ No video loaded', 'error');
+                return;
+            }
+            
+            realtimeCaptionActive = true;
+            videoElement.play();
+            
+            document.getElementById('start-realtime-btn').style.display = 'none';
+            document.getElementById('pause-realtime-btn').style.display = 'inline-block';
+            
+            log('▶️ Real-time caption started', 'success');
+        }
+
+        function pauseRealtimeCaption() {
+            if (!videoElement) return;
+            
+            videoElement.pause();
+            
+            document.getElementById('pause-realtime-btn').style.display = 'none';
+            document.getElementById('start-realtime-btn').style.display = 'inline-block';
+            
+            log('⏸️ Real-time caption paused', 'info');
+        }
+
+        function stopRealtimeCaption() {
+            realtimeCaptionActive = false;
+            
+            if (videoElement) {
+                videoElement.pause();
+                videoElement.currentTime = 0;
+            }
+            
+            document.getElementById('realtime-caption-section').style.display = 'none';
+            document.getElementById('start-realtime-btn').style.display = 'inline-block';
+            document.getElementById('pause-realtime-btn').style.display = 'none';
+            
+            stopRealtimeCaptionPolling();
+            log('⏹️ Real-time caption stopped', 'info');
+        }
+
+        function stopRealtimeCaptionPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // Search Test Function
+        async function testSearchFeature() {
+            log('🔍 Testing search feature...', 'info');
+            
+            try {
+                // Load history first
+                const response = await fetch(`${API_BASE}/history/transcriptions`);
+                const data = await response.json();
+                
+                if (!data.history || data.history.length === 0) {
+                    log('⚠️ ไม่มีประวัติการแปลงเสียง กรุณาแปลงไฟล์ก่อน', 'warning');
+                    alert('ไม่มีประวัติการแปลงเสียง\nกรุณาอัปโหลดและแปลงไฟล์ก่อนทดสอบค้นหา');
+                    return;
+                }
+                
+                // Show available videos for selection
+                const completedTasks = data.history.filter(t => t.status === 'completed');
+                if (completedTasks.length === 0) {
+                    log('⚠️ ไม่มีไฟล์ที่แปลงเสร็จแล้ว', 'warning');
+                    alert('ไม่มีไฟล์ที่แปลงเสร็จแล้ว\nกรุณารอให้การแปลงเสร็จสิ้นก่อน');
+                    return;
+                }
+                
+                // Create selection modal
+                showVideoSelectionModal(completedTasks);
+                
+            } catch (error) {
+                log(`❌ Failed to load history: ${error.message}`, 'error');
+            }
+        }
+
+        function showVideoSelectionModal(videos) {
+            // Create modal HTML
+            const modalHtml = `
+                <div id="video-selection-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center;">
+                    <div style="background: white; padding: 30px; border-radius: 12px; max-width: 80%; max-height: 80%; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                        <h3 style="margin: 0 0 20px 0;">🔍 เลือกวิดีโอสำหรับทดสอบค้นหา</h3>
+                        <p style="margin: 0 0 20px 0; color: #666;">เลือกวิดีโอที่ต้องการทดสอบการค้นหาข้อความ:</p>
+                        <div id="video-list" style="max-height: 400px; overflow-y: auto;">
+                            ${videos.map((video, index) => {
+                                const createdDate = new Date(video.created_at).toLocaleDateString('th-TH', {
+                                    year: 'numeric', month: 'short', day: 'numeric',
+                                    hour: '2-digit', minute: '2-digit'
+                                });
+                                return `
+                                    <div onclick="selectVideoForSearch('${video.task_id}')" style="
+                                        padding: 15px; 
+                                        margin: 10px 0; 
+                                        border: 1px solid #ddd; 
+                                        border-radius: 8px; 
+                                        cursor: pointer; 
+                                        transition: all 0.2s ease;
+                                        background: white;
+                                    " onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='white'">
+                                        <div style="font-weight: bold; margin-bottom: 5px;">
+                                            🎬 Task #${index + 1}: ${video.task_id.slice(0, 8)}...
+                                        </div>
+                                        <div style="font-size: 0.9em; color: #666;">
+                                            📅 ${createdDate} | 
+                                            📝 ${video.word_count || 0} คำ | 
+                                            ⏱️ ${video.duration || 0} วิ
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                        <div style="margin-top: 20px; text-align: center;">
+                            <button onclick="closeVideoSelectionModal()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                ✕ ปิด
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add modal to page
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+        }
+
+        async function selectVideoForSearch(taskId) {
+            try {
+                closeVideoSelectionModal();
+                log(`🔍 Loading video details for search test...`, 'info');
+                
+                // Get video details
+                const response = await fetch(`${API_BASE}/history/transcriptions/${taskId}`);
+                const data = await response.json();
+                
+                if (data.results && data.results.full_text) {
+                    // Extract some words from the transcription for search
+                    const words = data.results.full_text.split(/\s+/).filter(word => 
+                        word.length > 2 && 
+                        !['และ', 'ที่', 'เป็น', 'ใน', 'มี', 'จะ', 'ได้', 'แล้ว', 'ครับ', 'ค่ะ'].includes(word)
+                    );
+                    
+                    if (words.length > 0) {
+                        // Use a random word from the transcription
+                        const searchWord = words[Math.floor(Math.random() * Math.min(words.length, 10))];
+                        
+                        log(`🎯 Testing search with word from video: "${searchWord}"`, 'info');
+                        document.getElementById('search-input').value = searchWord;
+                        await searchInVideos();
+                        
+                        log(`✅ Search test completed with: "${searchWord}"`, 'success');
+                    } else {
+                        log('⚠️ ไม่พบคำที่เหมาะสมสำหรับทดสอบ', 'warning');
+                    }
+                } else {
+                    log('⚠️ ไม่พบข้อความในวิดีโอนี้', 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ Error in search test: ${error.message}`, 'error');
+            }
+        }
+
+        function closeVideoSelectionModal() {
+            const modal = document.getElementById('video-selection-modal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        // Update file handling to enable real-time caption button
+        function handleFileSelect(event) {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-text').textContent = `📁 ${selectedFile.name}`;
+                document.getElementById('fileName').textContent = selectedFile.name;
+                document.getElementById('fileSize').textContent = formatFileSize(selectedFile.size);
+                document.getElementById('selectedFile').style.display = 'block';
+                document.getElementById('transcribe-btn').disabled = false;
+                document.getElementById('live-caption-btn').disabled = false;
+                document.getElementById('realtime-caption-btn').disabled = false;
+                document.getElementById('new-realtime-caption-btn').disabled = false;
+                log(`File selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
+            }
+        }
+
+        // New Real-time Caption API Functions
+        async function startNewRealtimeCaption() {
+            if (!selectedFile) {
+                log('❌ No file selected for new real-time caption', 'error');
+                return;
+            }
+
+            try {
+                log('🚀 Starting new real-time caption API...', 'info');
+                
+                // 1. Upload file first
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                
+                const uploadResponse = await fetch(`${API_BASE}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.status}`);
+                }
+                
+                const uploadResult = await uploadResponse.json();
+                log(`✅ Upload successful: ${uploadResult.file_id}`, 'success');
+                
+                // 2. Start real-time caption session
+                const captionResponse = await fetch(`${API_BASE}/caption/realtime/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        file_path: uploadResult.file_path,
+                        language: 'th',
+                        model_size: 'base',
+                        chunk_duration: 10,
+                        delay_seconds: 0.0
+                    })
+                });
+                
+                if (!captionResponse.ok) {
+                    throw new Error(`Real-time caption failed: ${captionResponse.status}`);
+                }
+                
+                const captionResult = await captionResponse.json();
+                newRealtimeSessionId = captionResult.session_id;
+                
+                log(`✅ New real-time caption started: ${newRealtimeSessionId}`, 'success');
+                
+                // 3. Connect to WebSocket
+                await connectNewRealtimeWebSocket();
+                
+                // 4. Show real-time caption section
+                showNewRealtimeCaptionSection();
+                
+            } catch (error) {
+                log(`❌ New real-time caption error: ${error.message}`, 'error');
+            }
+        }
+
+        async function connectNewRealtimeWebSocket() {
+            try {
+                const wsUrl = `${WS_BASE}/ws/caption/${userId}?session_id=${newRealtimeSessionId}`;
+                log(`🔌 Connecting to new real-time WebSocket: ${wsUrl}`);
+                
+                newRealtimeWebSocket = new WebSocket(wsUrl);
+                
+                newRealtimeWebSocket.onopen = () => {
+                    log('✅ New real-time WebSocket connected', 'success');
+                    
+                    // Subscribe to session
+                    newRealtimeWebSocket.send(JSON.stringify({
+                        type: 'subscribe',
+                        session_id: newRealtimeSessionId
+                    }));
+                };
+                
+                newRealtimeWebSocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 New real-time message: ${data.type}`, 'info');
+                    handleNewRealtimeMessage(data);
+                };
+                
+                newRealtimeWebSocket.onclose = (event) => {
+                    log(`🔴 New real-time WebSocket closed: ${event.code}`, 'warning');
+                };
+                
+                newRealtimeWebSocket.onerror = (error) => {
+                    log('❌ New real-time WebSocket error', 'error');
+                };
+                
+            } catch (error) {
+                log(`❌ New real-time WebSocket connection failed: ${error.message}`, 'error');
+            }
+        }
+
+        function handleNewRealtimeMessage(data) {
+            switch (data.type) {
+                case 'caption.started':
+                    log('🎬 New real-time caption started', 'success');
+                    updateNewRealtimeStatus('started', data);
+                    break;
+                    
+                case 'caption.chunk':
+                    log(`📝 New real-time chunk received: ${data.chunk_data?.text?.substring(0, 50)}...`, 'info');
+                    addNewRealtimeChunk(data.chunk_data);
+                    break;
+                    
+                case 'caption.progress':
+                    log(`📊 New real-time progress: ${data.progress}%`, 'info');
+                    updateNewRealtimeProgress(data.progress);
+                    break;
+                    
+                case 'caption.completed':
+                    log('✅ New real-time caption completed', 'success');
+                    updateNewRealtimeStatus('completed', data);
+                    break;
+                    
+                case 'caption.error':
+                    log(`❌ New real-time caption error: ${data.error}`, 'error');
+                    updateNewRealtimeStatus('error', data);
+                    break;
+                    
+                case 'caption.delay_updated':
+                    log(`⏱️ Delay updated: ${data.delay_seconds}s`, 'info');
+                    newRealtimeDelay = data.delay_seconds;
+                    break;
+                    
+                case 'pong':
+                    log('🏓 New real-time pong received', 'info');
+                    break;
+                    
+                default:
+                    log(`📨 Unknown new real-time message: ${data.type}`, 'warning');
+            }
+        }
+
+        function showNewRealtimeCaptionSection() {
+            // Create new real-time caption section
+            const sectionHtml = `
+                <div class="container" id="new-realtime-caption-section" style="display:block;">
+                    <h3>🚀 New Real-time Close Caption API</h3>
+                    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0;">
+                        <!-- Session Info -->
+                        <div style="background: #e3f2fd; padding: 15px; border-radius: 6px; margin-bottom: 20px;">
+                            <h4 style="margin: 0 0 10px 0;">📊 Session Information</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.9em;">
+                                <div><strong>Session ID:</strong> <span id="new-session-id">${newRealtimeSessionId}</span></div>
+                                <div><strong>Status:</strong> <span id="new-session-status">Starting...</span></div>
+                                <div><strong>Progress:</strong> <span id="new-session-progress">0%</span></div>
+                                <div><strong>Delay:</strong> <span id="new-session-delay">0.0s</span></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Delay Control -->
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 10px; font-weight: bold;">⏱️ Delay Control (0-30 seconds):</label>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <input type="range" id="delay-slider" min="0" max="30" step="0.5" value="0" 
+                                       style="flex: 1; height: 6px; background: #ddd; border-radius: 3px; outline: none;"
+                                       onchange="updateNewRealtimeDelay(this.value)">
+                                <span id="delay-value" style="font-weight: bold; color: #007bff;">0.0s</span>
+                                <button onclick="updateNewRealtimeDelay(document.getElementById('delay-slider').value)" 
+                                        style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                                    Update
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Real-time Chunks Display -->
+                        <div style="background: white; padding: 20px; border-radius: 6px; min-height: 200px; border-left: 4px solid #17a2b8;">
+                            <h4 style="margin: 0 0 15px 0;">📝 Real-time Caption Chunks</h4>
+                            <div id="new-realtime-chunks" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
+                                <div style="text-align: center; color: #666; font-style: italic;">
+                                    กำลังรอการแปลงเสียง... chunks จะแสดงแบบ real-time
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Controls -->
+                        <div style="margin-top: 20px; text-align: center;">
+                            <button onclick="stopNewRealtimeCaption()" 
+                                    style="padding: 12px 24px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px;">
+                                ⏹️ หยุด Real-time Caption
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Insert after the existing real-time caption section
+            const existingSection = document.getElementById('realtime-caption-section');
+            if (existingSection) {
+                existingSection.insertAdjacentHTML('afterend', sectionHtml);
+            } else {
+                document.body.insertAdjacentHTML('beforeend', sectionHtml);
+            }
+        }
+
+        function updateNewRealtimeStatus(status, data) {
+            const statusElement = document.getElementById('new-session-status');
+            if (statusElement) {
+                statusElement.textContent = status;
+                statusElement.style.color = status === 'completed' ? '#28a745' : 
+                                          status === 'error' ? '#dc3545' : '#007bff';
+            }
+        }
+
+        function updateNewRealtimeProgress(progress) {
+            const progressElement = document.getElementById('new-session-progress');
+            if (progressElement) {
+                progressElement.textContent = `${progress}%`;
+            }
+        }
+
+        function addNewRealtimeChunk(chunkData) {
+            const chunksContainer = document.getElementById('new-realtime-chunks');
+            if (!chunksContainer) return;
+            
+            // Clear initial message
+            if (chunksContainer.children.length === 1 && chunksContainer.children[0].style.fontStyle === 'italic') {
+                chunksContainer.innerHTML = '';
+            }
+            
+            const chunkDiv = document.createElement('div');
+            chunkDiv.style.cssText = `
+                padding: 12px; 
+                margin: 8px 0; 
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+                border-left: 4px solid #17a2b8; 
+                border-radius: 8px;
+                transition: all 0.3s ease;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                animation: slideIn 0.5s ease-out;
+            `;
+            
+            chunkDiv.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="font-size: 0.9em; color: #666; font-weight: 600;">
+                        🎵 Chunk ${newRealtimeChunks.length + 1}
+                    </div>
+                    <div style="font-size: 0.8em; color: #17a2b8; background: #e3f2fd; padding: 2px 8px; border-radius: 12px;">
+                        ${formatTime(chunkData.start_time || 0)} - ${formatTime(chunkData.end_time || 0)}
+                    </div>
+                </div>
+                <div style="line-height: 1.6; color: #333; font-size: 14px;">${chunkData.text || 'No text'}</div>
+            `;
+            
+            chunksContainer.appendChild(chunkDiv);
+            newRealtimeChunks.push(chunkData);
+            
+            // Scroll to latest chunk
+            chunkDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            
+            log(`✅ Added new real-time chunk: ${chunkData.text?.substring(0, 50)}...`, 'success');
+        }
+
+        async function updateNewRealtimeDelay(delaySeconds) {
+            if (!newRealtimeSessionId) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/caption/realtime/delay/${newRealtimeSessionId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delay_seconds: parseFloat(delaySeconds) })
+                });
+                
+                if (response.ok) {
+                    newRealtimeDelay = parseFloat(delaySeconds);
+                    document.getElementById('delay-value').textContent = `${delaySeconds}s`;
+                    document.getElementById('new-session-delay').textContent = `${delaySeconds}s`;
+                    log(`✅ Delay updated to ${delaySeconds}s`, 'success');
+                } else {
+                    log(`❌ Failed to update delay: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error updating delay: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopNewRealtimeCaption() {
+            if (newRealtimeSessionId) {
+                try {
+                    const response = await fetch(`${API_BASE}/caption/realtime/stop/${newRealtimeSessionId}`, {
+                        method: 'POST'
+                    });
+                    
+                    if (response.ok) {
+                        log('✅ New real-time caption stopped', 'success');
+                    } else {
+                        log(`❌ Failed to stop caption: ${response.status}`, 'error');
+                    }
+                } catch (error) {
+                    log(`❌ Error stopping caption: ${error.message}`, 'error');
+                }
+            }
+            
+            if (newRealtimeWebSocket) {
+                newRealtimeWebSocket.close();
+                newRealtimeWebSocket = null;
+            }
+            
+            // Hide section
+            const section = document.getElementById('new-realtime-caption-section');
+            if (section) {
+                section.remove();
+            }
+            
+            // Reset state
+            newRealtimeSessionId = null;
+            newRealtimeChunks = [];
+            newRealtimeDelay = 0;
+        }
+
+        // Start when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

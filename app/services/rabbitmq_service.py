@@ -19,11 +19,11 @@ class RabbitMQService:
         """เริ่มต้น RabbitMQ Service"""
         self.connection = None
         self.channel = None
-        self.host = "rabbitmq"
-        self.port = 5672
-        self.username = "admin"
-        self.password = "admin123"
-        self.virtual_host = "/"
+        self.host = os.getenv("RABBITMQ_HOST", "rabbitmq")
+        self.port = int(os.getenv("RABBITMQ_PORT", "5672"))
+        self.username = os.getenv("RABBITMQ_USER", "admin")
+        self.password = os.getenv("RABBITMQ_PASSWORD", "admin123")
+        self.virtual_host = os.getenv("RABBITMQ_VHOST", "/")
         
         # เพิ่ม JSON storage
         from ..utils.json_storage import JSONStorage
@@ -43,6 +43,7 @@ class RabbitMQService:
             parameters = pika.ConnectionParameters(
                 host=self.host,
                 port=self.port,
+                virtual_host=self.virtual_host,
                 credentials=credentials,
                 heartbeat=600,
                 blocked_connection_timeout=300
@@ -121,8 +122,18 @@ class RabbitMQService:
             logger.error(f"เกิดข้อผิดพลาดในการส่งงานตัดวิดีโอ: {e}")
             raise
     
-    def send_transcription_task(self, file_path: str, language: str = "th",
-                               model_size: str = "base", chunk_duration: int = 30) -> str:
+    def send_transcription_task(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 30,
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None
+    ) -> str:
         """ส่งงาน transcription ไปยัง queue พร้อม retry mechanism"""
         max_retries = 3
         retry_delay = 1  # seconds
@@ -137,11 +148,16 @@ class RabbitMQService:
                     "task_id": task_id,
                     "task_type": "transcription",
                     "file_path": file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
                     "language": language,
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
                     "status": "pending",
-                    "created_at": time.time()
+                    "created_at": time.time(),
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id
                 }
                 
                 # บันทึก task ลง storage ก่อน
