@@ -31,6 +31,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check disk space (before cleanup)
+        run: |
+          echo "📊 Disk space before cleanup:"
+          df -h
+          docker system df || true
+
+      - name: Clean up Docker resources
+        run: |
+          echo "🧹 Cleaning up Docker resources..."
+          # ลบ stopped containers
+          docker container prune -f || true
+          # ลบ unused images (เก็บ images ที่มี tag และ dangling images)
+          docker image prune -a -f || true
+          # ลบ unused volumes
+          docker volume prune -f || true
+          # ลบ unused networks
+          docker network prune -f || true
+          # ลบ build cache ที่เก่าเกิน 1 ชั่วโมง
+          docker builder prune --filter until=1h -f || true
+          # ลบ unused buildx builders
+          docker buildx prune -f || true
+          echo "✅ Cleanup completed"
+
+      - name: Check disk space (after cleanup)
+        run: |
+          echo "📊 Disk space after cleanup:"
+          df -h
+          docker system df || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -49,9 +78,15 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          # Cache removed temporarily to avoid driver issues
-          # Will add back later if needed
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           # Note: Build context is optimized via .dockerignore to reduce size
+
+      - name: Clean up after main image build
+        run: |
+          echo "🧹 Cleaning up after main image build..."
+          # ลบ build cache ที่ไม่ใช้งาน (เก็บ cache ที่สร้างภายใน 10 นาที)
+          docker builder prune --filter until=10m -f || true
 
       - name: Build and push whisper service
         uses: docker/build-push-action@v5
@@ -61,9 +96,36 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          # Cache removed temporarily to avoid driver issues
-          # Will add back later if needed
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           # Note: Whisper model is downloaded during build, not from context
+
+      - name: Clean up after whisper image build
+        run: |
+          echo "🧹 Cleaning up after whisper image build..."
+          # ลบ build cache ที่ไม่ใช้งาน (เก็บ cache ที่สร้างภายใน 10 นาที)
+          docker builder prune --filter until=10m -f || true
+
+      - name: Final cleanup
+        if: always()
+        run: |
+          echo "🧹 Final cleanup of Docker resources..."
+          # ลบ unused images (เก็บเฉพาะ images ที่ใช้ tag)
+          docker image prune -f || true
+          # ลบ build cache ที่เก่าเกิน 30 นาที
+          docker builder prune --filter until=30m -f || true
+          # ลบ buildx cache
+          docker buildx prune -f || true
+          # ลบ stopped containers
+          docker container prune -f || true
+          echo "✅ Final cleanup completed"
+
+      - name: Check disk space (final)
+        if: always()
+        run: |
+          echo "📊 Final disk space:"
+          df -h
+          docker system df || true
 
       - name: Output build info
         run: |
