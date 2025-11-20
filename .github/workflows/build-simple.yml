@@ -88,8 +88,9 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ใช้ registry cache จาก ACR แทน GHA cache เพื่อหลีกเลี่ยงปัญหา driver
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           # Note: Build context is optimized via .dockerignore to reduce size
 
       - name: Clean up after main image build
@@ -106,8 +107,9 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ใช้ registry cache จาก ACR แทน GHA cache เพื่อหลีกเลี่ยงปัญหา driver
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache,mode=max
           # Note: Whisper model is downloaded during build, not from context
 
       - name: Clean up after whisper image build
