@@ -49,6 +49,19 @@ WORKDIR /app
 # คัดลอก Python packages จาก builder stage
 COPY --from=builder /root/.local /root/.local
 
+# ลบ cache และ files ที่ไม่จำเป็นเพื่อลดขนาด image
+RUN find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type f -name "*.pyc" -delete 2>/dev/null || true \
+    && find /root/.local -type f -name "*.pyo" -delete 2>/dev/null || true \
+    && find /root/.local -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type d -name "test" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type d -name "docs" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type f -name "*.md" -delete 2>/dev/null || true \
+    && find /root/.local -type f -name "*.txt" -path "*/LICENSE*" -delete 2>/dev/null || true \
+    && find /root/.local -type f -name "*.rst" -delete 2>/dev/null || true
+
 # คัดลอก source code
 COPY . .
 

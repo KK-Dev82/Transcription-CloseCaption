@@ -185,8 +185,8 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล trim task: {e}")
-            # Reject message และส่งกลับไปยัง queue
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _process_merge_task(self, ch, method, properties, body):
         """ประมวลผล merge video task"""
@@ -207,7 +207,8 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล merge task: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _process_convert_task(self, ch, method, properties, body):
         """ประมวลผล convert format task"""
@@ -228,7 +229,8 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล convert task: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _process_resize_task(self, ch, method, properties, body):
         """ประมวลผล resize video task"""
@@ -249,7 +251,8 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล resize task: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _process_transcription_task(self, ch, method, properties, body):
         """ประมวลผล transcription task"""
@@ -270,7 +273,8 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}")
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     async def _execute_trim_task(self, task_data: Dict[str, Any]):
         """ดำเนินการตัดวิดีโอ"""
@@ -326,9 +330,13 @@ class VideoWorker:
             start_time_process = asyncio.get_event_loop().time()
             
             # สร้าง task สำหรับอัปเดต progress
+            progress_running = True
             async def update_progress():
-                while True:
+                nonlocal progress_running
+                while progress_running:
                     await asyncio.sleep(5)  # อัปเดตทุก 5 วินาที
+                    if not progress_running:
+                        break
                     elapsed = asyncio.get_event_loop().time() - start_time_process
                     # ประมาณ progress จากเวลา (สมมติว่าใช้เวลา 80% ของ duration)
                     estimated_duration = duration * 0.8
@@ -344,7 +352,8 @@ class VideoWorker:
                 # รัน FFmpeg
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
                 
-                # ยกเลิก progress tracking
+                # หยุด progress tracking
+                progress_running = False
                 progress_task.cancel()
                 
                 # อัปเดต task เสร็จสิ้น
@@ -357,7 +366,8 @@ class VideoWorker:
                 self.json_storage.save_video_task(task_data['task_id'], task_data)
                 
             except Exception as e:
-                # ยกเลิก progress tracking
+                # หยุด progress tracking
+                progress_running = False
                 progress_task.cancel()
                 raise e
             
@@ -559,7 +569,9 @@ class VideoWorker:
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล audio chunk extracted: {e}", exc_info=True)
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            # ไม่ requeue เพื่อป้องกัน infinite retry loop
+            # ส่งไป DLQ แทน (requeue=False)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     async def _execute_audio_chunk_transcription(self, message_data: Dict[str, Any]):
         """ดำเนินการ transcribe audio chunk"""
