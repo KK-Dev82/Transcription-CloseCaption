@@ -1,42 +1,21 @@
 #!/bin/bash
 
 # Build and Push to ACR for Staging Environment
-# This script builds Docker images for Linux (AMD64) architecture
+# DEPRECATED: Use build-and-push-acr.sh instead (has better error handling and auto-login)
+# This script is kept for backward compatibility
 
-set -e
+echo "⚠️  WARNING: This script is deprecated. Please use build-and-push-acr.sh instead."
+echo "   build-and-push-acr.sh has better features:"
+echo "   - Auto Azure/ACR login"
+echo "   - Better error handling"
+echo "   - Docker Buildx setup"
+echo ""
+read -p "Continue with build-staging.sh? (y/N) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Cancelled. Please use: ./scripts/build-and-push-acr.sh"
+    exit 1
+fi
 
-# Configuration
-ACR_NAME="kksenateacr"
-IMAGE_TAG="alpha-dev"
-REGISTRY_URL="${ACR_NAME}.azurecr.io"
-
-echo "🚀 Building and pushing images to ACR..."
-
-# 1. Build Main API Image (ไม่ติดตั้ง PyTorch)
-echo "📦 Building main API image..."
-docker buildx build \
-    --platform linux/amd64 \
-    -f Dockerfile \
-    -t ${REGISTRY_URL}/kk-transcription:${IMAGE_TAG} \
-    --push \
-    .
-
-# 2. Build Whisper Service Image
-echo "📦 Building Whisper service image..."
-cd whisper-service
-docker buildx build \
-    --platform linux/amd64 \
-    -f Dockerfile.linux \
-    -t ${REGISTRY_URL}/kk-transcription-whisper:${IMAGE_TAG} \
-    --push \
-    .
-cd ..
-
-echo "✅ All images built and pushed successfully!"
-echo "🔗 Registry: ${REGISTRY_URL}"
-echo "🏷️  Tag: ${IMAGE_TAG}"
-
-# List pushed images
-echo "📋 Pushed images:"
-echo "  - ${REGISTRY_URL}/kk-transcription:${IMAGE_TAG}"
-echo "  - ${REGISTRY_URL}/kk-transcription-whisper:${IMAGE_TAG}"
+# Redirect to build-and-push-acr.sh
+exec ./scripts/build-and-push-acr.sh
