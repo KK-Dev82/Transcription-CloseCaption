@@ -68,10 +68,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            image=moby/buildkit:latest
-          driver: docker-container
+        # ใช้ default driver (docker) เพื่อหลีกเลี่ยงปัญหา cache
+        # ไม่ต้องตั้งค่า driver-opts เพราะไม่ใช้ cache
 
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
@@ -88,9 +86,7 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          # ใช้ registry cache จาก ACR แทน GHA cache เพื่อหลีกเลี่ยงปัญหา driver
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          # Cache removed to avoid driver issues - build and push directly to ACR
           # Note: Build context is optimized via .dockerignore to reduce size
 
       - name: Clean up after main image build
@@ -107,9 +103,7 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:${{ env.VERSION }}
           platforms: linux/amd64
-          # ใช้ registry cache จาก ACR แทน GHA cache เพื่อหลีกเลี่ยงปัญหา driver
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.WHISPER_IMAGE_NAME }}:buildcache,mode=max
+          # Cache removed to avoid driver issues - build and push directly to ACR
           # Note: Whisper model is downloaded during build, not from context
 
       - name: Clean up after whisper image build
