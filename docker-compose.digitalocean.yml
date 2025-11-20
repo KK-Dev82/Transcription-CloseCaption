@@ -96,7 +96,7 @@ services:
       STORAGE_TYPE: json
       JSON_STORAGE_DIR: /app/storage
       # RabbitMQ (VM 47)
-      RABBITMQ_HOST: 10.200.22.61
+      RABBITMQ_HOST: 178.128.105.100
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: senate
       RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT

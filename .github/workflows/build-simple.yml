@@ -9,6 +9,7 @@ on:
       - 'production/**'
     paths-ignore:
       - 'README.md'
+      - 'docker-compose.*.yml'
       
   workflow_dispatch:  # ให้รันได้ด้วยมือ
 

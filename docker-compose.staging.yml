@@ -17,15 +17,17 @@ services:
       STORAGE_TYPE: json
       JSON_STORAGE_DIR: /app/storage
       # RabbitMQ (VM 47)
-      RABBITMQ_HOST: 178.128.105.100
+      RABBITMQ_HOST: 10.200.22.61
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: senate
       RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT
       # Whisper (same VM)
       WHISPER_API_URL: http://whisper:8002
-      # Redis Pub/Sub (VM 47) - สำหรับ WebSocket notification
-      REDIS_URL: redis://10.200.22.61:6379
+      # Redis (local container)
+      REDIS_URL: redis://redis:6379
     restart: unless-stopped
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -54,15 +56,17 @@ services:
       STORAGE_TYPE: json
       JSON_STORAGE_DIR: /app/storage
       # RabbitMQ (VM 47)
-      RABBITMQ_HOST: 178.128.105.100
+      RABBITMQ_HOST: 10.200.22.61
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: senate
       RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT
       # Whisper (same VM)
       WHISPER_API_URL: http://whisper:8002
-      # Redis Pub/Sub (VM 47)
-      REDIS_URL: redis://10.200.22.61:6379
+      # Redis (local container)
+      REDIS_URL: redis://redis:6379
     restart: unless-stopped
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -97,9 +101,11 @@ services:
       RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT
       # Whisper (same VM)
       WHISPER_API_URL: http://whisper:8002
-      # Redis Pub/Sub (VM 47)
-      REDIS_URL: redis://10.200.22.61:6379
+      # Redis (local container)
+      REDIS_URL: redis://redis:6379
     restart: unless-stopped
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -128,15 +134,17 @@ services:
       STORAGE_TYPE: json
       JSON_STORAGE_DIR: /app/storage
       # RabbitMQ (VM 47)
-      RABBITMQ_HOST: 178.128.105.100
+      RABBITMQ_HOST: 10.200.22.61
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: senate
       RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT
       # Whisper (same VM)
       WHISPER_API_URL: http://whisper:8002
-      # Redis Pub/Sub (VM 47)
-      REDIS_URL: redis://10.200.22.61:6379
+      # Redis (local container)
+      REDIS_URL: redis://redis:6379
     restart: unless-stopped
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -203,3 +211,17 @@ services:
         limits:
           memory: 6G
           cpus: '1.0'
+ 
+  # Redis สำหรับ caching และ queue
+  redis:
+    image: redis:7-alpine
+    container_name: transcription-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+ 
+volumes:
+  redis_data:
