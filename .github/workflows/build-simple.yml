@@ -60,8 +60,18 @@ jobs:
           df -h
           docker system df || true
 
+      - name: Remove existing buildx builder (if any)
+        run: |
+          echo "🧹 Removing existing buildx builder..."
+          docker buildx rm builder || true
+          echo "✅ Cleanup completed"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+          driver: docker-container
 
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
