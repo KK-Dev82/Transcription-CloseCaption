@@ -34,17 +34,10 @@ class TranscriptionService:
         self.tasks: Dict[str, TranscriptionResponse] = {}
         self.task_contexts: Dict[str, Dict[str, Optional[str]]] = {}
         
-        # API server URL สำหรับ notifications
-        # ใช้ environment variable หรือ default ตาม environment
-        environment = os.getenv('ENVIRONMENT', 'development')
-        if environment == 'development':
-            self.api_server_url = "http://transcription-api-dev:8001"
-        elif environment == 'staging':
-            self.api_server_url = "http://transcription-api-staging:8001"
-        elif environment == 'local':
-            self.api_server_url = "http://api:8001"
-        else:  # production
-            self.api_server_url = "http://transcription-api:8001"
+        # DEPRECATED: ไม่ใช้ api_server_url แล้ว
+        # ระบบใช้ SignalR ผ่าน senate-backend แทน WebSocket
+        # Transcription service ส่ง callback ไปที่ senate-backend ผ่าน webhook endpoint
+        # senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
     
     def _safe_cat(self, a, b) -> str:
         """
@@ -270,15 +263,8 @@ class TranscriptionService:
         task = self.tasks[task_id]
         task.status = "processing"
         
-        # 🌐 WebSocket: แจ้งเตือนเริ่มต้น (HTTP call to API server)
-        try:
-            await self._notify_api_server("started", task_id, {
-                "file_path": file_path,
-                "language": language,
-                "status": "started"
-            })
-        except Exception as e:
-            logger.warning(f"WebSocket notification failed (started): {e}")
+        # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
+        # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
         
         chunks: List[str] = []
         local_file_path = file_path
@@ -370,35 +356,8 @@ class TranscriptionService:
                     self.json_storage.save_transcription(task_id, task.__dict__)
                     
                     # 🌐 WebSocket: ส่ง chunk ทันทีที่ประมวลผลเสร็จ (ไม่รอ 25%)
-                    try:
-                        # ส่ง chunk ทันที
-                        await self._notify_api_server("chunk_completed", task_id, {
-                            "progress": progress,
-                            "status": task.status,
-                            "stage": f"processing_chunk_{i+1}_of_{total_chunks}",
-                            "partial_text": partial_text,
-                            "chunks": partial_chunks,
-                            "current_chunk_index": i + 1,
-                            "total_chunks": total_chunks,
-                            "chunk_data": {
-                                "chunk_index": i,
-                                "chunk_duration": chunk_duration,
-                                "processed_at": datetime.now().isoformat()
-                            }
-                        })
-                        
-                        # ส่ง progress update ทุก 25% หรือ chunk สุดท้าย
-                        if progress % 25 == 0 or i == total_chunks - 1:
-                            await self._notify_api_server("progress", task_id, {
-                                "progress": progress,
-                                "status": task.status,
-                                "stage": f"processing_chunk_{i+1}_of_{total_chunks}",
-                                "partial_text": partial_text,
-                                "chunks": partial_chunks
-                            })
-                            
-                    except Exception as e:
-                        logger.warning(f"WebSocket notification failed (chunk): {e}")
+                    # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
+                    # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
                     
                     logger.info(f"เสร็จ chunk {i+1}/{total_chunks} - Progress: {progress}%")
                     
@@ -469,21 +428,9 @@ class TranscriptionService:
             except Exception as e:
                 logger.warning(f"ไม่สามารถลบ temp files: {e}")
             
-            # 🌐 WebSocket: แจ้งเตือนเสร็จสิ้น (HTTP call to API server)
-            try:
-                await self._notify_api_server("completed", task_id, {
-                    "status": "completed",
-                    "progress": 100,
-                    "results_summary": {
-                        "text": task.full_text,
-                        "chunks_count": len(task.chunks) if task.chunks else 0,
-                        "duration": task.total_duration
-                    }
-                })
-            except Exception as e:
-                logger.warning(f"WebSocket notification failed (completed): {e}")
-            
             # 📞 Callback to Backend (ถ้ามี callback_url)
+            # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
+            # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
             if hasattr(task, 'callback_url') and task.callback_url:
                 try:
                     await self._send_callback(task, "completed")
@@ -526,14 +473,8 @@ class TranscriptionService:
             task.error_message = str(e)
             task.completed_at = datetime.now()
             
-            # 🌐 WebSocket: แจ้งเตือนเมื่อล้มเหลว (HTTP call to API server)
-            try:
-                await self._notify_api_server("failed", task_id, {
-                    "status": "failed",
-                    "error": str(e)
-                })
-            except Exception as websocket_error:
-                logger.warning(f"WebSocket notification failed (error): {websocket_error}")
+            # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
+            # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
             
             # ลบไฟล์ชั่วคราวในกรณีเกิดข้อผิดพลาด (ปิดไว้เพื่อ debug)
             # if 'chunks' in locals():
@@ -769,29 +710,13 @@ class TranscriptionService:
         # ลบจาก JSON storage
         return self.json_storage.delete_transcription(task_id)
     
-    async def _notify_api_server(self, event_type: str, task_id: str, data: dict):
-        """ส่ง notification ไปยัง API server เพื่อ broadcast ผ่าน WebSocket"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "type": f"transcription.{event_type}",
-                    "task_id": task_id,
-                    "timestamp": datetime.now().isoformat(),
-                    **data
-                }
-                
-                async with session.post(
-                    f"{self.api_server_url}/internal/websocket-broadcast",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    if response.status == 200:
-                        logger.info(f"✅ WebSocket notification sent: {event_type} for task {task_id}")
-                    else:
-                        logger.warning(f"⚠️ WebSocket notification failed: {response.status}")
-                        
-        except Exception as e:
-            logger.error(f"❌ Failed to send WebSocket notification: {e}")
+    # DEPRECATED: ไม่ใช้ WebSocket notification แล้ว
+    # ระบบใช้ SignalR ผ่าน senate-backend แทน
+    # Transcription service ส่ง callback ไปที่ senate-backend ผ่าน webhook endpoint
+    # senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
+    # async def _notify_api_server(self, event_type: str, task_id: str, data: dict):
+    #     """ส่ง notification ไปยัง API server เพื่อ broadcast ผ่าน WebSocket"""
+    #     pass
     
     async def _send_callback(self, task, status: str):
         """ส่ง callback ไปยัง Backend เมื่อเสร็จสิ้น"""
