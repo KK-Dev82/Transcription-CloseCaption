@@ -203,11 +203,18 @@ class RealtimeCaptionService:
         self.chunk_broadcaster = ChunkBroadcaster(websocket_manager)
         
         # API server URL
+        # ใน Docker compose, services ใช้ container name หรือ service name
         environment = os.getenv('ENVIRONMENT', 'development')
-        if environment == 'development':
+        api_server_env = os.getenv('API_SERVER_URL')  # อนุญาตให้ override ผ่าน environment variable
+        
+        if api_server_env:
+            self.api_server_url = api_server_env
+        elif environment == 'development':
             self.api_server_url = "http://transcription-api-dev:8001"
         elif environment == 'staging':
-            self.api_server_url = "http://transcription-api-staging:8001"
+            # ใน docker-compose.staging.yml container name คือ "transcription-api"
+            # แต่ service name คือ "api" ซึ่งสามารถใช้ได้เหมือนกันใน Docker network
+            self.api_server_url = "http://api:8001"  # ใช้ service name แทน container name
         elif environment == 'local':
             self.api_server_url = "http://api:8001"
         else:  # production
