@@ -194,3 +194,8 @@ networks:
 - ตรวจสอบ network connectivity
 - ตรวจสอบ logs เพื่อหาสาเหตุที่แท้จริง
 
+
+
+
+
+

@@ -51,7 +51,7 @@ class WhisperService:
                 response = requests.post(
                     f"{self.whisper_api_url}/download-model",
                     json=request_data,
-                    timeout=300  # 5 นาที
+                    timeout=600  # 10 นาที (เพิ่มจาก 5 นาที)
                 )
                 
                 if response.status_code == 200:
@@ -134,7 +134,7 @@ class WhisperService:
                 response = requests.post(
                     f"{whisper_api_url}/transcribe",
                     json=request_data,
-                    timeout=300  # 5 นาที
+                    timeout=600  # 10 นาที (เพิ่มจาก 5 นาที เพื่อรองรับ chunks ที่ซับซ้อน)
                 )
                 
                 if response.status_code == 200:

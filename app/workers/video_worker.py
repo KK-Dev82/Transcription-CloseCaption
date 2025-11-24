@@ -258,21 +258,33 @@ class VideoWorker:
         """ประมวลผล transcription task"""
         try:
             task_data = json.loads(body.decode('utf-8'))
-            logger.info(f"เริ่มประมวลผล transcription task: {task_data.get('task_id')}")
+            task_id = task_data.get('task_id')
+            logger.info(f"เริ่มประมวลผล transcription task: {task_id}")
+            
+            # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่ (ป้องกัน duplicate processing)
+            existing_task = self.json_storage.get_transcription(task_id)
+            if existing_task:
+                existing_status = existing_task.get('status', '')
+                if existing_status in ['completed', 'processing']:
+                    logger.warning(f"⚠️ Task {task_id} มีสถานะ '{existing_status}' แล้ว, ข้ามการประมวลผลซ้ำ (อาจเป็น duplicate message)")
+                    # Acknowledge message เพื่อไม่ให้ requeue
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    return
             
             # อัปเดตสถานะเป็น processing
             task_data['status'] = 'processing'
-            self.json_storage.save_transcription(task_data['task_id'], task_data)
+            task_data['started_at'] = datetime.now().isoformat()
+            self.json_storage.save_transcription(task_id, task_data)
             
             # ประมวลผล transcription
             asyncio.run(self._execute_transcription_task(task_data))
             
             # Acknowledge message
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"transcription task เสร็จสิ้น: {task_data.get('task_id')}")
+            logger.info(f"transcription task เสร็จสิ้น: {task_id}")
             
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}")
+            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}", exc_info=True)
             # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     

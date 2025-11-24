@@ -38,10 +38,10 @@ services:
     deploy:
       resources:
         limits:
-          # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-          # Total: 3.0 CPU, 5.5G RAM (within limits)
-          memory: 1.5G
-          cpus: '1.0'
+          # ลด resources เล็กน้อยเพื่อให้ Whisper มี resources เพิ่มขึ้น
+          # Total: 3.5 CPU, 7.0G RAM (within limits)
+          memory: 1.2G  # ลดจาก 1.5G → 1.2G
+          cpus: '0.8'   # ลดจาก 1.0 → 0.8
 
   # Video Processing Worker 1
   video-worker-1:
@@ -195,10 +195,11 @@ services:
     deploy:
       resources:
         limits:
-          # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-          # Total: 3.0 CPU, 5.5G RAM (within limits)
-          memory: 1.5G
-          cpus: '1.0'
+          # เพิ่ม resources เพื่อลด timeout errors
+          # Server: 4 cores, 7.75GB RAM
+          # Total: 3.5 CPU, 7.0G RAM (within limits)
+          memory: 2.5G  # เพิ่มจาก 1.5G → 2.5G (เพื่อรองรับ concurrent requests)
+          cpus: '1.5'   # เพิ่มจาก 1.0 → 1.5 (เพื่อประมวลผลเร็วขึ้น)
 
   # Whisper สำหรับ Live Streaming
   # ⚠️  NOTE: whisper-live service ไม่ได้ถูกใช้งานจริง (ทุกที่ใช้ whisper:8002)

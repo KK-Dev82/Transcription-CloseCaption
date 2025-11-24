@@ -659,8 +659,23 @@ class VideoService:
             # สร้าง chunks พร้อม overlap
             start_time = 0
             i = 0
-            while start_time < duration:
+            # Safety limit: คำนวณ max chunks ที่เป็นไปได้ (เพิ่ม buffer 10 chunks)
+            max_chunks = int(duration / max(chunk_duration - overlap, 1)) + 10 if duration > 0 else 100
+            previous_start_time = -1  # Track previous start_time เพื่อป้องกัน infinite loop
+            
+            while start_time < duration and i < max_chunks:
+                # Safety check: ถ้า start_time ไม่เพิ่มขึ้น → break (ป้องกัน infinite loop)
+                if start_time <= previous_start_time:
+                    logger.warning(f"⚠️ start_time ไม่เพิ่มขึ้น ({start_time} <= {previous_start_time}), หยุด loop เพื่อป้องกัน infinite loop")
+                    break
+                
+                previous_start_time = start_time
                 end_time = min(start_time + chunk_duration, duration)
+                
+                # Safety check: ถ้า end_time <= start_time → break
+                if end_time <= start_time:
+                    logger.warning(f"⚠️ end_time ({end_time}) <= start_time ({start_time}), หยุด loop")
+                    break
                 
                 # สร้างชื่อไฟล์ chunk
                 chunk_filename = f"chunk_{i}_{video_path.stem}_audio.{audio_format}"
@@ -687,12 +702,23 @@ class VideoService:
                 chunk_paths.append(str(chunk_path))
                 
                 # เลื่อนไปยัง chunk ถัดไป (ลบ overlap)
-                start_time = end_time - overlap
+                new_start_time = end_time - overlap
+                
+                # Safety check: ถ้า new_start_time <= start_time → break (ป้องกัน infinite loop)
+                if new_start_time <= start_time:
+                    logger.warning(f"⚠️ new_start_time ({new_start_time}) <= start_time ({start_time}), หยุด loop เพื่อป้องกัน infinite loop")
+                    break
+                
+                start_time = new_start_time
                 i += 1
                 
                 # หยุดถ้าเหลือน้อยกว่า chunk_duration
                 if start_time + chunk_duration >= duration:
                     break
+            
+            # Safety check: ถ้าเกิน max_chunks → log warning
+            if i >= max_chunks:
+                logger.warning(f"⚠️ ถึง max_chunks limit ({max_chunks}), หยุด loop (duration: {duration}s, chunk_duration: {chunk_duration}s, overlap: {overlap}s)")
             
             logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_paths)} chunks")
             return chunk_paths
