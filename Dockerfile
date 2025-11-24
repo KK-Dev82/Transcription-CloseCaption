@@ -21,7 +21,12 @@ WORKDIR /app
 
 # คัดลอก requirements และติดตั้ง Python dependencies (ไม่ติดตั้ง PyTorch)
 COPY docs/requirements-core.txt .
-RUN pip install --no-cache-dir --user -r requirements-core.txt
+# เพิ่ม timeout สำหรับการ download ไฟล์ขนาดใหญ่ (เช่น PyTorch ~900MB)
+# ใช้ retry loop เพื่อจัดการกับ network timeout
+RUN for i in 1 2 3 4 5; do \
+        pip install --no-cache-dir --user --default-timeout=600 -r requirements-core.txt && break || \
+        (echo "Attempt $i failed, retrying..." && sleep 10); \
+    done
 
 # Production stage
 FROM python:3.11-slim
