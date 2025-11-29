@@ -4,29 +4,49 @@ Scripts สำหรับการจัดการ Models และ Utilities
 
 ## 📋 Scripts
 
-### `download-models.sh`
+### `download-models.sh` ⭐
 **Download Whisper Models**
-- Download models จาก Hugging Face
-- รองรับ base, small, medium models
-- ตรวจสอบ checksum
+- ดาวน์โหลด Whisper models จาก Hugging Face
+- รองรับ: tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo
+- รองรับทั้ง Docker Compose และ Direct Mode
+- ตรวจสอบและ validate ไฟล์อัตโนมัติ
 - เก็บ models ใน `models/` directory
 
 **Usage:**
 ```bash
+# ดาวน์โหลด base model (default)
 bash scripts/utility/download-models.sh
+
+# ดาวน์โหลดหลาย models
+bash scripts/utility/download-models.sh base small medium
+
+# ดาวน์โหลด base, small, medium (recommended)
+bash scripts/utility/download-models.sh --all
+
+# ใช้ whisper.cpp download script (ถ้ามี)
+bash scripts/utility/download-models.sh medium --docker-script
+
+# ไม่ restart services หลัง download
+bash scripts/utility/download-models.sh base --skip-restart
 ```
 
 **Options:**
-- `--model <size>` - Download specific model (base, small, medium)
-- `--all` - Download all models
-- `--force` - Force re-download
+- `--all` - Download base, small, medium models
+- `--docker-script` - Use whisper.cpp download script (if available)
+- `--skip-restart` - Skip restarting containers/services
 
-**Example:**
+**Examples:**
 ```bash
-# Download base model
-bash scripts/utility/download-models.sh --model base
+# Download base model (สำหรับ CPU หรือ testing)
+bash scripts/utility/download-models.sh base
 
-# Download all models
+# Download medium model (สำหรับ GPU 4080) ⭐ แนะนำ
+bash scripts/utility/download-models.sh medium
+
+# Download multiple models
+bash scripts/utility/download-models.sh base small medium
+
+# Download all recommended models
 bash scripts/utility/download-models.sh --all
 ```
 
@@ -58,11 +78,17 @@ bash scripts/utility/fix-models.sh
 
 ## 📝 Model Information
 
-| Model | Size | VRAM | Speed | Accuracy |
-|-------|------|------|-------|----------|
-| base | ~150MB | ~1GB | ⚡⚡⚡ | ⭐⭐⭐ |
-| small | ~500MB | ~2GB | ⚡⚡ | ⭐⭐⭐⭐ |
-| medium | ~1.5GB | ~5GB | ⚡ | ⭐⭐⭐⭐⭐ |
+| Model | Size | VRAM | Speed (GPU 4080) | Accuracy | Use Case |
+|-------|------|------|-----------------|----------|----------|
+| tiny | ~75MB | ~500MB | ⚡⚡⚡⚡⚡ | ⭐⭐ | Fast testing |
+| base | ~148MB | ~1GB | ⚡⚡⚡⚡⚡ | ⭐⭐⭐ | CPU, Fast |
+| small | ~488MB | ~2GB | ⚡⚡⚡⚡ | ⭐⭐⭐⭐ | Balanced |
+| medium | ~1.5GB | ~5GB | ⚡⚡⚡ | ⭐⭐⭐⭐⭐ | **GPU 4080** ⭐ |
+| large | ~3.1GB | ~10GB | ⚡⚡ | ⭐⭐⭐⭐⭐ | Best accuracy |
+| large-v3 | ~3.1GB | ~10GB | ⚡⚡ | ⭐⭐⭐⭐⭐ | Latest model |
 
-**แนะนำ:** ใช้ `small` สำหรับ production (สมดุลระหว่าง speed/accuracy)
+**แนะนำ:**
+- **CPU:** ใช้ `base` หรือ `small`
+- **GPU 4080:** ใช้ `medium` (เทียบเท่า Groq API) ⭐
+- **Best Accuracy:** ใช้ `large-v3`
 
