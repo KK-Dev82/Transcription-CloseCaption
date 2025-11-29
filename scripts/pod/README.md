@@ -87,6 +87,18 @@ bash scripts/pod/build-and-push-runpod-base.sh
 
 ---
 
+### `stop-services.sh` ⭐ (ใหม่)
+**Stop Services ทั้งหมด**
+- Stop Main API, Whisper API, Video Worker, Redis
+- ตรวจสอบว่า processes หยุดทำงานแล้ว
+
+**Usage:**
+```bash
+bash scripts/pod/stop-services.sh
+```
+
+---
+
 ### `update-code.sh` ⭐ (ใหม่)
 **อัปเดต Code บน RunPod Pod Server**
 - Stop services

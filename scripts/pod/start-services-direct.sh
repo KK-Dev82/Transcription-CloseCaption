@@ -225,11 +225,31 @@ else
 fi
 echo ""
 
-# Start Main API (foreground)
+# Start Main API (background - ใช้ nohup เพื่อไม่ให้ปิดเมื่อออกจาก terminal)
 echo "🚀 Starting Main API..."
 if [ -f "app/main.py" ]; then
     export PYTHONPATH=/workspace/transcription-service
-    echo "✅ Main API will start in foreground"
+    
+    # Start Main API in background with nohup
+    nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 &
+    MAIN_API_PID=$!
+    echo "✅ Main API started (PID: $MAIN_API_PID)"
+    
+    # Wait for Main API to be ready
+    echo "⏳ Waiting for Main API to be ready..."
+    sleep 3
+    for i in {1..30}; do
+        if curl -f http://localhost:8001/health > /dev/null 2>&1; then
+            echo "✅ Main API is ready"
+            break
+        fi
+        sleep 1
+    done
+    
+    if ! curl -f http://localhost:8001/health > /dev/null 2>&1; then
+        echo "⚠️  Main API health check failed. Check logs: tail -f /tmp/main-api.log"
+    fi
+    
     echo ""
     echo "📋 Service Status:"
     echo "   - Redis: Running on port 6379"
@@ -243,7 +263,11 @@ if [ -f "app/main.py" ]; then
     else
         echo "   - Video Worker: Not started"
     fi
-    echo "   - Main API: Starting on port 8001..."
+    if [ -n "$MAIN_API_PID" ]; then
+        echo "   - Main API: Running on port 8001 (PID: $MAIN_API_PID)"
+    else
+        echo "   - Main API: Not started"
+    fi
     echo ""
     echo "🌐 Exposed ports:"
     echo "   - API: http://localhost:8001"
@@ -251,14 +275,31 @@ if [ -f "app/main.py" ]; then
     echo "   - Redis: localhost:6379"
     echo ""
     echo "📋 Useful commands:"
-    echo "   - Check logs: tail -f /tmp/whisper.log /tmp/video-worker.log"
+    echo "   - Check logs: tail -f /tmp/main-api.log /tmp/whisper.log /tmp/video-worker.log"
     echo "   - Check API: curl http://localhost:8001/health"
     echo "   - Check Whisper: curl http://localhost:8002/health"
     echo "   - Monitor GPU: watch -n 1 nvidia-smi"
+    echo "   - Stop services: pkill -f 'python.*uvicorn.*app.main' && pkill -f 'python.*whisper_api' && pkill -f 'python.*video_worker' && pkill -f redis-server"
+    echo ""
+    echo "✅ All services started in background!"
+    echo "💡 Services will continue running even if you exit the terminal"
     echo ""
     
-    # Start Main API in foreground
-    python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+    # Keep container running (wait for processes)
+    echo "⏳ Monitoring services... (Press Ctrl+C to stop)"
+    while true; do
+        # Check if processes are still running
+        if [ -n "$MAIN_API_PID" ] && ! kill -0 $MAIN_API_PID 2>/dev/null; then
+            echo "⚠️  Main API process died. Check logs: tail -f /tmp/main-api.log"
+        fi
+        if [ -n "$WHISPER_PID" ] && ! kill -0 $WHISPER_PID 2>/dev/null; then
+            echo "⚠️  Whisper API process died. Check logs: tail -f /tmp/whisper.log"
+        fi
+        if [ -n "$VIDEO_WORKER_PID" ] && ! kill -0 $VIDEO_WORKER_PID 2>/dev/null; then
+            echo "⚠️  Video Worker process died. Check logs: tail -f /tmp/video-worker.log"
+        fi
+        sleep 10
+    done
 else
     echo "❌ app/main.py not found"
     echo "⏳ Keeping container running..."
