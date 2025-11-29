@@ -169,6 +169,57 @@ bash scripts/pod/test-runpod-gpu.sh
 
 ---
 
+### `check-services.sh` ⭐
+**ตรวจสอบสถานะ Services บน RunPod/Z2**
+- ตรวจสอบ running processes (Redis, Whisper API, Video Worker, Main API)
+- ตรวจสอบ listening ports (8001, 8002, 6379)
+- ตรวจสอบ health endpoints (local)
+- แสดง summary และ recommendations
+
+**Usage:**
+```bash
+# บน RunPod Pod หรือ HP Z2 Workstation
+bash scripts/pod/check-services.sh
+```
+
+---
+
+### `test-health-external.sh` ⭐
+**ทดสอบ Health Check จาก External (MacOS) ไปยัง RunPod**
+- ทดสอบ Main API และ Whisper API
+- ใช้ direct IP (205.196.17.108)
+- แสดง possible reasons และ solutions
+
+**Usage:**
+```bash
+# จาก MacOS (Local Machine)
+bash scripts/pod/test-health-external.sh [pod-ip] [api-port] [whisper-port]
+
+# ตัวอย่าง
+bash scripts/pod/test-health-external.sh 205.196.17.108 8001 8002
+```
+
+---
+
+### `test-health-runpod-url.sh` ⭐
+**ทดสอบ Health Check ด้วย RunPod HTTP Services URL**
+- ทดสอบ Main API และ Whisper API
+- ใช้ RunPod HTTP Services URL (proxy.runpod.net)
+- แสดง possible reasons และ solutions
+
+**Usage:**
+```bash
+# จาก MacOS (Local Machine)
+bash scripts/pod/test-health-runpod-url.sh [api-url] [whisper-url]
+
+# ตัวอย่าง (ใช้ URLs จาก RunPod Connect tab)
+bash scripts/pod/test-health-runpod-url.sh \
+  https://xxxxx-8001.proxy.runpod.net \
+  https://xxxxx-8002.proxy.runpod.net
+```
+
+---
+
 ## 🔗 Related Files
 
 - `Dockerfile.runpod-base` - Custom Base Image สำหรับ RunPod/Z2
