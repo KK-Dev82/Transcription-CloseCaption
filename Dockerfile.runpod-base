@@ -1,0 +1,82 @@
+# Custom Base Image สำหรับ RunPod และ HP Z2 Workstation
+# มี CUDA + Docker + Azure CLI + Setup Scripts พร้อมใช้งาน
+#
+# ใช้ได้ทั้ง:
+# - RunPod: Pull image นี้ → Start services อัตโนมัติ
+# - HP Z2: Pull image นี้ → Start services (ไม่ต้องติดตั้ง CUDA Toolkit แยก)
+#
+# ⚠️ หมายเหตุ: Z2 ต้องมี NVIDIA drivers และ nvidia-container-toolkit (ไม่ใช่ CUDA Toolkit)
+
+# Build for linux/amd64 (RunPod and HP Z2)
+# Note: Use --platform=linux/amd64 when building on ARM64 (MacOS M1/M2)
+FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    # Python
+    python3 \
+    python3-pip \
+    # Redis (สำหรับ local Redis service)
+    redis-server \
+    # Utilities
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    # Audio/Video processing
+    ffmpeg \
+    # Network tools
+    netcat \
+    telnet \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Azure CLI (สำหรับ pull images จาก ACR)
+RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# Install Python dependencies (พื้นฐาน)
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    requests \
+    aiohttp
+
+# Create working directory
+WORKDIR /workspace
+
+# Create directories structure
+RUN mkdir -p /workspace/uploads \
+    /workspace/storage/transcriptions \
+    /workspace/storage/metadata \
+    /workspace/storage/captions \
+    /workspace/temp \
+    /workspace/models \
+    /workspace/test-files
+
+# Copy setup scripts
+COPY scripts/pod/start-services-direct.sh /workspace/start-services.sh
+RUN chmod +x /workspace/start-services.sh
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_VISIBLE_DEVICES=0
+ENV WHISPER_CUBLAS=1
+
+# Expose ports
+EXPOSE 8001 8002 6379
+
+# Health check script
+COPY scripts/pod/healthcheck.sh /workspace/healthcheck.sh
+RUN chmod +x /workspace/healthcheck.sh
+
+# Default command: Start services
+CMD ["/workspace/start-services.sh"]
+

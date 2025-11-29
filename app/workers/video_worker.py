@@ -110,8 +110,11 @@ class VideoWorker:
                 routing_key='media.audio.chunk.extracted'
             )
             
-            # ตั้งค่า QoS
-            self.channel.basic_qos(prefetch_count=1)
+            # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
+            # prefetch_count=3 หมายความว่าแต่ละ worker จะรับงานได้ 3 งานพร้อมกัน
+            # เมื่อมี 2 workers → สามารถประมวลผลได้ 6 งานพร้อมกัน
+            # ⚠️ ปรับตาม server resources: 4 cores, 8GB RAM
+            self.channel.basic_qos(prefetch_count=3)
             
             logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
             return True
@@ -255,38 +258,49 @@ class VideoWorker:
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
     
     def _process_transcription_task(self, ch, method, properties, body):
-        """ประมวลผล transcription task"""
-        try:
-            task_data = json.loads(body.decode('utf-8'))
-            task_id = task_data.get('task_id')
-            logger.info(f"เริ่มประมวลผล transcription task: {task_id}")
-            
-            # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่ (ป้องกัน duplicate processing)
-            existing_task = self.json_storage.get_transcription(task_id)
-            if existing_task:
-                existing_status = existing_task.get('status', '')
-                if existing_status in ['completed', 'processing']:
-                    logger.warning(f"⚠️ Task {task_id} มีสถานะ '{existing_status}' แล้ว, ข้ามการประมวลผลซ้ำ (อาจเป็น duplicate message)")
-                    # Acknowledge message เพื่อไม่ให้ requeue
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                    return
-            
-            # อัปเดตสถานะเป็น processing
-            task_data['status'] = 'processing'
-            task_data['started_at'] = datetime.now().isoformat()
-            self.json_storage.save_transcription(task_id, task_data)
-            
-            # ประมวลผล transcription
-            asyncio.run(self._execute_transcription_task(task_data))
-            
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"transcription task เสร็จสิ้น: {task_id}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}", exc_info=True)
-            # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        """ประมวลผล transcription task - ใช้ threading เพื่อให้ worker รับงานใหม่ได้ทันที"""
+        import threading
+        
+        def process_in_thread():
+            """ประมวลผลใน thread แยกเพื่อไม่ block worker"""
+            try:
+                task_data = json.loads(body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                logger.info(f"เริ่มประมวลผล transcription task: {task_id}")
+                
+                # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่ (ป้องกัน duplicate processing)
+                existing_task = self.json_storage.get_transcription(task_id)
+                if existing_task:
+                    existing_status = existing_task.get('status', '')
+                    if existing_status in ['completed', 'processing']:
+                        logger.warning(f"⚠️ Task {task_id} มีสถานะ '{existing_status}' แล้ว, ข้ามการประมวลผลซ้ำ (อาจเป็น duplicate message)")
+                        # Acknowledge message เพื่อไม่ให้ requeue
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+                
+                # อัปเดตสถานะเป็น processing
+                task_data['status'] = 'processing'
+                task_data['started_at'] = datetime.now().isoformat()
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # ประมวลผล transcription
+                asyncio.run(self._execute_transcription_task(task_data))
+                
+                # Acknowledge message
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                logger.info(f"transcription task เสร็จสิ้น: {task_id}")
+                
+            except Exception as e:
+                logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}", exc_info=True)
+                # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+                try:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                except Exception as ack_error:
+                    logger.error(f"ไม่สามารถ nack message ได้: {ack_error}")
+        
+        # เริ่มประมวลผลใน thread แยก เพื่อให้ worker รับงานใหม่ได้ทันที
+        thread = threading.Thread(target=process_in_thread, daemon=True)
+        thread.start()
     
     async def _execute_trim_task(self, task_data: Dict[str, Any]):
         """ดำเนินการตัดวิดีโอ"""

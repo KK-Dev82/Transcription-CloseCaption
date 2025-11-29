@@ -2,25 +2,59 @@ import subprocess
 import json
 import logging
 import requests
+import asyncio
 from typing import List, Dict, Optional
 from pathlib import Path
 import tempfile
 import os
 
+# Import Provider Pattern
+from .whisper_providers import WhisperProviderFactory, TranscriptionResult
+
 logger = logging.getLogger(__name__)
 
 class WhisperService:
+    """
+    Whisper Service - Wrapper สำหรับ Provider Pattern
+    
+    Features:
+    - รองรับ switch ระหว่าง Groq API และ On-Premise (whisper.cpp)
+    - Backward compatible กับ code เดิม
+    - ใช้ environment variable WHISPER_PROVIDER เพื่อเลือก provider
+    
+    Environment Variables:
+    - WHISPER_PROVIDER: "builtin" หรือ "groq" (default: builtin)
+    - WHISPER_MODEL: model ที่ใช้ (default: base)
+    - GROQ_API_KEY: API key สำหรับ Groq
+    """
+    
     def __init__(self, use_docker: bool = True, whisper_cpp_path: str = "whisper.cpp", model_dir: str = "models"):
         self.use_docker = use_docker
         self.whisper_cpp_path = Path(whisper_cpp_path)
         self.model_dir = Path(model_dir)
         self.model_dir.mkdir(exist_ok=True)
         
-        # Whisper API URL - ใช้ environment variable
+        # Whisper API URL - ใช้ environment variable (for builtin provider)
         self.whisper_api_url = os.getenv('WHISPER_API_URL', 'http://localhost:8002')
         
-        # ตรวจสอบว่า whisper.cpp ถูกติดตั้งแล้วหรือไม่
-        self._check_whisper_installation()
+        # Initialize provider (lazy loading)
+        self._provider = None
+        self._provider_name = os.getenv('WHISPER_PROVIDER', 'builtin')
+        
+        # Log provider info
+        logger.info(f"🎯 WhisperService initialized with provider: {self._provider_name}")
+        
+        # ตรวจสอบว่า whisper.cpp ถูกติดตั้งแล้วหรือไม่ (สำหรับ builtin)
+        if self._provider_name == 'builtin':
+            self._check_whisper_installation()
+    
+    @property
+    def provider(self):
+        """Lazy load provider"""
+        if self._provider is None:
+            self._provider = WhisperProviderFactory.get_with_fallback()
+            logger.info(f"🏭 Loaded provider: {self._provider.provider_name}")
+        return self._provider
     
     def _check_whisper_installation(self):
         """ตรวจสอบการติดตั้ง Whisper.cpp"""
@@ -89,7 +123,59 @@ class WhisperService:
     def transcribe_file(self, audio_path: str, model_size: str = "base", 
                        language: str = "th", output_format: str = "json", 
                        use_thai_processor: bool = True) -> Dict:
-        """แปลงเสียงเป็นข้อความ"""
+        """
+        แปลงเสียงเป็นข้อความ - ใช้ Provider Pattern
+        
+        Args:
+            audio_path: Path ไปยังไฟล์ audio
+            model_size: ขนาด model (base, small, medium, large, large-v3-turbo)
+            language: ภาษา (th, en, auto)
+            output_format: รูปแบบ output (json) - deprecated, ใช้ json เสมอ
+            use_thai_processor: ใช้ Thai text processor หรือไม่
+            
+        Returns:
+            Dict: {"text": "...", "segments": [...]}
+        """
+        
+        try:
+            # Use provider to transcribe
+            logger.info(f"📝 Transcribing with provider: {self.provider.provider_name}")
+            
+            # Run async transcribe in sync context
+            loop = asyncio.new_event_loop()
+            try:
+                result: TranscriptionResult = loop.run_until_complete(
+                    self.provider.transcribe(audio_path, language, model_size)
+                )
+            finally:
+                loop.close()
+            
+            # Convert to dict format (backward compatible)
+            transcription_result = {
+                "text": result.text,
+                "segments": result.segments,
+                "provider": result.provider,
+                "model": result.model,
+                "processing_time": result.processing_time
+            }
+            
+            # ใช้ Thai Text Processor หากเป็นภาษาไทย
+            if use_thai_processor and language == "th":
+                transcription_result = self._apply_thai_processing(transcription_result)
+            
+            return transcription_result
+                        
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง: {e}")
+            raise
+    
+    def transcribe_file_legacy(self, audio_path: str, model_size: str = "base", 
+                       language: str = "th", output_format: str = "json", 
+                       use_thai_processor: bool = True) -> Dict:
+        """
+        [LEGACY] แปลงเสียงเป็นข้อความ - ใช้ code เดิม (ไม่ผ่าน Provider)
+        สำหรับ fallback ในกรณีที่ Provider มีปัญหา
+        """
         
         try:
             if self.use_docker:
@@ -97,29 +183,22 @@ class WhisperService:
                 whisper_api_url = self.whisper_api_url
                 
                 # แปลง path ให้ตรงกับ Whisper container
-                # API container: temp/task_xxx/chunk_X_xxx.wav  
-                # Whisper container: /app/temp/task_xxx/chunk_X_xxx.wav (เพราะ mount temp เป็น /app/temp)
-                
-                # แปลง path จาก temp/task_xxx/chunk_xxx.wav -> /app/temp/task_xxx/chunk_xxx.wav
                 audio_path_obj = Path(audio_path)
                 if audio_path_obj.is_absolute():
-                    # ถ้าเป็น absolute path ให้แปลงเป็น relative จาก project root
                     try:
                         relative_path = audio_path_obj.relative_to(Path.cwd())
                         whisper_audio_path = f"/app/{relative_path}"
                     except ValueError:
-                        # ถ้าไม่สามารถหา relative path ได้ ให้ใช้ absolute path
                         whisper_audio_path = str(audio_path_obj)
                 else:
-                    # ถ้าเป็น relative path แล้ว
                     whisper_audio_path = f"/app/{audio_path}"
                 
                 # ตรวจสอบว่าไฟล์มีอยู่จริงหรือไม่
                 if not os.path.exists(audio_path):
                     raise FileNotFoundError(f"Audio file not found: {audio_path}")
                 
-                logger.info(f"Original audio path: {audio_path}")
-                logger.info(f"Whisper audio path: {whisper_audio_path}")
+                logger.info(f"[Legacy] Original audio path: {audio_path}")
+                logger.info(f"[Legacy] Whisper audio path: {whisper_audio_path}")
                 
                 # ส่งคำขอไปยัง Whisper API
                 request_data = {
@@ -129,12 +208,12 @@ class WhisperService:
                     "output_format": output_format
                 }
                 
-                logger.info(f"ส่งคำขอไปยัง Whisper API: {request_data}")
+                logger.info(f"[Legacy] ส่งคำขอไปยัง Whisper API: {request_data}")
                 
                 response = requests.post(
                     f"{whisper_api_url}/transcribe",
                     json=request_data,
-                    timeout=600  # 10 นาที (เพิ่มจาก 5 นาที เพื่อรองรับ chunks ที่ซับซ้อน)
+                    timeout=600
                 )
                 
                 if response.status_code == 200:
@@ -145,7 +224,6 @@ class WhisperService:
                             "segments": result.get("segments", [])
                         }
                         
-                        # ใช้ Thai Text Processor หากเป็นภาษาไทย
                         if use_thai_processor and language == "th":
                             transcription_result = self._apply_thai_processing(transcription_result)
                         
@@ -159,7 +237,6 @@ class WhisperService:
                 # ใช้ local installation
                 model_path = self.download_model(model_size)
                 
-                # สร้างไฟล์ output ชั่วคราว
                 with tempfile.NamedTemporaryFile(suffix=f".{output_format}", delete=False) as tmp_file:
                     output_path = tmp_file.name
                 
@@ -175,7 +252,6 @@ class WhisperService:
                     
                     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
                     
-                    # อ่านผลลัพธ์
                     if output_format == "json":
                         with open(output_path, 'r', encoding='utf-8') as f:
                             return json.load(f)
@@ -188,14 +264,13 @@ class WhisperService:
                     logger.error(f"stderr: {e.stderr}")
                     raise
                 finally:
-                    # ลบไฟล์ชั่วคราว
                     try:
                         os.unlink(output_path)
                     except:
                         pass
                         
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง: {e}")
+            logger.error(f"[Legacy] เกิดข้อผิดพลาดในการแปลงเสียง: {e}")
             raise
     
     def _apply_thai_processing(self, transcription_result: Dict) -> Dict:
