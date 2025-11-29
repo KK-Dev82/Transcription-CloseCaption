@@ -100,7 +100,8 @@ if [ -f "requirements.txt" ]; then
             pythainlp==4.0.2 \
             psutil==5.9.6 \
             python-multipart==0.0.6 \
-            websockets==12.0
+            websockets==12.0 \
+            tzdata
     }
 else
     echo "⚠️  requirements.txt not found, installing basic dependencies..."
@@ -117,8 +118,17 @@ else
         pythainlp==4.0.2 \
         psutil==5.9.6 \
         python-multipart==0.0.6 \
-        websockets==12.0
+        websockets==12.0 \
+        tzdata
 fi
+
+# Install tzdata (required for pythainlp timezone support)
+echo "📦 Installing tzdata (required for pythainlp)..."
+pip3 install --no-cache-dir tzdata || {
+    echo "⚠️  Failed to install tzdata. Trying system package..."
+    apt-get update && apt-get install -y tzdata || echo "⚠️  Failed to install tzdata"
+}
+
 echo "✅ Python dependencies installed"
 
 # Install Whisper dependencies
