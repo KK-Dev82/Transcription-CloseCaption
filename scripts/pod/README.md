@@ -87,6 +87,28 @@ bash scripts/pod/build-and-push-runpod-base.sh
 
 ---
 
+### `update-code.sh` ⭐ (ใหม่)
+**อัปเดต Code บน RunPod Pod Server**
+- Stop services
+- Backup .env.runpod
+- Pull latest code จาก Git
+- Reinstall dependencies (ถ้า requirements.txt เปลี่ยน)
+- Restore .env.runpod
+- Start services ใหม่
+
+**Usage:**
+```bash
+# อัปเดตจาก staging branch (default)
+bash scripts/pod/update-code.sh
+
+# อัปเดตจาก main branch
+bash scripts/pod/update-code.sh main
+```
+
+**หมายเหตุ:** Script นี้จะ stop services ก่อน pull code และ start ใหม่หลัง pull เสร็จ
+
+---
+
 ### `get-acr-credentials.sh`
 **ดึง ACR Credentials สำหรับ RunPod Registry Auth**
 - Enable Admin User (ถ้ายังไม่เปิด)

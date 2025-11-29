@@ -81,26 +81,45 @@ EOF
     echo "✅ Created .env.runpod file"
 fi
 
-# Install Python dependencies (ถ้ายังไม่มี)
-echo "📦 Checking Python dependencies..."
-if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo "📦 Installing Python dependencies..."
+# Install Python dependencies
+echo "📦 Installing Python dependencies..."
+if [ -f "requirements.txt" ]; then
+    echo "📦 Installing from requirements.txt..."
     pip3 install --no-cache-dir -r requirements.txt || {
-        echo "⚠️  requirements.txt not found, installing basic dependencies..."
+        echo "⚠️  Some packages failed to install, trying essential packages..."
         pip3 install --no-cache-dir \
-            fastapi \
-            uvicorn[standard] \
-            pydantic \
-            requests \
-            aiohttp \
-            redis \
-            pika \
-            python-dotenv \
-            numpy \
-            pythainlp \
-            psutil
+            fastapi==0.104.1 \
+            uvicorn[standard]==0.24.0 \
+            pydantic==2.5.0 \
+            requests==2.31.0 \
+            aiohttp==3.9.1 \
+            aiofiles==23.2.1 \
+            redis==5.0.1 \
+            pika==1.3.2 \
+            python-dotenv==1.0.0 \
+            pythainlp==4.0.2 \
+            psutil==5.9.6 \
+            python-multipart==0.0.6 \
+            websockets==12.0
     }
+else
+    echo "⚠️  requirements.txt not found, installing basic dependencies..."
+    pip3 install --no-cache-dir \
+        fastapi==0.104.1 \
+        uvicorn[standard]==0.24.0 \
+        pydantic==2.5.0 \
+        requests==2.31.0 \
+        aiohttp==3.9.1 \
+        aiofiles==23.2.1 \
+        redis==5.0.1 \
+        pika==1.3.2 \
+        python-dotenv==1.0.0 \
+        pythainlp==4.0.2 \
+        psutil==5.9.6 \
+        python-multipart==0.0.6 \
+        websockets==12.0
 fi
+echo "✅ Python dependencies installed"
 
 # Install Whisper dependencies
 echo "📦 Checking Whisper dependencies..."
