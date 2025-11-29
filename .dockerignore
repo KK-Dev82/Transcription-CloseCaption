@@ -26,8 +26,10 @@ run_worker.py
 # Examples
 examples/
 
-# Scripts
-scripts/
+# Scripts (exclude most, but keep pod scripts for Dockerfile.runpod-base)
+scripts/*
+!scripts/pod/
+scripts/pod/*.md
 
 # Logs
 *.log

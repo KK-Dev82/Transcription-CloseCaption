@@ -52,9 +52,9 @@ chmod 644 uploads/* storage/* temp/* models/* 2>/dev/null || true
 if [ ! -f "models/ggml-base.bin" ]; then
     echo "⚠️  ไม่พบ Whisper model"
     echo "📥 Downloading Whisper model..."
-    if [ -f "scripts/download-models.sh" ]; then
-        chmod +x scripts/download-models.sh
-        ./scripts/download-models.sh
+    if [ -f "scripts/utility/download-models.sh" ]; then
+        chmod +x scripts/utility/download-models.sh
+        ./scripts/utility/download-models.sh
     else
         echo "❌ ไม่พบ script download-models.sh"
         echo "กรุณาดาวน์โหลด model ด้วยตนเอง:"

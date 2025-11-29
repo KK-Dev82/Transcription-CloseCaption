@@ -6,7 +6,7 @@ import json
 from typing import List, Dict
 import asyncio
 
-from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption
+from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring
 # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
 # from .api import websocket
 # from .api.websocket import router as websocket_router
@@ -119,6 +119,9 @@ app.include_router(history.router)
 
 # 🎬 Real-time Caption API
 app.include_router(realtime_caption.router)
+
+# 📊 Monitoring API (Whisper Providers)
+app.include_router(monitoring.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

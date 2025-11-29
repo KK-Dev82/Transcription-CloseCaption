@@ -6,6 +6,7 @@ Whisper API Service สำหรับรันใน whisper container
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import subprocess
+import asyncio
 import tempfile
 import os
 import logging
@@ -110,13 +111,36 @@ async def transcribe_audio(request: TranscriptionRequest):
         
         logger.info(f"รันคำสั่ง: {' '.join(cmd)}")
         
-        # รันคำสั่ง
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300  # timeout 5 นาที
+        # รันคำสั่ง - ใช้ asyncio subprocess เพื่อไม่ block event loop
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=600  # timeout 10 นาที (เพิ่มจาก 5 นาที)
+            )
+            result_code = process.returncode
+            result_stdout = stdout.decode('utf-8') if stdout else ''
+            result_stderr = stderr.decode('utf-8') if stderr else ''
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            # สร้าง result object ที่มี returncode != 0 เพื่อให้ error handling ทำงาน
+            result = type('obj', (object,), {
+                'returncode': -1,
+                'stdout': '',
+                'stderr': 'Transcription timeout after 600 seconds'
+            })()
+        else:
+            result = type('obj', (object,), {
+                'returncode': result_code,
+                'stdout': result_stdout,
+                'stderr': result_stderr
+            })()
         
         if result.returncode != 0:
             logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง: {result.stderr}")
@@ -272,4 +296,9 @@ async def download_model(request: DownloadModelRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002) 
+    # ใช้ workers=3 เพื่อรองรับ concurrent requests (เพิ่มจาก 2)
+    # แต่ละ worker จะใช้ memory และ CPU ประมาณ 0.8G และ 0.5 CPU
+    # Total: 2.5G RAM, 1.4 CPU (ตรงกับ docker-compose.staging.yml)
+    # ⚡ เพิ่ม workers เพื่อให้รับงาน transcription หลายงานพร้อมกันได้
+    # ⚠️ ต้องใช้ import string "whisper_api:app" เพื่อให้ workers ทำงานได้
+    uvicorn.run("whisper_api:app", host="0.0.0.0", port=8002, workers=3) 

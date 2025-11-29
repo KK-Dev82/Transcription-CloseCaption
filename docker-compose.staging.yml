@@ -38,10 +38,10 @@ services:
     deploy:
       resources:
         limits:
-          # ลด resources เล็กน้อยเพื่อให้ Whisper มี resources เพิ่มขึ้น
-          # Total: 3.5 CPU, 7.0G RAM (within limits)
-          memory: 1.2G  # ลดจาก 1.5G → 1.2G
-          cpus: '0.8'   # ลดจาก 1.0 → 0.8
+          # ปรับ resources ให้พอดีกับ server (4 cores, 7.75GB RAM)
+          # Total: 6.5G RAM, 3.6 CPU (เหลือ 1.25G RAM, 0.4 CPU สำหรับ OS)
+          memory: 1G  # API ไม่ต้องการ memory มาก
+          cpus: '0.6'  # API ไม่ต้องการ CPU มาก
 
   # Video Processing Worker 1
   video-worker-1:
@@ -80,9 +80,11 @@ services:
     deploy:
       resources:
         limits:
-          # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-          memory: 1G
-          cpus: '0.4'
+          # ใช้ 2 workers แต่เพิ่ม resources ให้มากกว่า (ดีกว่า 3 workers)
+          # แต่ละ worker: 3G RAM, 1.2 CPU (เทียบเท่า Local 75%)
+          # Total: 6G RAM, 2.4 CPU (2 workers)
+          memory: 3G  # เพิ่มจาก 2G → 3G (เทียบเท่า Local 75%)
+          cpus: '1.2'  # เพิ่มจาก 0.8 → 1.2 (เทียบเท่า Local 120%)
 
   # Video Processing Worker 2
   video-worker-2:
@@ -121,52 +123,17 @@ services:
     deploy:
       resources:
         limits:
-          # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-          memory: 1G
-          cpus: '0.4'
+          # ใช้ 2 workers แต่เพิ่ม resources ให้มากกว่า (ดีกว่า 3 workers)
+          # แต่ละ worker: 3G RAM, 1.2 CPU (เทียบเท่า Local 75%)
+          # Total: 6G RAM, 2.4 CPU (2 workers)
+          memory: 3G  # เพิ่มจาก 2G → 3G (เทียบเท่า Local 75%)
+          cpus: '1.2'  # เพิ่มจาก 0.8 → 1.2 (เทียบเท่า Local 120%)
 
   # Video Processing Worker 3
-  # ⚠️  NOTE: ปิด worker ที่ 3 เพื่อประหยัด resources (server มี 4 cores, 7.75GB RAM)
-  #      ถ้าต้องการเพิ่ม throughput สามารถ uncomment ได้ แต่ต้องลด resources ของ service อื่น
+  # ⚠️  ปิด worker ที่ 3 เพื่อให้ workers ที่เหลือมี resources มากกว่า
+  #     ใช้ 2 workers แต่ละตัว: 3G RAM, 1.2 CPU (ดีกว่า 3 workers แต่ละตัว: 2G RAM, 0.8 CPU)
+  #     เหตุผล: Transcription tasks ใช้ resources มาก → แต่ละ worker ควรมี resources เพียงพอ
   # video-worker-3:
-  #   image: kksenateacr.azurecr.io/kk-transcription:alpha-dev
-  #   platform: linux/amd64
-  #   container_name: video-worker-3
-  #   command: python -m app.workers.video_worker
-  #   volumes:
-  #     - ./uploads:/app/uploads
-  #     - ./storage:/app/storage
-  #     - ./temp:/app/temp
-  #     - ./models:/app/models
-  #   environment:
-  #     PYTHONPATH: /app
-  #     ENVIRONMENT: staging
-  #     STORAGE_TYPE: json
-  #     JSON_STORAGE_DIR: /app/storage
-  #     # RabbitMQ (VM 47)
-  #     RABBITMQ_HOST: 10.200.22.61
-  #     RABBITMQ_PORT: 5672
-  #     RABBITMQ_USER: senate
-  #     RABBITMQ_PASSWORD: qP2VtHz6fAX4xDksEpMrLT
-  #     # Whisper (same VM)
-  #     WHISPER_API_URL: http://whisper:8002
-  #     # Redis (local container)
-  #     REDIS_URL: redis://redis:6379
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - redis
-  #   healthcheck:
-  #     test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-  #     interval: 60s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-  #         memory: 1G
-  #         cpus: '0.4'
 
   # Whisper.cpp สำหรับ transcription
   whisper:
@@ -182,9 +149,12 @@ services:
     environment:
       WHISPER_MODEL_PATH: /app/models
       ENVIRONMENT: staging
-      WHISPER_THREADS: 4
+      # ⚡ เพิ่ม WHISPER_THREADS เพื่อใช้ CPU ได้เต็มที่ (server มี 4 cores)
+      WHISPER_THREADS: 6
       WHISPER_BATCH_SIZE: 32
       WHISPER_OPTIMIZE: true
+      # ใช้ model base เพื่อความเร็ว (บน CPU-only server)
+      WHISPER_MODEL: base
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -195,11 +165,10 @@ services:
     deploy:
       resources:
         limits:
-          # เพิ่ม resources เพื่อลด timeout errors
-          # Server: 4 cores, 7.75GB RAM
-          # Total: 3.5 CPU, 7.0G RAM (within limits)
-          memory: 2.5G  # เพิ่มจาก 1.5G → 2.5G (เพื่อรองรับ concurrent requests)
-          cpus: '1.5'   # เพิ่มจาก 1.0 → 1.5 (เพื่อประมวลผลเร็วขึ้น)
+          # เพิ่ม resources เพื่อรองรับ concurrent requests
+          # Total: 7.5G RAM, 3.8 CPU (เหลือ 0.25G RAM, 0.2 CPU สำหรับ OS)
+          memory: 2.5G  # เพิ่มจาก 2G → 2.5G เพื่อรองรับ concurrent requests
+          cpus: '1.4'  # เพิ่มจาก 1.0 → 1.4 เพื่อรองรับ concurrent transcription
 
   # Whisper สำหรับ Live Streaming
   # ⚠️  NOTE: whisper-live service ไม่ได้ถูกใช้งานจริง (ทุกที่ใช้ whisper:8002)
@@ -245,9 +214,10 @@ services:
     deploy:
       resources:
         limits:
-          # Optimized for 4-core, 7.75GB RAM server (within 3.2 CPU, 6GB available)
-          memory: 1G
-          cpus: '0.2'
+          # ปรับ resources ให้พอดีกับ server (4 cores, 7.75GB RAM)
+          # Total: 7.5G RAM, 4.0 CPU (พอดีกับ server)
+          memory: 0.5G  # ลดจาก 1G → 0.5G (เพื่อให้ workers มี resources เพิ่มขึ้น)
+          cpus: '0.1'  # ลดจาก 0.2 → 0.1 (เพื่อให้ workers มี CPU เพิ่มขึ้น)
  
 volumes:
   redis_data:
