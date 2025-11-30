@@ -70,15 +70,32 @@ bash scripts/pod/check-pod.sh
 ### 7. `download-tool.sh` (Optional)
 Tool สำหรับ download models และ videos
 
+**สำหรับ openai-whisper provider:**
 ```bash
-# Download model
+# Download model (จะถูกเก็บใน ~/.cache/whisper/)
 bash scripts/pod/download-tool.sh model medium
 bash scripts/pod/download-tool.sh model large-v3
 
-# Download video
+# หรือใช้ Python โดยตรง
+python3 -c "import whisper; whisper.load_model('large-v3')"
+```
+
+**สำหรับ whisper.cpp provider:**
+```bash
+# Download model (จะถูกเก็บใน models/)
+bash scripts/pod/download-tool.sh model medium
+bash scripts/pod/download-tool.sh model large-v3
+```
+
+**Download video:**
+```bash
 bash scripts/pod/download-tool.sh video https://example.com/video.mp4
 bash scripts/pod/download-tool.sh video /tmp/video.mp4 uploads/
 ```
+
+**หมายเหตุ:**
+- openai-whisper models จะถูก download อัตโนมัติเมื่อใช้งานครั้งแรก
+- Models จะถูกเก็บใน `~/.cache/whisper/` (default) หรือ `WHISPER_DOWNLOAD_ROOT` ถ้ากำหนด
 
 ### 8. `test-transcription.sh` (Optional)
 ทดสอบ transcription (เลือก model และ video ได้)
@@ -231,7 +248,9 @@ bash scripts/pod/setup-pod.sh
 
 - Logs: `/tmp/main-api.log`, `/tmp/whisper.log`, `/tmp/video-worker.log`
 - Config: `.env.runpod`
-- Models: `models/`
+- Models:
+  - **openai-whisper**: `~/.cache/whisper/` (default) หรือ `WHISPER_DOWNLOAD_ROOT`
+  - **whisper.cpp**: `models/` (ggml-*.bin files)
 - Videos: `uploads/`
 - Storage: `storage/`
 

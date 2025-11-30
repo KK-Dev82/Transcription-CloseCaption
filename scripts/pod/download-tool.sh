@@ -50,11 +50,50 @@ cd "$PROJECT_ROOT"
 case "$TYPE" in
     model)
         print_status "Downloading Whisper model: $ARG"
-        if [ -f "scripts/utility/download-models.sh" ]; then
-            bash scripts/utility/download-models.sh "$ARG" --skip-restart
+        
+        # Check WHISPER_PROVIDER
+        if [ -f ".env.runpod" ]; then
+            set -a
+            source .env.runpod
+            set +a
+        fi
+        
+        WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+        
+        if [ "$WHISPER_PROVIDER" = "openai-whisper" ]; then
+            # Download openai-whisper model using Python
+            print_status "Downloading openai-whisper model: $ARG"
+            print_status "💡 Models are stored in ~/.cache/whisper/ by default"
+            
+            if command -v python3 &> /dev/null; then
+                # Check if openai-whisper is installed
+                if ! python3 -c "import whisper" 2>/dev/null; then
+                    print_error "❌ openai-whisper not installed"
+                    print_status "💡 Install: pip3 install openai-whisper"
+                    exit 1
+                fi
+                
+                print_status "Downloading model (this may take a while)..."
+                python3 -c "import whisper; whisper.load_model('$ARG')" && {
+                    print_success "✅ Model downloaded successfully"
+                    WHISPER_CACHE_DIR=${WHISPER_DOWNLOAD_ROOT:-~/.cache/whisper}
+                    print_status "💡 Model location: $WHISPER_CACHE_DIR/$ARG.pt"
+                } || {
+                    print_error "❌ Failed to download model"
+                    exit 1
+                }
+            else
+                print_error "❌ python3 not found"
+                exit 1
+            fi
         else
-            print_error "❌ download-models.sh not found"
-            exit 1
+            # Download whisper.cpp model (ggml-*.bin)
+            if [ -f "scripts/utility/download-models.sh" ]; then
+                bash scripts/utility/download-models.sh "$ARG" --skip-restart
+            else
+                print_error "❌ download-models.sh not found"
+                exit 1
+            fi
         fi
         ;;
     

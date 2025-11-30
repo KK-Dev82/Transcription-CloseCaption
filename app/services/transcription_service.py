@@ -298,13 +298,36 @@ class TranscriptionService:
             if file_name:
                 task.file_name = file_name
             
-            # สร้าง audio chunks
-            logger.info("กำลังแบ่งไฟล์เป็น audio chunks...")
+            # ตรวจสอบประเภทไฟล์และสร้าง audio chunks
+            logger.info("กำลังตรวจสอบประเภทไฟล์และแบ่งไฟล์เป็น audio chunks...")
             logger.info(f"   File path: {local_file_path}")
             logger.info(f"   Chunk duration: {chunk_duration}s")
             
             try:
-                chunks = self.video_service.extract_audio_chunks(local_file_path, chunk_duration)
+                # ตรวจสอบว่าเป็น audio file หรือ video file
+                is_audio = self.file_service.is_audio_file(local_file_path)
+                is_video = self.file_service.is_video_file(local_file_path)
+                
+                logger.info(f"   File type: {'audio' if is_audio else 'video' if is_video else 'unknown'}")
+                
+                if is_audio:
+                    # ถ้าเป็น audio file (ที่ extract แล้วจาก Media Processor)
+                    # ใช้ file_service.create_chunks() เพื่อแบ่งเป็น chunks โดยตรง
+                    logger.info("📁 ไฟล์เป็น audio file - ใช้ create_chunks() โดยตรง (ไม่ต้อง extract audio)")
+                    chunks = self.file_service.create_chunks(local_file_path, chunk_duration)
+                elif is_video:
+                    # ถ้าเป็น video file ใช้ video_service.extract_audio_chunks()
+                    logger.info("🎬 ไฟล์เป็น video file - ใช้ extract_audio_chunks() เพื่อ extract audio ก่อน")
+                    chunks = self.video_service.extract_audio_chunks(local_file_path, chunk_duration)
+                else:
+                    # ถ้าไม่ทราบประเภทไฟล์ ลองใช้ extract_audio_chunks() (รองรับทั้ง video และ audio)
+                    logger.warning("⚠️ ไม่ทราบประเภทไฟล์ - ลองใช้ extract_audio_chunks()")
+                    try:
+                        chunks = self.video_service.extract_audio_chunks(local_file_path, chunk_duration)
+                    except Exception as e:
+                        logger.warning(f"⚠️ extract_audio_chunks() ล้มเหลว - ลองใช้ create_chunks() แทน: {e}")
+                        chunks = self.file_service.create_chunks(local_file_path, chunk_duration)
+                
                 logger.info(f"✅ สร้าง audio chunks สำเร็จ: {len(chunks)} chunks")
                 
                 if not chunks or len(chunks) == 0:

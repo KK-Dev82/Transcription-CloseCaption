@@ -60,8 +60,10 @@ RABBITMQ_PORT=5672
 RABBITMQ_USER=senate
 RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
 REDIS_URL=redis://localhost:6379
-WHISPER_PROVIDER=builtin
-WHISPER_API_URL=http://localhost:8002
+WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+# Note: WHISPER_API_URL ไม่จำเป็นสำหรับ openai-whisper provider
 CUDA_VISIBLE_DEVICES=0
 WHISPER_CUBLAS=1
 EOF
@@ -130,37 +132,84 @@ echo ""
 
 # Check Whisper models
 print_status "Checking Whisper models..."
-MODEL_FOUND=""
-for variant in "ggml-large-v3.bin" "ggml-large-v2.bin" "ggml-large.bin" "ggml-medium.bin" "ggml-small.bin" "ggml-base.bin"; do
-    if [ -f "models/$variant" ]; then
-        FILE_SIZE=$(stat -c%s "models/$variant" 2>/dev/null || stat -f%z "models/$variant" 2>/dev/null || echo "0")
-        if [ "$FILE_SIZE" -gt 100000000 ]; then  # > 100MB
-            MODEL_FOUND="$variant"
-            print_success "✅ Found model: $variant ($(du -h "models/$variant" | cut -f1))"
-            break
-        fi
-    fi
-done
 
-if [ -z "$MODEL_FOUND" ]; then
-    print_warning "⚠️  No Whisper model found"
-    echo ""
-    echo "Available models:"
-    echo "  - base: Fastest, lowest accuracy"
-    echo "  - small: Balanced"
-    echo "  - medium: Better accuracy (แนะนำสำหรับ RTX 4080)"
-    echo "  - large-v3: Best accuracy, slowest (แนะนำสำหรับ RTX 4080)"
-    echo ""
-    read -p "Download model? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+# Check WHISPER_PROVIDER from .env.runpod
+if [ -f ".env.runpod" ]; then
+    set -a
+    source .env.runpod
+    set +a
+fi
+
+WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+
+if [ "$WHISPER_PROVIDER" = "openai-whisper" ]; then
+    # Check openai-whisper models (stored in ~/.cache/whisper/ by default)
+    print_status "Checking openai-whisper models..."
+    WHISPER_CACHE_DIR=${WHISPER_DOWNLOAD_ROOT:-~/.cache/whisper}
+    MODEL_FOUND=""
+    
+    # Check for common model files
+    for model_name in "large-v3.pt" "large-v2.pt" "large.pt" "medium.pt" "small.pt" "base.pt" "tiny.pt"; do
+        MODEL_PATH="$WHISPER_CACHE_DIR/$model_name"
+        if [ -f "$MODEL_PATH" ]; then
+            FILE_SIZE=$(stat -c%s "$MODEL_PATH" 2>/dev/null || stat -f%z "$MODEL_PATH" 2>/dev/null || echo "0")
+            if [ "$FILE_SIZE" -gt 1000000 ]; then  # > 1MB
+                MODEL_FOUND="$model_name"
+                print_success "✅ Found openai-whisper model: $model_name ($(du -h "$MODEL_PATH" | cut -f1))"
+                break
+            fi
+        fi
+    done
+    
+    if [ -z "$MODEL_FOUND" ]; then
+        print_warning "⚠️  No openai-whisper model found in $WHISPER_CACHE_DIR"
+        print_status "💡 Models will be downloaded automatically on first use"
         echo ""
-        read -p "Model size (medium/large-v3): " MODEL_SIZE
-        MODEL_SIZE=${MODEL_SIZE:-medium}
-        if [ -f "scripts/utility/download-models.sh" ]; then
-            bash scripts/utility/download-models.sh "$MODEL_SIZE" --skip-restart
-        else
-            print_error "❌ download-models.sh not found"
+        echo "Available models (will be auto-downloaded):"
+        echo "  - tiny: Fastest, lowest accuracy (~39M parameters)"
+        echo "  - base: Fast, medium accuracy (~74M parameters)"
+        echo "  - small: Balanced (~244M parameters)"
+        echo "  - medium: Better accuracy (~769M parameters) (แนะนำสำหรับ RTX 4080)"
+        echo "  - large-v3: Best accuracy, slowest (~1550M parameters) (แนะนำสำหรับ RTX 4080)"
+        echo ""
+        print_status "💡 To pre-download a model, run:"
+        echo "   python3 -c 'import whisper; whisper.load_model(\"large-v3\")'"
+    fi
+else
+    # Check whisper.cpp models (ggml-*.bin files)
+    print_status "Checking whisper.cpp models (ggml-*.bin)..."
+    MODEL_FOUND=""
+    for variant in "ggml-large-v3.bin" "ggml-large-v2.bin" "ggml-large.bin" "ggml-medium.bin" "ggml-small.bin" "ggml-base.bin"; do
+        if [ -f "models/$variant" ]; then
+            FILE_SIZE=$(stat -c%s "models/$variant" 2>/dev/null || stat -f%z "models/$variant" 2>/dev/null || echo "0")
+            if [ "$FILE_SIZE" -gt 100000000 ]; then  # > 100MB
+                MODEL_FOUND="$variant"
+                print_success "✅ Found whisper.cpp model: $variant ($(du -h "models/$variant" | cut -f1))"
+                break
+            fi
+        fi
+    done
+    
+    if [ -z "$MODEL_FOUND" ]; then
+        print_warning "⚠️  No whisper.cpp model found"
+        echo ""
+        echo "Available models:"
+        echo "  - base: Fastest, lowest accuracy"
+        echo "  - small: Balanced"
+        echo "  - medium: Better accuracy (แนะนำสำหรับ RTX 4080)"
+        echo "  - large-v3: Best accuracy, slowest (แนะนำสำหรับ RTX 4080)"
+        echo ""
+        read -p "Download model? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo ""
+            read -p "Model size (medium/large-v3): " MODEL_SIZE
+            MODEL_SIZE=${MODEL_SIZE:-medium}
+            if [ -f "scripts/utility/download-models.sh" ]; then
+                bash scripts/utility/download-models.sh "$MODEL_SIZE" --skip-restart
+            else
+                print_error "❌ download-models.sh not found"
+            fi
         fi
     fi
 fi

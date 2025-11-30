@@ -63,7 +63,7 @@ RABBITMQ_PORT=5672
 RABBITMQ_USER=senate
 RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
 REDIS_URL=redis://localhost:6379
-WHISPER_PROVIDER=builtin
+WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
 WHISPER_API_URL=http://localhost:8002
 CUDA_VISIBLE_DEVICES=0
 WHISPER_CUBLAS=1
@@ -178,10 +178,16 @@ else
     export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
     export RABBITMQ_USER=${RABBITMQ_USER:-senate}
     export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+    export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+    export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
              RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \
+             WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
+             WHISPER_MODEL="${WHISPER_MODEL}" \
+             WHISPER_DEVICE="${WHISPER_DEVICE}" \
              python3 -m app.workers.video_worker > /tmp/video-worker.log 2>&1 & disown
     sleep 2
     if pgrep -f "python.*video_worker" > /dev/null; then
@@ -202,6 +208,9 @@ else
     export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
     export RABBITMQ_USER=${RABBITMQ_USER:-senate}
     export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+    export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+    export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
     # Set timezone environment variables for pythainlp
     export TZ=Asia/Bangkok
     [ -d "/usr/share/zoneinfo" ] && export TZDIR=/usr/share/zoneinfo || true
@@ -209,6 +218,9 @@ else
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
              RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \
+             WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
+             WHISPER_MODEL="${WHISPER_MODEL}" \
+             WHISPER_DEVICE="${WHISPER_DEVICE}" \
              TZ="${TZ}" \
              TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
              python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 & disown
