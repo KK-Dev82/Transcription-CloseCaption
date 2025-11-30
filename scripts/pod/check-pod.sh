@@ -92,10 +92,18 @@ if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
         print_success "   Main API is responding"
     else
         print_warning "   Main API is not responding"
+        print_status "   💡 Check logs: tail -20 /tmp/main-api.log"
         ALL_HEALTHY=false
     fi
 else
     print_error "❌ Main API is not running"
+    # Check if there's an error in logs
+    if [ -f "/tmp/main-api.log" ]; then
+        ERROR_COUNT=$(tail -50 /tmp/main-api.log | grep -i "error\|exception\|traceback" | wc -l || echo "0")
+        if [ "$ERROR_COUNT" -gt 0 ]; then
+            print_status "   💡 Found errors in logs - check: tail -20 /tmp/main-api.log"
+        fi
+    fi
     ALL_HEALTHY=false
 fi
 echo ""
