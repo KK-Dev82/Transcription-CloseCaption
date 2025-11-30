@@ -38,11 +38,22 @@ sleep 2
 echo "✅ Services stopped"
 echo ""
 
-# Backup .env.runpod
+# Backup and handle .env.runpod (untracked file conflict)
+ENV_BACKUP_MOVED=false
 if [ -f ".env.runpod" ]; then
     echo "💾 Backing up .env.runpod..."
     cp .env.runpod /tmp/.env.runpod.backup
+    cp .env.runpod /workspace/.env.runpod.backup 2>/dev/null || true
     echo "✅ Backup created"
+    
+    # Check if .env.runpod is untracked (would cause git pull to fail)
+    if ! git ls-files --error-unmatch .env.runpod > /dev/null 2>&1; then
+        echo "⚠️  .env.runpod is untracked (may conflict with git pull)"
+        echo "📦 Temporarily moving .env.runpod to avoid merge conflict..."
+        mv .env.runpod .env.runpod.tmp
+        ENV_BACKUP_MOVED=true
+        echo "✅ Moved to .env.runpod.tmp"
+    fi
 else
     echo "⚠️  .env.runpod not found (will be created by start script)"
 fi
@@ -91,11 +102,24 @@ else
 fi
 echo ""
 
-# Restore .env.runpod (ถ้าถูกลบ)
-if [ ! -f ".env.runpod" ] && [ -f "/tmp/.env.runpod.backup" ]; then
-    echo "📝 Restoring .env.runpod..."
+# Restore .env.runpod
+if [ "$ENV_BACKUP_MOVED" = true ] && [ -f ".env.runpod.tmp" ]; then
+    echo "📝 Restoring .env.runpod from temporary backup..."
+    mv .env.runpod.tmp .env.runpod
+    echo "✅ .env.runpod restored"
+elif [ ! -f ".env.runpod" ] && [ -f "/tmp/.env.runpod.backup" ]; then
+    echo "📝 Restoring .env.runpod from backup..."
     cp /tmp/.env.runpod.backup .env.runpod
     echo "✅ .env.runpod restored"
+fi
+
+# Ensure RabbitMQ config is correct
+if [ -f ".env.runpod" ]; then
+    if grep -q "RABBITMQ_HOST=localhost" .env.runpod; then
+        echo "🔧 Auto-updating RabbitMQ configuration..."
+        sed -i 's/RABBITMQ_HOST=localhost/RABBITMQ_HOST=178.128.105.100/g' .env.runpod
+        echo "✅ Updated RABBITMQ_HOST to 178.128.105.100"
+    fi
 fi
 echo ""
 
