@@ -2,6 +2,7 @@ import asyncio
 import uuid
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -372,10 +373,18 @@ class TranscriptionService:
             
             for i, chunk_path in enumerate(chunks):
                 try:
+                    chunk_start_time = time.time()
                     logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}: {chunk_path}")
                     result = self.whisper_service.transcribe_file(
                         chunk_path, model_size, language, use_thai_processor=True
                     )
+                    chunk_processing_time = time.time() - chunk_start_time
+                    
+                    # Log performance metrics
+                    if result and result.get("processing_time"):
+                        whisper_time = result.get("processing_time", 0)
+                        overhead_time = chunk_processing_time - whisper_time
+                        logger.info(f"⏱️  Chunk {i+1} timing: total={chunk_processing_time:.2f}s, whisper={whisper_time:.2f}s, overhead={overhead_time:.2f}s")
                     
                     # Log result details
                     if result:
