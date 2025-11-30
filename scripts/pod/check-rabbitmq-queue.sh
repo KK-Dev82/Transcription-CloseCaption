@@ -70,7 +70,7 @@ else
     print_warning "   Trying to check queues using Python/pika instead..."
     
     # Fallback to Python/pika
-    python3 << EOF 2>/dev/null || {
+    python3 << 'PYTHON_EOF' 2>/dev/null || {
         print_error "Cannot connect to RabbitMQ"
         exit 1
     }
@@ -122,7 +122,12 @@ try:
 except Exception as e:
     print(f"❌ Connection failed: {e}")
     sys.exit(1)
-EOF
+PYTHON_EOF
+    
+    if [ $? -ne 0 ]; then
+        print_error "Cannot connect to RabbitMQ"
+        exit 1
+    fi
     exit 0
 fi
 
