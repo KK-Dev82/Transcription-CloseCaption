@@ -120,6 +120,23 @@ print_status "Checking .env.runpod..."
 if [ -f ".env.runpod" ]; then
     print_success "✅ .env.runpod found"
     
+    # Check RabbitMQ configuration
+    if grep -q "RABBITMQ_HOST=localhost" .env.runpod; then
+        print_warning "⚠️  RABBITMQ_HOST is set to localhost"
+        echo ""
+        print_status "💡 Do you want to update RabbitMQ configuration to Backend Server?"
+        echo "   Current: RABBITMQ_HOST=localhost"
+        echo "   Recommended: RABBITMQ_HOST=178.128.105.100"
+        echo ""
+        read -p "Update RabbitMQ configuration? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            print_status "Updating RabbitMQ configuration..."
+            sed -i 's/RABBITMQ_HOST=localhost/RABBITMQ_HOST=178.128.105.100/g' .env.runpod
+            print_success "✅ Updated RABBITMQ_HOST to 178.128.105.100"
+        fi
+    fi
+    
     # Check if it's from backup
     if [ -f "/workspace/.env.runpod.backup" ]; then
         print_status "Found backup .env.runpod. Restore? (y/N)"
@@ -146,6 +163,7 @@ else
         fi
     else
         print_warning "⚠️  .env.runpod will be created by start-services-direct.sh"
+        print_status "💡 After .env.runpod is created, update RABBITMQ_HOST to 178.128.105.100"
     fi
 fi
 echo ""
@@ -167,6 +185,21 @@ else
 fi
 echo ""
 
+# Test RabbitMQ connection (if configured)
+if [ -f ".env.runpod" ]; then
+    source .env.runpod
+    if [ -n "$RABBITMQ_HOST" ] && [ "$RABBITMQ_HOST" != "localhost" ]; then
+        print_status "Testing RabbitMQ connection..."
+        if bash scripts/pod/test-rabbitmq-connection.sh "$RABBITMQ_HOST" "${RABBITMQ_PORT:-5672}" "${RABBITMQ_USER:-senate}" "${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}" 2>/dev/null; then
+            print_success "✅ RabbitMQ connection test passed!"
+        else
+            print_warning "⚠️  RabbitMQ connection test failed"
+            print_status "💡 Services will start, but Video Worker may not connect to RabbitMQ"
+        fi
+        echo ""
+    fi
+fi
+
 # Start services
 print_status "Starting services..."
 bash scripts/pod/start-services-direct.sh
@@ -178,4 +211,5 @@ print_status "📋 Next steps:"
 echo "   1. Check services: bash scripts/pod/check-services.sh"
 echo "   2. Check logs: tail -f /tmp/main-api.log /tmp/whisper.log /tmp/video-worker.log"
 echo "   3. Test health: curl http://localhost:8001/health"
+echo "   4. Test RabbitMQ: bash scripts/pod/test-rabbitmq-connection.sh 178.128.105.100 5672"
 
