@@ -574,6 +574,12 @@ class TranscriptionService:
             # บันทึกข้อมูลสุดท้าย - อัปเดต metadata เพิ่มเติม (job_id, user_id, callback_url)
             # Note: full_text และ chunks ถูกบันทึกไปแล้วที่บรรทัด 470
             logger.info("กำลังบันทึกผลลัพธ์สุดท้าย (metadata update)...")
+            
+            # คำนวณ processing time
+            completed_time = datetime.now()
+            created_time = task.created_at if task.created_at else completed_time
+            processing_time_seconds = (completed_time - created_time).total_seconds()
+            
             final_data = {
                 "task_id": task.task_id,
                 "status": "completed",  # อัปเดต status เป็น completed
@@ -586,8 +592,12 @@ class TranscriptionService:
                 "partial_text": task.partial_text,
                 "language": task.language,
                 "created_at": task.created_at.isoformat() if task.created_at else None,
-                "completed_at": datetime.now().isoformat(),  # อัปเดต completed_at
-                "updated_at": datetime.now().isoformat(),
+                "start_time": task.created_at.isoformat() if task.created_at else None,  # Alias for compatibility
+                "completed_at": completed_time.isoformat(),  # อัปเดต completed_at
+                "end_time": completed_time.isoformat(),  # Alias for compatibility
+                "updated_at": completed_time.isoformat(),
+                "processing_time": processing_time_seconds,  # เวลาที่ใช้ในการประมวลผล (วินาที)
+                "result_time": processing_time_seconds,  # Alias for compatibility
                 "error_message": task.error_message,
                 "progress": 100,  # อัปเดต progress เป็น 100
                 "job_id": getattr(task, "job_id", None),

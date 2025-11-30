@@ -47,9 +47,21 @@ class JSONStorage:
                     return None
             return value
         
+        # คำนวณ processing_time ถ้ายังไม่มี
+        processing_time = transcription_data.get("processing_time") or transcription_data.get("result_time")
+        if not processing_time and transcription_data.get("completed_at") and existing_data.get("created_at"):
+            try:
+                from datetime import datetime
+                created = datetime.fromisoformat(existing_data.get("created_at").replace('Z', '+00:00') if 'Z' in existing_data.get("created_at") else existing_data.get("created_at"))
+                completed = datetime.fromisoformat(transcription_data.get("completed_at").replace('Z', '+00:00') if 'Z' in transcription_data.get("completed_at") else transcription_data.get("completed_at"))
+                processing_time = (completed - created).total_seconds()
+            except Exception:
+                processing_time = None
+        
         data = {
             "task_id": task_id,
             "created_at": existing_data.get("created_at", datetime.now().isoformat()),
+            "start_time": transcription_data.get("start_time") or existing_data.get("start_time") or existing_data.get("created_at", datetime.now().isoformat()),  # Alias
             "updated_at": datetime.now().isoformat(),
             "file_path": transcription_data.get("file_path", existing_data.get("file_path")),
             "file_url": transcription_data.get("file_url", existing_data.get("file_url")),
@@ -63,6 +75,9 @@ class JSONStorage:
             "progress": transcription_data.get("progress", existing_data.get("progress", 0)),
             "error_message": transcription_data.get("error_message", existing_data.get("error_message")),
             "completed_at": _ensure_iso(transcription_data.get("completed_at", existing_data.get("completed_at"))),
+            "end_time": transcription_data.get("end_time") or _ensure_iso(transcription_data.get("completed_at", existing_data.get("completed_at"))),  # Alias
+            "processing_time": processing_time or existing_data.get("processing_time") or existing_data.get("result_time"),  # เวลาที่ใช้ในการประมวลผล (วินาที)
+            "result_time": processing_time or existing_data.get("result_time") or existing_data.get("processing_time"),  # Alias
             "job_id": transcription_data.get("job_id", existing_data.get("job_id")),
             "user_id": transcription_data.get("user_id", existing_data.get("user_id")),
             "callback_url": transcription_data.get("callback_url", existing_data.get("callback_url"))
