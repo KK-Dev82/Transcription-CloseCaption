@@ -141,7 +141,13 @@ fi
 # Function to download model using direct URL
 download_model_direct() {
     local model_size=$1
+    
+    # Map model size to actual filename (whisper.cpp uses large-v3 instead of large)
     local model_file="ggml-${model_size}.bin"
+    if [ -n "${MODEL_FILE_MAP[$model_size]}" ]; then
+        model_file="${MODEL_FILE_MAP[$model_size]}"
+    fi
+    
     local model_url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${model_file}"
     
     print_status "Downloading ${model_file} using $DOWNLOAD_CMD..."
@@ -211,6 +217,17 @@ download_model_script() {
 verify_model() {
     local model_size=$1
     local model_file="ggml-${model_size}.bin"
+    
+    # For large model, check for variants (large-v3, large-v2, large)
+    if [ "$model_size" = "large" ]; then
+        for variant in "ggml-large-v3.bin" "ggml-large-v2.bin" "ggml-large.bin"; do
+            if [ -f "models/$variant" ]; then
+                model_file="$variant"
+                break
+            fi
+        done
+    fi
+    
     local expected_size=${MODEL_SIZES[$model_size]:-100000000}
     
     if [ ! -f "models/${model_file}" ]; then
