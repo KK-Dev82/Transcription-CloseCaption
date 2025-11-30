@@ -1006,21 +1006,52 @@ class VideoWorker:
             
             # ดึงข้อมูล transcription ที่บันทึกไว้แล้วจาก transcription_service
             # (transcription_service บันทึก full_text และ chunks ไว้แล้ว)
-            # รอสักครู่เพื่อให้ transcription_service บันทึกข้อมูลเสร็จก่อน
+            # รอให้ transcription_service บันทึกข้อมูลเสร็จก่อน (retry mechanism)
             import time
-            time.sleep(0.5)  # รอ 0.5 วินาที
+            max_retries = 10
+            retry_delay = 0.5
+            existing_transcription = None
             
-            existing_transcription = self.json_storage.get_transcription(task_data['task_id'])
+            for attempt in range(max_retries):
+                time.sleep(retry_delay)
+                existing_transcription = self.json_storage.get_transcription(task_data['task_id'])
+                
+                if existing_transcription:
+                    full_text = existing_transcription.get('full_text', '') or ''
+                    chunks = existing_transcription.get('chunks', []) or []
+                    
+                    # ตรวจสอบว่ามีข้อมูลจริงหรือไม่
+                    if full_text or chunks:
+                        logger.info(f"📋 Found transcription data (attempt {attempt + 1}/{max_retries}): full_text length={len(full_text)}, chunks count={len(chunks)}")
+                        break
+                    else:
+                        logger.warning(f"⚠️  Transcription data found but empty (attempt {attempt + 1}/{max_retries}): full_text length={len(full_text)}, chunks count={len(chunks)}")
+                        if attempt < max_retries - 1:
+                            continue
+                else:
+                    logger.warning(f"⚠️  No transcription data found in storage (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        continue
             
             # อัปเดต task - ใช้ข้อมูลจาก existing_transcription ถ้ามี
             if existing_transcription:
-                # Merge ข้อมูล: ใช้ full_text และ chunks จาก existing_transcription
-                logger.info(f"📋 Found existing transcription data: full_text length={len(existing_transcription.get('full_text', ''))}, chunks count={len(existing_transcription.get('chunks', []))}")
+                full_text = existing_transcription.get('full_text', '') or ''
+                chunks = existing_transcription.get('chunks', []) or []
+                
+                # ถ้ายังไม่มีข้อมูล ให้ลองดึงจาก task object ใน transcription_service
+                if not full_text and not chunks:
+                    logger.warning(f"⚠️  Storage data is empty, trying to get from transcription_service task object...")
+                    task_in_service = self.transcription_service.tasks.get(task_data['task_id'])
+                    if task_in_service:
+                        logger.info(f"📋 Found task in transcription_service: full_text length={len(task_in_service.full_text) if task_in_service.full_text else 0}, chunks count={len(task_in_service.chunks) if task_in_service.chunks else 0}")
+                        full_text = task_in_service.full_text if task_in_service.full_text else ''
+                        chunks = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
+                
                 task_data['status'] = 'completed'
                 task_data['completed_at'] = datetime.now().isoformat()
                 task_data['progress'] = 100
-                task_data['full_text'] = existing_transcription.get('full_text', task_data.get('full_text', ''))
-                task_data['chunks'] = existing_transcription.get('chunks', task_data.get('chunks', []))
+                task_data['full_text'] = full_text
+                task_data['chunks'] = chunks
                 task_data['total_duration'] = existing_transcription.get('total_duration', task_data.get('total_duration'))
             else:
                 # ถ้าไม่มี existing_transcription ให้ลองดึงจาก task object ใน transcription_service
