@@ -194,20 +194,26 @@ class RabbitMQService:
                 return task_id
                 
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+                logger.error(f"❌ Attempt {attempt + 1}/{max_retries} failed: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 
                 if attempt < max_retries - 1:
                     # Reset connection และ retry
+                    logger.warning(f"🔄 Resetting connection and retrying in {retry_delay * (attempt + 1)} seconds...")
                     self._reset_connection()
                     time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
                 else:
                     # ถ้า retry หมดแล้ว ให้บันทึก task เป็น failed
-                    logger.error(f"เกิดข้อผิดพลาดในการส่งงาน transcription หลังจาก retry {max_retries} ครั้ง: {e}")
-                    if 'task_id' in locals():
+                    logger.error(f"❌ เกิดข้อผิดพลาดในการส่งงาน transcription หลังจาก retry {max_retries} ครั้ง: {e}")
+                    if task_id is not None:
                         # อัปเดต status เป็น failed
-                        task_data['status'] = 'failed'
-                        task_data['error_message'] = str(e)
-                        self.json_storage.save_transcription(task_id, task_data)
+                        try:
+                            task_data['status'] = 'failed'
+                            task_data['error_message'] = str(e)
+                            self.json_storage.save_transcription(task_id, task_data)
+                        except Exception as save_error:
+                            logger.error(f"ไม่สามารถบันทึก failed task: {save_error}")
                     raise
     
     def send_merge_task(self, input_files: list, output_format: str = "mp4",
