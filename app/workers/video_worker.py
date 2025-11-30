@@ -850,7 +850,31 @@ class VideoWorker:
         try:
             # เริ่มรับ messages
             while self.running:
-                self.connection.process_data_events(time_limit=1)
+                try:
+                    self.connection.process_data_events(time_limit=1)
+                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
+                        pika.exceptions.AMQPConnectionError, ConnectionResetError) as e:
+                    logger.warning(f"RabbitMQ connection lost: {e}")
+                    logger.info("Attempting to reconnect to RabbitMQ...")
+                    
+                    # Try to reconnect
+                    if self.connect_rabbitmq(max_retries=5, retry_delay=5):
+                        logger.info("✅ Reconnected to RabbitMQ successfully")
+                        # Re-setup consumers after reconnection
+                        self.setup_consumers()
+                        logger.info("✅ Consumers re-registered")
+                    else:
+                        logger.error("❌ Failed to reconnect to RabbitMQ")
+                        logger.warning("💡 Video Worker will retry connection in 30 seconds...")
+                        import time
+                        time.sleep(30)
+                        # Try to reconnect again
+                        if not self.connect_rabbitmq(max_retries=10, retry_delay=5):
+                            logger.error("❌ Cannot reconnect to RabbitMQ after multiple attempts")
+                            logger.warning("💡 Video Worker will exit. Please check RabbitMQ connection.")
+                            break
+                        else:
+                            self.setup_consumers()
                 
         except KeyboardInterrupt:
             logger.info("ได้รับ interrupt signal")
