@@ -45,10 +45,56 @@ get_transcription_list() {
     echo "$RESPONSE"
 }
 
+# Function to get transcription from storage file directly
+get_transcription_from_storage() {
+    local task_id=$1
+    
+    # Try folder structure first: storage/transcriptions/{task_id}/metadata.json
+    METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id/metadata.json"
+    if [ -f "$METADATA_FILE" ]; then
+        # Read and merge with full_text.json if available
+        METADATA_DATA=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+        FULL_TEXT_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id/full_text.json"
+        
+        if [ -f "$FULL_TEXT_FILE" ] && command -v jq &> /dev/null; then
+            # Merge full_text from full_text.json into metadata
+            FULL_TEXT=$(jq -r '.full_text // ""' "$FULL_TEXT_FILE" 2>/dev/null || echo "")
+            SEGMENTS=$(jq -r '.segments // []' "$FULL_TEXT_FILE" 2>/dev/null || echo "[]")
+            
+            if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ]; then
+                # Merge using jq
+                echo "$METADATA_DATA" | jq --arg full_text "$FULL_TEXT" --argjson segments "$SEGMENTS" \
+                    '.full_text = $full_text | .chunks = $segments' 2>/dev/null || echo "$METADATA_DATA"
+                return 0
+            fi
+        fi
+        
+        echo "$METADATA_DATA"
+        return 0
+    fi
+    
+    # Try old structure: storage/transcriptions/{task_id}.json
+    OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id.json"
+    if [ -f "$OLD_FILE" ]; then
+        cat "$OLD_FILE"
+        return 0
+    fi
+    
+    return 1
+}
+
 # Function to get transcription details
 get_transcription_details() {
     local task_id=$1
     
+    # Try storage file first (more reliable)
+    STORAGE_DATA=$(get_transcription_from_storage "$task_id" 2>/dev/null || echo "")
+    if [ -n "$STORAGE_DATA" ]; then
+        echo "$STORAGE_DATA"
+        return 0
+    fi
+    
+    # Fallback to API
     # Try /api/history/transcriptions/{task_id} first
     RESPONSE=$(curl -s "$API_URL/api/history/transcriptions/$task_id" 2>/dev/null || echo "")
     
@@ -154,6 +200,21 @@ DETAILS_RESPONSE=$(get_transcription_details "$TASK_ID")
 
 if [ -z "$DETAILS_RESPONSE" ] || echo "$DETAILS_RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
     print_error "❌ Transcription not found: $TASK_ID"
+    
+    # Check storage files directly
+    print_status "💡 Checking storage files..."
+    TASK_DIR="$PROJECT_ROOT/storage/transcriptions/$TASK_ID"
+    if [ -d "$TASK_DIR" ]; then
+        print_status "   Found storage directory: $TASK_DIR"
+        ls -lh "$TASK_DIR" 2>/dev/null || true
+    else
+        OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID.json"
+        if [ -f "$OLD_FILE" ]; then
+            print_status "   Found old format file: $OLD_FILE"
+        else
+            print_warning "   No storage files found"
+        fi
+    fi
     exit 1
 fi
 
@@ -169,7 +230,7 @@ if command -v jq &> /dev/null; then
     # Basic Info
     STATUS=$(echo "$DETAILS_RESPONSE" | jq -r '.status // .basic_info.status // "unknown"' 2>/dev/null)
     PROGRESS=$(echo "$DETAILS_RESPONSE" | jq -r '.progress // .basic_info.progress // 0' 2>/dev/null)
-    FILENAME=$(echo "$DETAILS_RESPONSE" | jq -r '.file_name // .basic_info.filename // .file_path // "N/A"' 2>/dev/null)
+    FILENAME=$(echo "$DETAILS_RESPONSE" | jq -r '.file_name // .filename // .basic_info.filename // .file_path // "N/A"' 2>/dev/null)
     MODEL_SIZE=$(echo "$DETAILS_RESPONSE" | jq -r '.model_size // .basic_info.model_size // "N/A"' 2>/dev/null)
     LANGUAGE=$(echo "$DETAILS_RESPONSE" | jq -r '.language // .basic_info.language // "N/A"' 2>/dev/null)
     
@@ -194,10 +255,44 @@ if command -v jq &> /dev/null; then
         echo ""
     fi
     
-    # Full Text
+    # Full Text - try multiple sources
     FULL_TEXT=$(echo "$DETAILS_RESPONSE" | jq -r '.result.full_text // .full_text // .results.full_text // ""' 2>/dev/null)
     
-    if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ]; then
+    # If not found in API response, try reading from storage file directly
+    if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+        # Try reading from full_text.json (new structure)
+        FULL_TEXT_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/full_text.json"
+        if [ -f "$FULL_TEXT_FILE" ]; then
+            FULL_TEXT=$(jq -r '.full_text // ""' "$FULL_TEXT_FILE" 2>/dev/null || echo "")
+            if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                print_status "   ✅ Found full_text in storage file (full_text.json)"
+            fi
+        fi
+        
+        # If still not found, try from metadata.json
+        if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+            METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/metadata.json"
+            if [ -f "$METADATA_FILE" ]; then
+                FULL_TEXT=$(jq -r '.full_text // ""' "$METADATA_FILE" 2>/dev/null || echo "")
+                if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                    print_status "   ✅ Found full_text in metadata.json"
+                fi
+            fi
+        fi
+        
+        # Try old format: {task_id}.json
+        if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+            OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID.json"
+            if [ -f "$OLD_FILE" ]; then
+                FULL_TEXT=$(jq -r '.full_text // ""' "$OLD_FILE" 2>/dev/null || echo "")
+                if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                    print_status "   ✅ Found full_text in old format file"
+                fi
+            fi
+        fi
+    fi
+    
+    if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
         WORD_COUNT=$(echo "$FULL_TEXT" | wc -w 2>/dev/null || echo "0")
         CHAR_COUNT=$(echo "$FULL_TEXT" | wc -c 2>/dev/null || echo "0")
         
@@ -211,15 +306,112 @@ if command -v jq &> /dev/null; then
         echo ""
     else
         print_warning "⚠️  No transcription text available"
+        print_status "💡 Checking storage files..."
+        
+        # List available files
+        TASK_DIR="$PROJECT_ROOT/storage/transcriptions/$TASK_ID"
+        if [ -d "$TASK_DIR" ]; then
+            print_status "   Storage directory: $TASK_DIR"
+            echo ""
+            print_status "   Available files:"
+            ls -lh "$TASK_DIR" 2>/dev/null | tail -n +2 | while read -r line; do
+                echo "      $line"
+            done || true
+            
+            # Try to read raw JSON to debug
+            METADATA_FILE="$TASK_DIR/metadata.json"
+            if [ -f "$METADATA_FILE" ]; then
+                print_status ""
+                print_status "   📄 metadata.json keys:"
+                jq 'keys' "$METADATA_FILE" 2>/dev/null || echo "      (cannot parse JSON)"
+                
+                # Check if full_text exists but is empty
+                HAS_FULL_TEXT=$(jq -r 'has("full_text")' "$METADATA_FILE" 2>/dev/null || echo "false")
+                if [ "$HAS_FULL_TEXT" = "true" ]; then
+                    FULL_TEXT_VALUE=$(jq -r '.full_text' "$METADATA_FILE" 2>/dev/null || echo "")
+                    if [ -z "$FULL_TEXT_VALUE" ] || [ "$FULL_TEXT_VALUE" = "null" ]; then
+                        print_warning "      ⚠️  full_text exists but is empty or null"
+                    fi
+                else
+                    print_warning "      ⚠️  full_text key not found in metadata.json"
+                fi
+            fi
+            
+            # Check full_text.json
+            FULL_TEXT_FILE="$TASK_DIR/full_text.json"
+            if [ -f "$FULL_TEXT_FILE" ]; then
+                print_status ""
+                print_status "   📄 full_text.json exists"
+                HAS_FULL_TEXT=$(jq -r 'has("full_text")' "$FULL_TEXT_FILE" 2>/dev/null || echo "false")
+                if [ "$HAS_FULL_TEXT" = "true" ]; then
+                    FULL_TEXT_VALUE=$(jq -r '.full_text' "$FULL_TEXT_FILE" 2>/dev/null || echo "")
+                    if [ -n "$FULL_TEXT_VALUE" ] && [ "$FULL_TEXT_VALUE" != "null" ]; then
+                        print_success "      ✅ full_text found in full_text.json"
+                    else
+                        print_warning "      ⚠️  full_text exists but is empty or null"
+                    fi
+                fi
+            fi
+        else
+            OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID.json"
+            if [ -f "$OLD_FILE" ]; then
+                print_status "   Found old format: $OLD_FILE"
+                HAS_FULL_TEXT=$(jq -r 'has("full_text")' "$OLD_FILE" 2>/dev/null || echo "false")
+                if [ "$HAS_FULL_TEXT" = "true" ]; then
+                    FULL_TEXT_VALUE=$(jq -r '.full_text' "$OLD_FILE" 2>/dev/null || echo "")
+                    if [ -z "$FULL_TEXT_VALUE" ] || [ "$FULL_TEXT_VALUE" = "null" ]; then
+                        print_warning "      ⚠️  full_text exists but is empty or null"
+                    fi
+                fi
+            else
+                print_warning "   Storage directory not found: $TASK_DIR"
+                print_warning "   Old format file not found: $OLD_FILE"
+            fi
+        fi
         echo ""
     fi
     
-    # Chunks
+    # Chunks - try multiple sources
     CHUNKS=$(echo "$DETAILS_RESPONSE" | jq -r '.result.chunks // .chunks // .results.chunks // []' 2>/dev/null)
+    
+    # If not found in API response, try reading from storage file
+    if [ -z "$CHUNKS" ] || [ "$CHUNKS" = "[]" ] || [ "$CHUNKS" = "null" ]; then
+        # Try reading from full_text.json (segments field)
+        FULL_TEXT_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/full_text.json"
+        if [ -f "$FULL_TEXT_FILE" ]; then
+            CHUNKS=$(jq -r '.segments // []' "$FULL_TEXT_FILE" 2>/dev/null || echo "[]")
+        fi
+        
+        # If still not found, try from metadata.json
+        if [ -z "$CHUNKS" ] || [ "$CHUNKS" = "[]" ] || [ "$CHUNKS" = "null" ]; then
+            METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/metadata.json"
+            if [ -f "$METADATA_FILE" ]; then
+                CHUNKS=$(jq -r '.chunks // []' "$METADATA_FILE" 2>/dev/null || echo "[]")
+            fi
+        fi
+        
+        # Try old format
+        if [ -z "$CHUNKS" ] || [ "$CHUNKS" = "[]" ] || [ "$CHUNKS" = "null" ]; then
+            OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID.json"
+            if [ -f "$OLD_FILE" ]; then
+                CHUNKS=$(jq -r '.chunks // []' "$OLD_FILE" 2>/dev/null || echo "[]")
+            fi
+        fi
+    fi
+    
     CHUNK_COUNT=$(echo "$CHUNKS" | jq 'length' 2>/dev/null || echo "0")
     
     if [ "$CHUNK_COUNT" -gt 0 ]; then
         print_header "📦 Chunks: $CHUNK_COUNT chunks"
+        echo ""
+        
+        # Show first few chunks as preview
+        if [ "$CHUNK_COUNT" -le 5 ]; then
+            echo "$CHUNKS" | jq -r '.[] | "   [\(.start_time // .start // "N/A")s - \(.end_time // .end // "N/A")s] \(.text // "")"' 2>/dev/null | head -5
+        else
+            echo "$CHUNKS" | jq -r '.[] | "   [\(.start_time // .start // "N/A")s - \(.end_time // .end // "N/A")s] \(.text // "")"' 2>/dev/null | head -3
+            print_status "   ... and $((CHUNK_COUNT - 3)) more chunks"
+        fi
         echo ""
     fi
     
