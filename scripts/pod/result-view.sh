@@ -302,9 +302,24 @@ display_transcription_detail() {
                         METADATA_KEYS=$(jq -r 'keys | join(", ")' "$METADATA_FILE" 2>/dev/null || echo "unknown")
                         print_status "      📋 Keys in metadata.json: $METADATA_KEYS"
                         
-                        # Check for chunks
+                        # Check for chunks - show actual value
+                        CHUNKS_VALUE=$(jq -r '.chunks' "$METADATA_FILE" 2>/dev/null || echo "null")
                         CHUNKS_COUNT=$(jq -r '.chunks // [] | length' "$METADATA_FILE" 2>/dev/null || echo "0")
                         FULL_TEXT_IN_METADATA=$(jq -r '.full_text // ""' "$METADATA_FILE" 2>/dev/null || echo "")
+                        
+                        # Debug: Show actual values
+                        if [ "$CHUNKS_VALUE" = "null" ] || [ "$CHUNKS_VALUE" = "[]" ] || [ -z "$CHUNKS_VALUE" ]; then
+                            print_warning "      ⚠️  chunks field is null or empty: $CHUNKS_VALUE"
+                        else
+                            print_status "      📦 chunks field exists: $CHUNKS_VALUE (type: $(echo "$CHUNKS_VALUE" | jq -r 'type' 2>/dev/null || echo "unknown"))"
+                        fi
+                        
+                        if [ -z "$FULL_TEXT_IN_METADATA" ] || [ "$FULL_TEXT_IN_METADATA" = "null" ] || [ "$FULL_TEXT_IN_METADATA" = "" ]; then
+                            print_warning "      ⚠️  full_text field is null or empty"
+                        else
+                            FULL_TEXT_LEN=${#FULL_TEXT_IN_METADATA}
+                            print_status "      📝 full_text field exists: ${FULL_TEXT_LEN} characters"
+                        fi
                         
                         if [ "$CHUNKS_COUNT" -gt 0 ]; then
                             print_status "      📦 Found $CHUNKS_COUNT chunks in metadata.json"

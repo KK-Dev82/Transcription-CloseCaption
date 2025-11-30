@@ -1006,11 +1006,16 @@ class VideoWorker:
             
             # ดึงข้อมูล transcription ที่บันทึกไว้แล้วจาก transcription_service
             # (transcription_service บันทึก full_text และ chunks ไว้แล้ว)
+            # รอสักครู่เพื่อให้ transcription_service บันทึกข้อมูลเสร็จก่อน
+            import time
+            time.sleep(0.5)  # รอ 0.5 วินาที
+            
             existing_transcription = self.json_storage.get_transcription(task_data['task_id'])
             
             # อัปเดต task - ใช้ข้อมูลจาก existing_transcription ถ้ามี
             if existing_transcription:
                 # Merge ข้อมูล: ใช้ full_text และ chunks จาก existing_transcription
+                logger.info(f"📋 Found existing transcription data: full_text length={len(existing_transcription.get('full_text', ''))}, chunks count={len(existing_transcription.get('chunks', []))}")
                 task_data['status'] = 'completed'
                 task_data['completed_at'] = datetime.now().isoformat()
                 task_data['progress'] = 100
@@ -1018,12 +1023,26 @@ class VideoWorker:
                 task_data['chunks'] = existing_transcription.get('chunks', task_data.get('chunks', []))
                 task_data['total_duration'] = existing_transcription.get('total_duration', task_data.get('total_duration'))
             else:
-                # ถ้าไม่มี existing_transcription ให้บันทึกตามปกติ
-                task_data['status'] = 'completed'
-                task_data['completed_at'] = datetime.now().isoformat()
-                task_data['progress'] = 100
+                # ถ้าไม่มี existing_transcription ให้ลองดึงจาก task object ใน transcription_service
+                logger.warning(f"⚠️  No existing transcription data found in storage for {task_id}")
+                task_in_service = self.transcription_service.tasks.get(task_data['task_id'])
+                if task_in_service:
+                    logger.info(f"📋 Found task in transcription_service: full_text length={len(task_in_service.full_text) if task_in_service.full_text else 0}, chunks count={len(task_in_service.chunks) if task_in_service.chunks else 0}")
+                    task_data['status'] = 'completed'
+                    task_data['completed_at'] = datetime.now().isoformat()
+                    task_data['progress'] = 100
+                    task_data['full_text'] = task_in_service.full_text if task_in_service.full_text else ''
+                    task_data['chunks'] = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
+                    task_data['total_duration'] = task_in_service.total_duration
+                else:
+                    logger.error(f"❌ No transcription data found in storage or service for {task_id}")
+                    # ถ้าไม่มีข้อมูลเลย ให้บันทึกแค่ status
+                    task_data['status'] = 'completed'
+                    task_data['completed_at'] = datetime.now().isoformat()
+                    task_data['progress'] = 100
             
             # บันทึกลง JSON storage (จะ merge กับข้อมูลเดิมอัตโนมัติ)
+            logger.info(f"💾 Saving transcription data: full_text length={len(task_data.get('full_text', ''))}, chunks count={len(task_data.get('chunks', []))}")
             self.json_storage.save_transcription(task_data['task_id'], task_data)
             
             logger.info(f"✅ Transcription completed successfully: {task_id}")

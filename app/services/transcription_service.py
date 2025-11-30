@@ -399,6 +399,7 @@ class TranscriptionService:
             logger.info(f"Final task data - full_text: '{task.full_text}', chunks: {len(task.chunks)}")
             
             # แปลง task เป็น dict ที่ JSON serializable ได้
+            chunks_list = [chunk.dict() for chunk in task.chunks] if task.chunks else []
             task_data = {
                 "task_id": task.task_id,
                 "status": task.status,
@@ -406,7 +407,7 @@ class TranscriptionService:
                 "file_url": task.file_url,
                 "file_name": task.file_name,
                 "total_duration": task.total_duration,
-                "chunks": [chunk.dict() for chunk in task.chunks] if task.chunks else [],
+                "chunks": chunks_list,
                 "full_text": task.full_text,
                 "language": task.language,
                 "created_at": task.created_at.isoformat() if task.created_at else None,
@@ -415,7 +416,10 @@ class TranscriptionService:
                 "error_message": task.error_message,
                 "progress": task.progress
             }
+            
+            logger.info(f"💾 Saving transcription to storage: task_id={task_id}, full_text length={len(task.full_text) if task.full_text else 0}, chunks count={len(chunks_list)}")
             self.json_storage.save_transcription(task_id, task_data)
+            logger.info(f"✅ Transcription saved to storage successfully: {task_id}")
             
             task.status = "completed"
             task.progress = 100
@@ -727,30 +731,67 @@ class TranscriptionService:
             if not callback_url:
                 return
             
+            # ดึงข้อมูลจาก task object
+            full_text = getattr(task, 'full_text', '') or ''
+            chunks = getattr(task, 'chunks', []) or []
+            
+            # ถ้าไม่มีข้อมูลใน task object ให้ลองดึงจาก storage
+            if not full_text or not chunks:
+                logger.warning(f"⚠️ Task object missing data for callback: full_text length={len(full_text)}, chunks count={len(chunks)}")
+                stored_data = self.json_storage.get_transcription(task.task_id)
+                if stored_data:
+                    logger.info(f"📋 Loading data from storage for callback: task_id={task.task_id}")
+                    if not full_text:
+                        full_text = stored_data.get('full_text', '') or ''
+                    if not chunks:
+                        chunks = stored_data.get('chunks', []) or []
+                    logger.info(f"📋 Loaded from storage: full_text length={len(full_text)}, chunks count={len(chunks)}")
+            
             # เตรียมข้อมูลสำหรับ callback
             segments = []
-            if hasattr(task, 'chunks') and task.chunks:
-                segments = [
-                    {
-                        "start_time": chunk.start_time,
-                        "end_time": chunk.end_time,
-                        "text": chunk.text,
-                        "confidence": getattr(chunk, 'confidence', None)
-                    }
-                    for chunk in task.chunks
-                ]
+            if chunks:
+                # ถ้า chunks เป็น list of dict
+                if isinstance(chunks[0], dict):
+                    segments = [
+                        {
+                            "start_time": chunk.get("start_time") or chunk.get("start"),
+                            "end_time": chunk.get("end_time") or chunk.get("end"),
+                            "text": chunk.get("text", ""),
+                            "confidence": chunk.get("confidence")
+                        }
+                        for chunk in chunks
+                    ]
+                # ถ้า chunks เป็น TranscriptionChunk objects
+                else:
+                    segments = [
+                        {
+                            "start_time": chunk.start_time,
+                            "end_time": chunk.end_time,
+                            "text": chunk.text,
+                            "confidence": getattr(chunk, 'confidence', None)
+                        }
+                        for chunk in chunks
+                    ]
+            
+            # ตรวจสอบว่ามีข้อมูลจริงก่อนส่ง callback
+            if not full_text and not segments:
+                logger.error(f"❌ Cannot send callback: No transcription data available for task {task.task_id}")
+                logger.error(f"   full_text: {len(full_text)} chars, segments: {len(segments)} items")
+                return
             
             payload = {
                 "jobId": getattr(task, 'job_id', None),
                 "taskId": task.task_id,
                 "status": status,
-                "text": getattr(task, 'full_text', ''),
+                "text": full_text,
                 "segments": segments,
                 "audioDuration": getattr(task, 'total_duration', None),
-                "wordCount": len(task.full_text.split()) if hasattr(task, 'full_text') and task.full_text else 0,
+                "wordCount": len(full_text.split()) if full_text else 0,
                 "averageConfidence": None,  # คำนวณได้ถ้าต้องการ
                 "completedAt": datetime.now().isoformat()
             }
+            
+            logger.info(f"📤 Sending callback: job_id={payload['jobId']}, task_id={task.task_id}, text_length={len(full_text)}, segments_count={len(segments)}")
             
             # ส่ง callback
             async with httpx.AsyncClient(timeout=30.0) as client:
