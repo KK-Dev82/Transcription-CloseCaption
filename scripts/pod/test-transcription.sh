@@ -1,34 +1,26 @@
 #!/bin/bash
-# Script สำหรับทดสอบ Transcription บน RunPod
+# Script สำหรับทดสอบ Transcription (Optional: เลือก model และ video ได้)
 #
 # วิธีใช้งาน:
-# bash scripts/pod/test-transcription.sh <video-file> [model-size] [api-url]
-#
-# ตัวอย่าง:
-# bash scripts/pod/test-transcription.sh /path/to/video.mp4 medium
-# bash scripts/pod/test-transcription.sh /path/to/video.mp4 medium http://205.196.17.108:8001
+#   bash scripts/pod/test-transcription.sh [video-file] [model-size] [api-url]
 
 set -e
 
 VIDEO_FILE="${1}"
-MODEL_SIZE="${2:-medium}"  # Default: medium (แนะนำสำหรับ GPU 4080)
-API_URL="${3:-${API_URL:-http://localhost:8001}}"
+MODEL_SIZE="${2:-medium}"
+API_URL="${3:-http://localhost:8001}"
 
 if [ -z "$VIDEO_FILE" ]; then
     echo "❌ Error: Video file path is required"
     echo ""
     echo "Usage:"
-    echo "  bash scripts/pod/test-transcription.sh <video-file> [model-size]"
+    echo "  bash scripts/pod/test-transcription.sh <video-file> [model-size] [api-url]"
     echo ""
     echo "Examples:"
-    echo "  bash scripts/pod/test-transcription.sh /path/to/video.mp4 medium"
-    echo "  bash scripts/pod/test-transcription.sh /path/to/video.mp4 small"
+    echo "  bash scripts/pod/test-transcription.sh uploads/video.mp4 medium"
+    echo "  bash scripts/pod/test-transcription.sh uploads/video.mp4 large-v3"
     echo ""
-    echo "Model sizes:"
-    echo "  - base: Fastest, lowest accuracy"
-    echo "  - small: Balanced (default for CPU)"
-    echo "  - medium: Better accuracy (แนะนำสำหรับ GPU 4080)"
-    echo "  - large-v3: Best accuracy, slowest"
+    echo "Model sizes: base, small, medium, large, large-v2, large-v3"
     exit 1
 fi
 
@@ -38,7 +30,20 @@ if [ ! -f "$VIDEO_FILE" ]; then
     exit 1
 fi
 
-echo "🧪 Testing Transcription..."
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_perf() { echo -e "${CYAN}[PERF]${NC} $1"; }
+
+echo "🧪 Testing Transcription"
 echo "📅 $(date)"
 echo ""
 echo "📋 Configuration:"
@@ -47,114 +52,77 @@ echo "   Model Size: $MODEL_SIZE"
 echo "   API URL: $API_URL"
 echo ""
 
-# Check API health
-echo "🏥 Checking API health..."
-if ! curl -f "$API_URL/health" > /dev/null 2>&1; then
-    echo "❌ API is not responding. Please start services first:"
-    echo "   bash scripts/pod/start-services-direct.sh"
-    exit 1
-fi
-echo "✅ API is healthy"
-echo ""
-
-# Get file size
+# Get file information
 FILE_SIZE=$(du -h "$VIDEO_FILE" | cut -f1)
-echo "📊 File Information:"
+print_perf "📊 File Information:"
 echo "   Size: $FILE_SIZE"
 echo ""
 
-# Get video duration (if ffprobe is available)
-if command -v ffprobe &> /dev/null; then
-    DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$VIDEO_FILE" 2>/dev/null | cut -d. -f1)
-    if [ -n "$DURATION" ]; then
-        MINUTES=$((DURATION / 60))
-        SECONDS=$((DURATION % 60))
-        echo "   Duration: ${MINUTES}m ${SECONDS}s"
-    fi
-fi
-echo ""
-
-# Start GPU monitoring in background
-echo "📊 Starting GPU monitoring..."
-nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits > /tmp/gpu-before.txt 2>/dev/null || true
-
-# Step 1: Upload file
-echo "📤 Step 1: Uploading video file..."
-UPLOAD_RESPONSE=$(curl -s -X POST "$API_URL/api/upload/" \
-    -F "file=@$VIDEO_FILE")
-
-# Extract file_path from upload response
-FILE_PATH=$(echo "$UPLOAD_RESPONSE" | jq -r '.file_path // empty' 2>/dev/null || echo "")
-
-if [ -z "$FILE_PATH" ]; then
-    echo "❌ Upload failed or could not extract file_path:"
-    echo "$UPLOAD_RESPONSE" | jq . 2>/dev/null || echo "$UPLOAD_RESPONSE"
+# Check API health
+print_status "Checking API health..."
+if ! curl -f -s --max-time 5 "$API_URL/health" > /dev/null 2>&1; then
+    print_error "❌ API is not responding at $API_URL"
     exit 1
 fi
-
-echo "✅ File uploaded: $FILE_PATH"
+print_success "✅ API is healthy"
 echo ""
 
-# Step 2: Start transcription
-echo "🚀 Step 2: Starting transcription..."
-echo "⏳ This may take a while depending on video length and model size..."
-echo ""
+# Prepare file path
+FILE_PATH="$VIDEO_FILE"
+if [[ "$VIDEO_FILE" == uploads/* ]]; then
+    FILE_PATH="$VIDEO_FILE"
+fi
 
-START_TIME=$(date +%s)
+print_status "Starting transcription..."
+TRANSCRIBE_START=$(date +%s)
 
-RESPONSE=$(curl -s -X POST "$API_URL/api/transcription/" \
+# Start transcription
+RESPONSE=$(curl -s -X POST "$API_URL/transcribe/" \
     -H "Content-Type: application/json" \
     -d "{
         \"file_path\": \"$FILE_PATH\",
         \"language\": \"th\",
         \"model_size\": \"$MODEL_SIZE\"
-    }")
+    }" 2>&1)
 
-END_TIME=$(date +%s)
-ELAPSED=$((END_TIME - START_TIME))
-
-# Check response
-if echo "$RESPONSE" | grep -q "error\|Error\|ERROR"; then
-    echo "❌ Transcription failed:"
-    echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
-    exit 1
+# Fallback to legacy endpoint
+if echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+    RESPONSE=$(curl -s -X POST "$API_URL/api/transcription/" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"file_path\": \"$FILE_PATH\",
+            \"language\": \"th\",
+            \"model_size\": \"$MODEL_SIZE\"
+        }" 2>&1)
 fi
 
-# Extract task_id from response
+# Extract task_id
 TASK_ID=$(echo "$RESPONSE" | jq -r '.task_id // .id // empty' 2>/dev/null || echo "")
 
 if [ -z "$TASK_ID" ]; then
-    echo "⚠️  Could not extract task_id from response:"
+    print_error "❌ Could not extract task_id from response:"
     echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
-    echo ""
-    echo "💡 Response received in ${ELAPSED}s"
     exit 1
 fi
 
-echo "✅ Transcription job started!"
-echo "   Task ID: $TASK_ID"
-echo "   Upload time: ${ELAPSED}s"
+print_success "✅ Transcription job started!"
+print_perf "   Task ID: $TASK_ID"
 echo ""
 
-# Monitor GPU usage
-echo "📊 GPU Usage (after upload):"
-nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo "⚠️  nvidia-smi not available"
-echo ""
-
-# Poll for result
-echo "⏳ Waiting for transcription to complete..."
-echo "   (This may take several minutes depending on video length)"
-echo ""
-
-MAX_WAIT=1800  # 30 minutes
+# Monitor progress
+print_status "Monitoring progress..."
+MAX_WAIT=3600
 WAIT_INTERVAL=5
 ELAPSED_WAIT=0
 
 while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
-    STATUS_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+    STATUS_RESPONSE=$(curl -s "$API_URL/transcribe/$TASK_ID" 2>/dev/null || echo "")
+    
+    if [ -z "$STATUS_RESPONSE" ] || echo "$STATUS_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        STATUS_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+    fi
     
     if [ -z "$STATUS_RESPONSE" ]; then
-        echo "⚠️  Could not get status. Retrying..."
         sleep $WAIT_INTERVAL
         ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
         continue
@@ -163,83 +131,25 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
     STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // .state // "unknown"' 2>/dev/null || echo "unknown")
     PROGRESS=$(echo "$STATUS_RESPONSE" | jq -r '.progress // 0' 2>/dev/null || echo "0")
     
+    print_status "Progress: ${PROGRESS}% - Status: ${STATUS}"
+    
     if [ "$STATUS" = "completed" ] || [ "$STATUS" = "success" ]; then
-        echo "✅ Transcription completed!"
+        TRANSCRIBE_END=$(date +%s)
+        TRANSCRIBE_TIME=$((TRANSCRIBE_END - TRANSCRIBE_START))
+        
         echo ""
-        
-        # Get result
-        echo "📥 Fetching transcription result..."
-        RESULT_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
-        
-        if [ -n "$RESULT_RESPONSE" ]; then
-            FULL_TEXT=$(echo "$RESULT_RESPONSE" | jq -r '.result.full_text // .full_text // "N/A"' 2>/dev/null || echo "N/A")
-            CHUNKS=$(echo "$RESULT_RESPONSE" | jq -r '.result.chunks // .chunks // []' 2>/dev/null || echo "[]")
-            
-            echo ""
-            echo "📝 Transcription Result:"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "$FULL_TEXT"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            
-            # Save to file
-            OUTPUT_FILE="/tmp/transcription-result-$(date +%Y%m%d-%H%M%S).txt"
-            echo "$FULL_TEXT" > "$OUTPUT_FILE"
-            echo "💾 Result saved to: $OUTPUT_FILE"
-            echo ""
-            
-            # Show statistics
-            WORD_COUNT=$(echo "$FULL_TEXT" | wc -w)
-            CHAR_COUNT=$(echo "$FULL_TEXT" | wc -c)
-            echo "📊 Statistics:"
-            echo "   Words: $WORD_COUNT"
-            echo "   Characters: $CHAR_COUNT"
-            echo ""
-        else
-            echo "⚠️  Could not fetch result"
-        fi
-        
-        # Final GPU usage
-        echo "📊 Final GPU Usage:"
-        nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo "⚠️  nvidia-smi not available"
+        print_success "✅ Transcription completed!"
+        print_perf "⏱️  Transcription time: ${TRANSCRIBE_TIME}s"
         echo ""
-        
-        TOTAL_TIME=$((ELAPSED_WAIT + ELAPSED))
-        MINUTES=$((TOTAL_TIME / 60))
-        SECONDS=$((TOTAL_TIME % 60))
-        echo "⏱️  Total time: ${MINUTES}m ${SECONDS}s"
-        echo ""
-        
         exit 0
     elif [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ]; then
-        echo "❌ Transcription failed!"
-        echo "   Status: $STATUS"
-        echo "   Response: $STATUS_RESPONSE"
+        print_error "❌ Transcription failed!"
         exit 1
-    else
-        # Show progress
-        PROGRESS_BAR=""
-        PROGRESS_INT=${PROGRESS%.*}
-        for i in {1..20}; do
-            if [ $i -le $((PROGRESS_INT / 5)) ]; then
-                PROGRESS_BAR="${PROGRESS_BAR}█"
-            else
-                PROGRESS_BAR="${PROGRESS_BAR}░"
-            fi
-        done
-        
-        MINUTES=$((ELAPSED_WAIT / 60))
-        SECONDS=$((ELAPSED_WAIT % 60))
-        printf "\r   Status: %-10s Progress: [%s] %3d%% (%dm %ds)" "$STATUS" "$PROGRESS_BAR" "$PROGRESS_INT" "$MINUTES" "$SECONDS"
     fi
     
     sleep $WAIT_INTERVAL
     ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
 done
 
-echo ""
-echo "⏱️  Timeout: Transcription took longer than $((MAX_WAIT / 60)) minutes"
-echo "💡 Check status manually:"
-echo "   curl $API_URL/api/transcription/$TASK_ID"
-echo ""
-
+print_error "❌ Transcription timeout"
+exit 1
