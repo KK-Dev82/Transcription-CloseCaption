@@ -103,7 +103,17 @@ bash scripts/pod/result-view.sh <task-id>
 
 # แสดง list ให้เลือก
 bash scripts/pod/result-view.sh
+
+# แสดงรายละเอียดข้อความที่แปลงได้ทันที (เรียงจากล่าสุด)
+bash scripts/pod/result-view.sh -detail [number]
+# ตัวอย่าง: แสดง 5 รายการล่าสุด
+bash scripts/pod/result-view.sh -detail 5
 ```
+
+**Features:**
+- รองรับทุก status (completed, pending, processing, failed, cancelled)
+- แสดงเวลาที่ใช้ในการแปลง (สำหรับ completed tasks)
+- แสดงสีตาม status (completed=เขียว, processing/pending=เหลือง, failed=แดง, cancelled=ฟ้า)
 
 ### 10. `task-service.sh` (Optional)
 จัดการ Transcription Tasks (stop, clear, cleanup)
