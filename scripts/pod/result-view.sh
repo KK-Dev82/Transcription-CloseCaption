@@ -272,15 +272,61 @@ display_transcription_detail() {
             
             if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
                 WORD_COUNT=$(echo "$FULL_TEXT" | wc -w 2>/dev/null || echo "0")
-                echo "      Text: ${WORD_COUNT} words"
+                CHAR_COUNT=$(echo "$FULL_TEXT" | wc -c 2>/dev/null || echo "0")
+                echo "      Text: ${WORD_COUNT} words, ${CHAR_COUNT} characters"
                 echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                # Show first 200 characters
-                TEXT_PREVIEW=$(echo "$FULL_TEXT" | head -c 200)
+                # Show first 500 characters (increased from 200)
+                TEXT_PREVIEW=$(echo "$FULL_TEXT" | head -c 500)
                 echo "      $TEXT_PREVIEW"
-                if [ ${#FULL_TEXT} -gt 200 ]; then
+                if [ ${#FULL_TEXT} -gt 500 ]; then
                     echo "..."
+                    echo "      (Full text truncated. Use 'bash scripts/pod/result-view.sh $task_id' to see complete text)"
                 fi
                 echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            else
+                # If no text found, show warning
+                print_warning "      ⚠️  No transcription text available"
+                print_status "      💡 Checking storage files..."
+                
+                # Debug: Check what files exist
+                TASK_DIR="$PROJECT_ROOT/storage/transcriptions/$task_id"
+                if [ -d "$TASK_DIR" ]; then
+                    print_status "      📁 Storage directory exists: $TASK_DIR"
+                    ls -lh "$TASK_DIR" 2>/dev/null | head -5 || true
+                    
+                    # Try to read chunks directly
+                    METADATA_FILE="$TASK_DIR/metadata.json"
+                    if [ -f "$METADATA_FILE" ]; then
+                        CHUNKS_COUNT=$(jq -r '.chunks // [] | length' "$METADATA_FILE" 2>/dev/null || echo "0")
+                        if [ "$CHUNKS_COUNT" -gt 0 ]; then
+                            print_status "      📦 Found $CHUNKS_COUNT chunks in metadata.json"
+                            print_status "      💡 Attempting to build full_text from chunks..."
+                            CHUNKS=$(jq -r '.chunks // []' "$METADATA_FILE" 2>/dev/null || echo "[]")
+                            FULL_TEXT=$(echo "$CHUNKS" | jq -r '[.[] | .text // ""] | join(" ")' 2>/dev/null || echo "")
+                            if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                                WORD_COUNT=$(echo "$FULL_TEXT" | wc -w 2>/dev/null || echo "0")
+                                CHAR_COUNT=$(echo "$FULL_TEXT" | wc -c 2>/dev/null || echo "0")
+                                echo "      ✅ Built text from chunks: ${WORD_COUNT} words, ${CHAR_COUNT} characters"
+                                echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                TEXT_PREVIEW=$(echo "$FULL_TEXT" | head -c 500)
+                                echo "      $TEXT_PREVIEW"
+                                if [ ${#FULL_TEXT} -gt 500 ]; then
+                                    echo "..."
+                                    echo "      (Full text truncated. Use 'bash scripts/pod/result-view.sh $task_id' to see complete text)"
+                                fi
+                                echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            else
+                                print_warning "      ⚠️  Chunks exist but could not build full_text (chunks may be empty)"
+                            fi
+                        else
+                            print_warning "      ⚠️  No chunks found in metadata.json"
+                        fi
+                    else
+                        print_warning "      ⚠️  metadata.json not found"
+                    fi
+                else
+                    print_warning "      ⚠️  Storage directory not found: $TASK_DIR"
+                fi
             fi
         fi
         echo ""
