@@ -184,6 +184,13 @@ class VideoWorker:
         )
         
         logger.info("ตั้งค่า consumers เสร็จสิ้น")
+        logger.info(f"📋 Listening to queues:")
+        logger.info(f"   - {self.transcription_queue}")
+        logger.info(f"   - {self.trim_queue}")
+        logger.info(f"   - {self.merge_queue}")
+        logger.info(f"   - {self.convert_queue}")
+        logger.info(f"   - {self.resize_queue}")
+        logger.info(f"   - {self.audio_chunk_extracted_queue}")
     
     def _process_trim_task(self, ch, method, properties, body):
         """ประมวลผล trim video task"""
@@ -276,6 +283,21 @@ class VideoWorker:
     def _process_transcription_task(self, ch, method, properties, body):
         """ประมวลผล transcription task - ใช้ threading เพื่อให้ worker รับงานใหม่ได้ทันที"""
         import threading
+        
+        # Log immediately when message is received (BEFORE parsing)
+        logger.info("=" * 80)
+        logger.info("📨 📨 📨 RECEIVED MESSAGE FROM transcription_queue!")
+        logger.info(f"   Message size: {len(body)} bytes")
+        logger.info(f"   Delivery tag: {method.delivery_tag}")
+        logger.info(f"   Exchange: {method.exchange}")
+        logger.info(f"   Routing key: {method.routing_key}")
+        try:
+            task_data_preview = json.loads(body.decode('utf-8'))
+            task_id_preview = task_data_preview.get('task_id', 'unknown')
+            logger.info(f"   Task ID: {task_id_preview}")
+        except Exception as e:
+            logger.warning(f"   Could not parse message preview: {e}")
+        logger.info("=" * 80)
         
         def process_in_thread():
             """ประมวลผลใน thread แยกเพื่อไม่ block worker"""
@@ -906,9 +928,20 @@ class VideoWorker:
         
         try:
             # เริ่มรับ messages
+            logger.info("🔄 เริ่มรับ messages จาก RabbitMQ...")
+            message_count = 0
             while self.running:
                 try:
+                    # Process data events (this will trigger callbacks if messages arrive)
                     self.connection.process_data_events(time_limit=1)
+                    
+                    # Log every 30 seconds to show we're alive
+                    if message_count == 0:
+                        import time
+                        current_time = time.time()
+                        if not hasattr(self, '_last_heartbeat') or (current_time - self._last_heartbeat) > 30:
+                            logger.debug("💓 Video Worker is alive and waiting for messages...")
+                            self._last_heartbeat = current_time
                 except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
                         pika.exceptions.AMQPConnectionError, ConnectionResetError) as e:
                     logger.warning(f"RabbitMQ connection lost: {e}")

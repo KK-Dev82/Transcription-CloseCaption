@@ -164,6 +164,10 @@ class RabbitMQService:
                 self.json_storage.save_transcription(task_id, task_data)
                 
                 # ส่งไปยัง queue
+                logger.info(f"📤 Publishing message to queue: {self.transcription_queue}")
+                logger.info(f"   Task ID: {task_id}")
+                logger.info(f"   Message size: {len(json.dumps(task_data))} bytes")
+                
                 self.channel.basic_publish(
                     exchange='',
                     routing_key=self.transcription_queue,
@@ -173,7 +177,10 @@ class RabbitMQService:
                     )
                 )
                 
-                logger.info(f"ส่งงาน transcription ไปยัง queue: {task_id}")
+                logger.info(f"✅ ส่งงาน transcription ไปยัง queue สำเร็จ: {task_id}")
+                logger.info(f"   Queue: {self.transcription_queue}")
+                logger.info(f"   Exchange: (default)")
+                logger.info(f"   Routing Key: {self.transcription_queue}")
                 return task_id
                 
             except Exception as e:
