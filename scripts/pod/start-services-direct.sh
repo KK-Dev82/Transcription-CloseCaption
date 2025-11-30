@@ -240,12 +240,29 @@ echo "🚀 Starting Main API..."
 if [ -f "app/main.py" ]; then
     export PYTHONPATH=/workspace/transcription-service
     
-    # Start Main API in background with nohup
-    nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 &
+    # Export RabbitMQ environment variables explicitly
+    if [ -n "$RABBITMQ_HOST" ]; then
+        export RABBITMQ_HOST
+        export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+        export RABBITMQ_USER=${RABBITMQ_USER:-senate}
+        export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    else
+        # Set defaults if not loaded
+        export RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
+        export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+        export RABBITMQ_USER=${RABBITMQ_USER:-senate}
+        export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    fi
+    
+    # Start Main API in background with nohup and environment variables
+    nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
+             RABBITMQ_PORT="${RABBITMQ_PORT}" \
+             RABBITMQ_USER="${RABBITMQ_USER}" \
+             RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \
+             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 & disown
     MAIN_API_PID=$!
-    # Disown the process to prevent it from being killed when script exits
-    disown $MAIN_API_PID 2>/dev/null || true
     echo "✅ Main API started (PID: $MAIN_API_PID)"
+    echo "   RabbitMQ: $RABBITMQ_HOST:$RABBITMQ_PORT"
     
     # Wait for Main API to be ready
     echo "⏳ Waiting for Main API to be ready..."
