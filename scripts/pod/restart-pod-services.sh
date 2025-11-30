@@ -120,20 +120,26 @@ print_status "Checking .env.runpod..."
 if [ -f ".env.runpod" ]; then
     print_success "✅ .env.runpod found"
     
-    # Check RabbitMQ configuration
+    # Auto-fix RabbitMQ configuration (if set to localhost)
     if grep -q "RABBITMQ_HOST=localhost" .env.runpod; then
         print_warning "⚠️  RABBITMQ_HOST is set to localhost"
-        echo ""
-        print_status "💡 Do you want to update RabbitMQ configuration to Backend Server?"
-        echo "   Current: RABBITMQ_HOST=localhost"
-        echo "   Recommended: RABBITMQ_HOST=178.128.105.100"
-        echo ""
-        read -p "Update RabbitMQ configuration? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            print_status "Updating RabbitMQ configuration..."
-            sed -i 's/RABBITMQ_HOST=localhost/RABBITMQ_HOST=178.128.105.100/g' .env.runpod
-            print_success "✅ Updated RABBITMQ_HOST to 178.128.105.100"
+        print_status "🔧 Auto-updating RabbitMQ configuration to Backend Server..."
+        sed -i 's/RABBITMQ_HOST=localhost/RABBITMQ_HOST=178.128.105.100/g' .env.runpod
+        print_success "✅ Updated RABBITMQ_HOST to 178.128.105.100"
+    fi
+    
+    # Ensure RabbitMQ configuration is correct
+    if ! grep -q "^RABBITMQ_HOST=178.128.105.100" .env.runpod; then
+        # Check if RABBITMQ_HOST exists
+        if ! grep -q "^RABBITMQ_HOST=" .env.runpod; then
+            print_status "🔧 Adding RabbitMQ configuration..."
+            echo "" >> .env.runpod
+            echo "# RabbitMQ Configuration (Backend Server Dev)" >> .env.runpod
+            echo "RABBITMQ_HOST=178.128.105.100" >> .env.runpod
+            echo "RABBITMQ_PORT=5672" >> .env.runpod
+            echo "RABBITMQ_USER=senate" >> .env.runpod
+            echo "RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT" >> .env.runpod
+            print_success "✅ Added RabbitMQ configuration"
         fi
     fi
     
@@ -188,13 +194,14 @@ echo ""
 # Test RabbitMQ connection (if configured)
 if [ -f ".env.runpod" ]; then
     source .env.runpod
-    if [ -n "$RABBITMQ_HOST" ] && [ "$RABBITMQ_HOST" != "localhost" ]; then
+    if [ -n "$RABBITMQ_HOST" ]; then
         print_status "Testing RabbitMQ connection..."
         if bash scripts/pod/test-rabbitmq-connection.sh "$RABBITMQ_HOST" "${RABBITMQ_PORT:-5672}" "${RABBITMQ_USER:-senate}" "${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}" 2>/dev/null; then
             print_success "✅ RabbitMQ connection test passed!"
         else
             print_warning "⚠️  RabbitMQ connection test failed"
             print_status "💡 Services will start, but Video Worker may not connect to RabbitMQ"
+            print_status "💡 Check RabbitMQ configuration in .env.runpod"
         fi
         echo ""
     fi
