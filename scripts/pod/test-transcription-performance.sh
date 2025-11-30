@@ -365,13 +365,14 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
                 RATIO_NUM=$(echo "$RATIO" | cut -d. -f1)
                 if [ -n "$RATIO_NUM" ] && [ "$RATIO_NUM" -ge 0 ] 2>/dev/null; then
                     if [ "$RATIO_NUM" -le 1 ]; then
-                    print_success "✅ Excellent! Transcription is faster than video duration"
-                elif [ "$RATIO_NUM" -le 2 ]; then
-                    print_success "✅ Good! Transcription is 2x video duration"
-                elif [ "$RATIO_NUM" -le 5 ]; then
-                    print_warning "⚠️  Acceptable. Transcription is 5x video duration"
-                else
-                    print_warning "⚠️  Slow. Transcription is more than 5x video duration"
+                        print_success "✅ Excellent! Transcription is faster than video duration"
+                    elif [ "$RATIO_NUM" -le 2 ]; then
+                        print_success "✅ Good! Transcription is 2x video duration"
+                    elif [ "$RATIO_NUM" -le 5 ]; then
+                        print_warning "⚠️  Acceptable. Transcription is 5x video duration"
+                    else
+                        print_warning "⚠️  Slow. Transcription is more than 5x video duration"
+                    fi
                 fi
             fi
         fi
