@@ -111,30 +111,87 @@ if command -v nvidia-smi &> /dev/null; then
     echo ""
 fi
 
-# Step 1: Upload file
+# Step 1: Check if file exists or upload
 print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-print_perf "Step 1: Uploading Video File"
+print_perf "Step 1: Preparing Video File"
 print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 UPLOAD_START=$(date +%s)
+FILE_PATH=""
+UPLOAD_TIME=0
 
-UPLOAD_RESPONSE=$(curl -s -X POST "$API_URL/api/upload/" \
-    -F "file=@$VIDEO_FILE")
+# Check if file is already in uploads directory
+if [[ "$VIDEO_FILE" == uploads/* ]] || [[ "$VIDEO_FILE" == */uploads/* ]]; then
+    # File is already in uploads directory
+    print_status "📁 File is already in uploads directory"
+    FILE_PATH="$VIDEO_FILE"
+    
+    # Normalize path (remove leading ./ or /)
+    FILE_PATH=$(echo "$FILE_PATH" | sed 's|^\./||' | sed 's|^/||')
+    
+    # Ensure it starts with uploads/
+    if [[ "$FILE_PATH" != uploads/* ]]; then
+        FILE_PATH="uploads/$(basename "$FILE_PATH")"
+    fi
+    
+    # Verify file exists
+    if [ ! -f "$FILE_PATH" ]; then
+        print_error "❌ File not found: $FILE_PATH"
+        exit 1
+    fi
+    
+    print_success "✅ Using existing file: $FILE_PATH"
+    UPLOAD_TIME=0
+else
+    # File needs to be uploaded
+    print_status "📤 Uploading file to server..."
+    
+    # Try /upload/ endpoint first (correct endpoint)
+    UPLOAD_RESPONSE=$(curl -s -X POST "$API_URL/upload/" \
+        -F "file=@$VIDEO_FILE" 2>&1)
+    
+    # If that fails, try /api/upload/ (legacy)
+    if echo "$UPLOAD_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        print_warning "⚠️  /upload/ endpoint not found, trying /api/upload/..."
+        UPLOAD_RESPONSE=$(curl -s -X POST "$API_URL/api/upload/" \
+            -F "file=@$VIDEO_FILE" 2>&1)
+    fi
+    
+    UPLOAD_END=$(date +%s)
+    UPLOAD_TIME=$((UPLOAD_END - UPLOAD_START))
+    
+    # Extract file_path from upload response
+    FILE_PATH=$(echo "$UPLOAD_RESPONSE" | jq -r '.file_path // empty' 2>/dev/null || echo "")
+    
+    if [ -z "$FILE_PATH" ]; then
+        print_error "❌ Upload failed or could not extract file_path:"
+        echo "$UPLOAD_RESPONSE" | jq . 2>/dev/null || echo "$UPLOAD_RESPONSE"
+        print_status "💡 Trying to use file path directly..."
+        
+        # Fallback: use the file path as-is if it's a valid path
+        if [ -f "$VIDEO_FILE" ]; then
+            # Convert absolute path to relative path if in uploads/
+            if [[ "$VIDEO_FILE" == *"/uploads/"* ]]; then
+                FILE_PATH="uploads/$(basename "$VIDEO_FILE")"
+            else
+                FILE_PATH="$VIDEO_FILE"
+            fi
+            print_warning "⚠️  Using file path directly: $FILE_PATH"
+        else
+            exit 1
+        fi
+    else
+        print_success "✅ File uploaded: $FILE_PATH"
+        print_perf "⏱️  Upload time: ${UPLOAD_TIME}s"
+    fi
+fi
 
-UPLOAD_END=$(date +%s)
-UPLOAD_TIME=$((UPLOAD_END - UPLOAD_START))
-
-# Extract file_path from upload response
-FILE_PATH=$(echo "$UPLOAD_RESPONSE" | jq -r '.file_path // empty' 2>/dev/null || echo "")
-
+# Verify file_path is set
 if [ -z "$FILE_PATH" ]; then
-    print_error "❌ Upload failed or could not extract file_path:"
-    echo "$UPLOAD_RESPONSE" | jq . 2>/dev/null || echo "$UPLOAD_RESPONSE"
+    print_error "❌ Could not determine file_path"
     exit 1
 fi
 
-print_success "✅ File uploaded: $FILE_PATH"
-print_perf "⏱️  Upload time: ${UPLOAD_TIME}s"
 echo ""
 
 # Step 2: Start transcription
@@ -144,13 +201,26 @@ print_status "━━━━━━━━━━━━━━━━━━━━━━
 
 TRANSCRIBE_START=$(date +%s)
 
-RESPONSE=$(curl -s -X POST "$API_URL/api/transcription/" \
+# Try /transcribe/ endpoint first (correct endpoint)
+RESPONSE=$(curl -s -X POST "$API_URL/transcribe/" \
     -H "Content-Type: application/json" \
     -d "{
         \"file_path\": \"$FILE_PATH\",
         \"language\": \"th\",
         \"model_size\": \"$MODEL_SIZE\"
-    }")
+    }" 2>&1)
+
+# If that fails, try /api/transcription/ (legacy)
+if echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+    print_warning "⚠️  /transcribe/ endpoint not found, trying /api/transcription/..."
+    RESPONSE=$(curl -s -X POST "$API_URL/api/transcription/" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"file_path\": \"$FILE_PATH\",
+            \"language\": \"th\",
+            \"model_size\": \"$MODEL_SIZE\"
+        }" 2>&1)
+fi
 
 # Extract task_id from response
 TASK_ID=$(echo "$RESPONSE" | jq -r '.task_id // .id // empty' 2>/dev/null || echo "")
@@ -190,7 +260,13 @@ ELAPSED_WAIT=0
 LAST_PROGRESS=0
 
 while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
-    STATUS_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+    # Try /transcribe/{task_id} endpoint first (correct endpoint)
+    STATUS_RESPONSE=$(curl -s "$API_URL/transcribe/$TASK_ID" 2>/dev/null || echo "")
+    
+    # If that fails, try /api/transcription/{task_id} (legacy)
+    if [ -z "$STATUS_RESPONSE" ] || echo "$STATUS_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        STATUS_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+    fi
     
     if [ -z "$STATUS_RESPONSE" ]; then
         sleep $WAIT_INTERVAL
@@ -220,7 +296,13 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
         print_perf "Step 4: Fetching Transcription Result"
         print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
-        RESULT_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+        # Try /transcribe/{task_id} endpoint first (correct endpoint)
+        RESULT_RESPONSE=$(curl -s "$API_URL/transcribe/$TASK_ID" 2>/dev/null || echo "")
+        
+        # If that fails, try /api/transcription/{task_id} (legacy)
+        if [ -z "$RESULT_RESPONSE" ] || echo "$RESULT_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+            RESULT_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
+        fi
         
         if [ -n "$RESULT_RESPONSE" ]; then
             FULL_TEXT=$(echo "$RESULT_RESPONSE" | jq -r '.result.full_text // .full_text // "N/A"' 2>/dev/null || echo "N/A")
@@ -344,6 +426,8 @@ done
 echo ""
 print_error "⏱️  Timeout: Transcription took longer than $((MAX_WAIT / 60)) minutes"
 print_status "💡 Check status manually:"
+echo "   curl $API_URL/transcribe/$TASK_ID"
+echo "   # or legacy endpoint:"
 echo "   curl $API_URL/api/transcription/$TASK_ID"
 echo ""
 
