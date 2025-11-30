@@ -68,13 +68,14 @@ echo ""
 print_status "Checking Video Worker..."
 WORKER_PIDS=$(pgrep -f "python.*video_worker" 2>/dev/null || echo "")
 if [ -n "$WORKER_PIDS" ]; then
-    WORKER_COUNT=$(echo "$WORKER_PIDS" | wc -l)
+    WORKER_COUNT=$(echo "$WORKER_PIDS" | wc -l | tr -d ' ')
     if [ "$WORKER_COUNT" -eq 1 ]; then
         print_success "✅ Video Worker is running (PID: $WORKER_PIDS)"
     else
         print_warning "⚠️  Multiple Video Workers detected ($WORKER_COUNT)"
         print_warning "   PIDs: $WORKER_PIDS"
         print_warning "   This may cause duplicate message processing"
+        print_status "💡 To fix: bash scripts/pod/restart-pod.sh"
         ALL_HEALTHY=false
     fi
 else
@@ -149,6 +150,17 @@ try:
     
     if consumer_count > 1:
         print(f"⚠️  Multiple consumers detected ({consumer_count}) - may cause duplicate processing")
+        print("")
+        print("💡 Possible causes:")
+        print("   1. Multiple Video Worker instances running")
+        print("   2. Old connections from previous sessions")
+        print("   3. Workers from other environments (staging/local)")
+        print("")
+        print("💡 Solutions:")
+        print("   1. Check Video Worker processes: ps aux | grep video_worker")
+        print("   2. Restart services: bash scripts/pod/restart-pod.sh")
+        print("   3. Check RabbitMQ Management UI for active connections")
+        print("   4. Close old connections manually if needed")
     
     connection.close()
     sys.exit(0)
@@ -165,7 +177,37 @@ print_header "Summary"
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 if [ "$ALL_HEALTHY" = true ]; then
-    print_success "✅ All services are running and healthy!"
+    # Check if there are multiple consumers
+    CONSUMER_COUNT=$(python3 << 'PYEOF' 2>/dev/null || echo "0"
+import pika
+import sys
+try:
+    credentials = pika.PlainCredentials('$RABBITMQ_USER', '$RABBITMQ_PASSWORD')
+    parameters = pika.ConnectionParameters(
+        host='$RABBITMQ_HOST',
+        port=$RABBITMQ_PORT,
+        credentials=credentials,
+        connection_attempts=1,
+        retry_delay=1
+    )
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    method = channel.queue_declare(queue='transcription_queue', passive=True)
+    print(method.method.consumer_count)
+    connection.close()
+except:
+    print("0")
+PYEOF
+)
+    
+    if [ "$CONSUMER_COUNT" -gt 1 ]; then
+        print_warning "⚠️  Multiple consumers detected ($CONSUMER_COUNT) - may cause duplicate processing"
+        echo ""
+        print_status "💡 To fix:"
+        echo "   bash scripts/pod/fix-multiple-consumers.sh"
+    else
+        print_success "✅ All services are running and healthy!"
+    fi
 else
     print_warning "⚠️  Some services have issues"
     echo ""
