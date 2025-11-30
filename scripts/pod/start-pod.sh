@@ -89,13 +89,43 @@ if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]
 fi
 
 # Install Python dependencies if needed
-if [ ! -d "venv" ] && [ ! -f ".deps_installed" ]; then
+print_status "Checking Python dependencies..."
+MISSING_DEPS=()
+
+# Check critical dependencies
+for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika python-dotenv; do
+    if ! python3 -c "import ${dep//-/_}" 2>/dev/null; then
+        MISSING_DEPS+=("$dep")
+    fi
+done
+
+if [ ${#MISSING_DEPS[@]} -gt 0 ] || [ ! -f ".deps_installed" ]; then
     print_status "Installing Python dependencies..."
-    pip3 install --no-cache-dir -r requirements.txt 2>/dev/null || {
+    if [ -f "requirements.txt" ]; then
+        pip3 install --no-cache-dir -r requirements.txt 2>&1 | tail -5 || {
+            print_warning "⚠️  Failed to install from requirements.txt, installing core dependencies..."
+            pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
+        }
+    else
+        print_warning "⚠️  requirements.txt not found, installing core dependencies..."
         pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
-    }
+    fi
+    
+    # Verify critical dependencies
+    print_status "Verifying dependencies..."
+    for dep in aiofiles fastapi uvicorn; do
+        if python3 -c "import ${dep//-/_}" 2>/dev/null; then
+            print_success "   ✅ $dep"
+        else
+            print_error "   ❌ $dep (missing)"
+        fi
+    done
+    
     touch .deps_installed
     print_success "✅ Dependencies installed"
+    echo ""
+else
+    print_success "✅ All dependencies are installed"
     echo ""
 fi
 

@@ -85,24 +85,46 @@ echo ""
 
 # Check Python dependencies
 print_status "Checking Python dependencies..."
-if [ -f "requirements.txt" ]; then
-    if [ ! -f ".deps_installed" ]; then
-        print_warning "⚠️  Dependencies not installed"
-        read -p "Install Python dependencies? (Y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            pip3 install --no-cache-dir -r requirements.txt || {
-                print_warning "⚠️  Some packages failed, installing essentials..."
-                pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
-            }
-            touch .deps_installed
-            print_success "✅ Dependencies installed"
-        fi
-    else
-        print_success "✅ Dependencies installed"
+
+# Check critical dependencies
+MISSING_DEPS=()
+for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika python-dotenv; do
+    if ! python3 -c "import ${dep//-/_}" 2>/dev/null; then
+        MISSING_DEPS+=("$dep")
     fi
+done
+
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    print_warning "⚠️  Missing dependencies: ${MISSING_DEPS[*]}"
+    if [ -f "requirements.txt" ]; then
+        print_status "Installing from requirements.txt..."
+        pip3 install --no-cache-dir -r requirements.txt || {
+            print_warning "⚠️  Some packages failed, installing essentials..."
+            pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
+        }
+    else
+        print_warning "⚠️  requirements.txt not found, installing essentials..."
+        pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
+    fi
+    
+    # Verify critical dependencies
+    print_status "Verifying dependencies..."
+    for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika python-dotenv; do
+        if python3 -c "import ${dep//-/_}" 2>/dev/null; then
+            print_success "   ✅ $dep"
+        else
+            print_error "   ❌ $dep (missing)"
+        fi
+    done
+    
+    touch .deps_installed
+    print_success "✅ Dependencies installed"
+elif [ -f ".deps_installed" ]; then
+    print_success "✅ All dependencies are installed"
 else
-    print_warning "⚠️  requirements.txt not found"
+    # Install even if .deps_installed doesn't exist but dependencies are present
+    touch .deps_installed
+    print_success "✅ All dependencies are installed"
 fi
 echo ""
 
