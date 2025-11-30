@@ -156,13 +156,21 @@ class OpenAIWhisperProvider(WhisperProvider):
         # Transcribe
         start_time = time.time()
         try:
+            # ใช้ fp16 เพื่อเพิ่มประสิทธิภาพบน GPU (ถ้าใช้ CUDA)
+            fp16 = self.device == 'cuda'
+            
             result = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,
                 task="transcribe",
-                verbose=False  # ไม่แสดง progress bar
+                verbose=False,  # ไม่แสดง progress bar
+                fp16=fp16  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
             )
             processing_time = time.time() - start_time
+            
+            # Log GPU utilization hint
+            if self.device == 'cuda':
+                logger.debug(f"[OpenAI Whisper] 💡 Using fp16={fp16} for CUDA acceleration")
             
             # Extract text and segments
             text = result.get("text", "").strip()
