@@ -285,21 +285,33 @@ if [ -f "app/main.py" ]; then
     echo "💡 Services will continue running even if you exit the terminal"
     echo ""
     
-    # Keep container running (wait for processes)
-    echo "⏳ Monitoring services... (Press Ctrl+C to stop)"
-    while true; do
-        # Check if processes are still running
-        if [ -n "$MAIN_API_PID" ] && ! kill -0 $MAIN_API_PID 2>/dev/null; then
-            echo "⚠️  Main API process died. Check logs: tail -f /tmp/main-api.log"
-        fi
-        if [ -n "$WHISPER_PID" ] && ! kill -0 $WHISPER_PID 2>/dev/null; then
-            echo "⚠️  Whisper API process died. Check logs: tail -f /tmp/whisper.log"
-        fi
-        if [ -n "$VIDEO_WORKER_PID" ] && ! kill -0 $VIDEO_WORKER_PID 2>/dev/null; then
-            echo "⚠️  Video Worker process died. Check logs: tail -f /tmp/video-worker.log"
-        fi
-        sleep 10
-    done
+    # Setup signal handler to prevent Ctrl+C from killing services
+    trap 'echo ""; echo "⚠️  Received interrupt signal. Services will continue running in background."; echo "💡 To stop services, run: bash scripts/pod/stop-services.sh"; exit 0' INT TERM
+    
+    # Keep container running (wait for processes) - non-blocking
+    echo "⏳ Monitoring services... (Press Ctrl+C to exit - services will continue running)"
+    echo ""
+    
+    # Background monitoring (non-blocking)
+    (
+        while true; do
+            sleep 30
+            # Check if processes are still running
+            if [ -n "$MAIN_API_PID" ] && ! kill -0 $MAIN_API_PID 2>/dev/null; then
+                echo "⚠️  Main API process died. Check logs: tail -f /tmp/main-api.log"
+            fi
+            if [ -n "$WHISPER_PID" ] && ! kill -0 $WHISPER_PID 2>/dev/null; then
+                echo "⚠️  Whisper API process died. Check logs: tail -f /tmp/whisper.log"
+            fi
+            if [ -n "$VIDEO_WORKER_PID" ] && ! kill -0 $VIDEO_WORKER_PID 2>/dev/null; then
+                echo "⚠️  Video Worker process died. Check logs: tail -f /tmp/video-worker.log"
+            fi
+        done
+    ) &
+    MONITOR_PID=$!
+    
+    # Keep main process alive (but allow Ctrl+C to exit gracefully)
+    tail -f /dev/null
 else
     echo "❌ app/main.py not found"
     echo "⏳ Keeping container running..."

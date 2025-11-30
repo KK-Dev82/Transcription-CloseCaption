@@ -121,6 +121,45 @@ bash scripts/pod/update-code.sh main
 
 ---
 
+### `restart-pod-services.sh` ⭐ (ใหม่)
+**Restart Services หลัง Start Pod ใหม่**
+- ตรวจสอบ GPU
+- ตรวจสอบ services ที่รันอยู่
+- ตรวจสอบ project structure
+- ตรวจสอบ .env.runpod (restore จาก backup ถ้ามี)
+- ตรวจสอบ models
+- Start services ใหม่
+
+**Usage:**
+```bash
+# หลัง Start Pod ใหม่
+bash scripts/pod/restart-pod-services.sh
+```
+
+**ใช้เมื่อ:**
+- Pod ถูก Stop แล้ว Start ใหม่
+- Services หยุดทำงาน
+- ต้องการ Restart Services
+
+---
+
+### `setup-rabbitmq-backend.sh` ⭐ (ใหม่)
+**ตั้งค่า RabbitMQ Connection ไปยัง Backend Server**
+- ทดสอบ RabbitMQ connection
+- สร้าง/อัปเดต .env.runpod
+- แนะนำให้ restart services
+
+**Usage:**
+```bash
+# ตั้งค่า RabbitMQ ไปยัง Backend Server Dev
+bash scripts/pod/setup-rabbitmq-backend.sh 178.128.105.100 5672
+
+# ตั้งค่าด้วย custom credentials
+bash scripts/pod/setup-rabbitmq-backend.sh 178.128.105.100 5672 senate password
+```
+
+---
+
 ### `get-acr-credentials.sh`
 **ดึง ACR Credentials สำหรับ RunPod Registry Auth**
 - Enable Admin User (ถ้ายังไม่เปิด)
