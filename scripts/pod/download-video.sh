@@ -149,6 +149,6 @@ fi
 echo ""
 print_status "💡 Next steps:"
 echo "   # Test transcription:"
-echo "   bash scripts/pod/test-transcription-performance.sh $DEST_PATH medium"
+echo "   bash scripts/pod/test-transcription.sh $DEST_PATH medium"
 echo ""
 
