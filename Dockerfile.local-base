@@ -1,0 +1,75 @@
+# Minimal Base Image สำหรับ Local Testing (MacOS/Linux)
+# ไม่ใช้ CUDA - ใช้ base Ubuntu image
+#
+# ใช้ได้ทั้ง:
+# - MacOS: Build image นี้ → Run container → Clone repo → Start services แบบ Direct mode
+# - Linux: Build image นี้ → Run container → Clone repo → Start services แบบ Direct mode
+#
+# ⚠️ หมายเหตุ:
+# - Image นี้เป็น minimal base - ไม่มี services start อัตโนมัติ
+# - User ต้อง clone repo และ run scripts/pod/start-pod.sh เอง
+# - ไม่ใช้ CUDA (สำหรับ MacOS และ Linux ที่ไม่มี GPU)
+
+# Use Ubuntu base (no CUDA)
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    # Python
+    python3 \
+    python3-pip \
+    python3-venv \
+    # Redis (สำหรับ local Redis service)
+    redis-server \
+    # Utilities
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    # Audio/Video processing
+    ffmpeg \
+    # Network tools
+    netcat \
+    telnet \
+    jq \
+    # Timezone data (for pythainlp)
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (พื้นฐาน)
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    requests \
+    aiohttp \
+    aiofiles \
+    redis \
+    pika \
+    python-dotenv \
+    tzdata
+
+# Create working directory
+WORKDIR /workspace
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Bangkok
+ENV TZDIR=/usr/share/zoneinfo
+
+# Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
+EXPOSE 8001 8002 6379
+
+# Default: Keep container running (wait for user to start services)
+CMD ["/bin/bash", "-c", "echo '🚀 Local Base Image Ready (No CUDA)'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/start-pod.sh'; echo ''; tail -f /dev/null"]
+
