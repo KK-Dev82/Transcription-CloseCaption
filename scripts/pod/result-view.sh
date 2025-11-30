@@ -292,12 +292,20 @@ display_transcription_detail() {
                 TASK_DIR="$PROJECT_ROOT/storage/transcriptions/$task_id"
                 if [ -d "$TASK_DIR" ]; then
                     print_status "      📁 Storage directory exists: $TASK_DIR"
-                    ls -lh "$TASK_DIR" 2>/dev/null | head -5 || true
+                    ls -lh "$TASK_DIR" 2>/dev/null | head -10 || true
                     
                     # Try to read chunks directly
                     METADATA_FILE="$TASK_DIR/metadata.json"
                     if [ -f "$METADATA_FILE" ]; then
+                        # Show metadata.json content summary
+                        print_status "      📄 Checking metadata.json content..."
+                        METADATA_KEYS=$(jq -r 'keys | join(", ")' "$METADATA_FILE" 2>/dev/null || echo "unknown")
+                        print_status "      📋 Keys in metadata.json: $METADATA_KEYS"
+                        
+                        # Check for chunks
                         CHUNKS_COUNT=$(jq -r '.chunks // [] | length' "$METADATA_FILE" 2>/dev/null || echo "0")
+                        FULL_TEXT_IN_METADATA=$(jq -r '.full_text // ""' "$METADATA_FILE" 2>/dev/null || echo "")
+                        
                         if [ "$CHUNKS_COUNT" -gt 0 ]; then
                             print_status "      📦 Found $CHUNKS_COUNT chunks in metadata.json"
                             print_status "      💡 Attempting to build full_text from chunks..."
@@ -318,8 +326,66 @@ display_transcription_detail() {
                             else
                                 print_warning "      ⚠️  Chunks exist but could not build full_text (chunks may be empty)"
                             fi
+                        elif [ -n "$FULL_TEXT_IN_METADATA" ] && [ "$FULL_TEXT_IN_METADATA" != "null" ] && [ "$FULL_TEXT_IN_METADATA" != "" ]; then
+                            # If full_text exists directly in metadata.json
+                            WORD_COUNT=$(echo "$FULL_TEXT_IN_METADATA" | wc -w 2>/dev/null || echo "0")
+                            CHAR_COUNT=$(echo "$FULL_TEXT_IN_METADATA" | wc -c 2>/dev/null || echo "0")
+                            echo "      ✅ Found full_text in metadata.json: ${WORD_COUNT} words, ${CHAR_COUNT} characters"
+                            echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            TEXT_PREVIEW=$(echo "$FULL_TEXT_IN_METADATA" | head -c 500)
+                            echo "      $TEXT_PREVIEW"
+                            if [ ${#FULL_TEXT_IN_METADATA} -gt 500 ]; then
+                                echo "..."
+                                echo "      (Full text truncated. Use 'bash scripts/pod/result-view.sh $task_id' to see complete text)"
+                            fi
+                            echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                         else
-                            print_warning "      ⚠️  No chunks found in metadata.json"
+                            # Check for full_text.json
+                            FULL_TEXT_JSON="$TASK_DIR/full_text.json"
+                            if [ -f "$FULL_TEXT_JSON" ]; then
+                                print_status "      📄 Found full_text.json, checking content..."
+                                FULL_TEXT_FROM_JSON=$(jq -r '.full_text // ""' "$FULL_TEXT_JSON" 2>/dev/null || echo "")
+                                SEGMENTS_FROM_JSON=$(jq -r '.segments // []' "$FULL_TEXT_JSON" 2>/dev/null || echo "[]")
+                                
+                                if [ -n "$FULL_TEXT_FROM_JSON" ] && [ "$FULL_TEXT_FROM_JSON" != "null" ] && [ "$FULL_TEXT_FROM_JSON" != "" ]; then
+                                    WORD_COUNT=$(echo "$FULL_TEXT_FROM_JSON" | wc -w 2>/dev/null || echo "0")
+                                    CHAR_COUNT=$(echo "$FULL_TEXT_FROM_JSON" | wc -c 2>/dev/null || echo "0")
+                                    echo "      ✅ Found full_text in full_text.json: ${WORD_COUNT} words, ${CHAR_COUNT} characters"
+                                    echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    TEXT_PREVIEW=$(echo "$FULL_TEXT_FROM_JSON" | head -c 500)
+                                    echo "      $TEXT_PREVIEW"
+                                    if [ ${#FULL_TEXT_FROM_JSON} -gt 500 ]; then
+                                        echo "..."
+                                        echo "      (Full text truncated. Use 'bash scripts/pod/result-view.sh $task_id' to see complete text)"
+                                    fi
+                                    echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                elif [ -n "$SEGMENTS_FROM_JSON" ] && [ "$SEGMENTS_FROM_JSON" != "[]" ] && [ "$SEGMENTS_FROM_JSON" != "null" ]; then
+                                    SEGMENTS_COUNT=$(echo "$SEGMENTS_FROM_JSON" | jq 'length' 2>/dev/null || echo "0")
+                                    if [ "$SEGMENTS_COUNT" -gt 0 ]; then
+                                        print_status "      📦 Found $SEGMENTS_COUNT segments in full_text.json"
+                                        FULL_TEXT=$(echo "$SEGMENTS_FROM_JSON" | jq -r '[.[] | .text // ""] | join(" ")' 2>/dev/null || echo "")
+                                        if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                                            WORD_COUNT=$(echo "$FULL_TEXT" | wc -w 2>/dev/null || echo "0")
+                                            CHAR_COUNT=$(echo "$FULL_TEXT" | wc -c 2>/dev/null || echo "0")
+                                            echo "      ✅ Built text from segments: ${WORD_COUNT} words, ${CHAR_COUNT} characters"
+                                            echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                            TEXT_PREVIEW=$(echo "$FULL_TEXT" | head -c 500)
+                                            echo "      $TEXT_PREVIEW"
+                                            if [ ${#FULL_TEXT} -gt 500 ]; then
+                                                echo "..."
+                                                echo "      (Full text truncated. Use 'bash scripts/pod/result-view.sh $task_id' to see complete text)"
+                                            fi
+                                            echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                        fi
+                                    fi
+                                else
+                                    print_warning "      ⚠️  full_text.json exists but contains no text or segments"
+                                fi
+                            else
+                                print_warning "      ⚠️  No chunks, full_text, or full_text.json found"
+                                print_status "      💡 This may indicate the transcription was not completed properly"
+                                print_status "      💡 Check video worker logs: bash scripts/pod/logs-pod.sh worker | grep $task_id"
+                            fi
                         fi
                     else
                         print_warning "      ⚠️  metadata.json not found"
