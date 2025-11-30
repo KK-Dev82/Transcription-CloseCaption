@@ -59,10 +59,14 @@ async def get_transcription_status(task_id: str):
     
     task = transcription_service.get_task_status(task_id)
     if not task:
+        logger.warning(f"Task {task_id} not found in transcription_service")
         raise HTTPException(
             status_code=404,
             detail="ไม่พบ task"
         )
+    
+    # Log task status for debugging
+    logger.debug(f"Task {task_id} status: {task.status}, progress: {task.progress}")
     
     return task
 
