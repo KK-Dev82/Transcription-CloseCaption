@@ -90,11 +90,16 @@ print_status "Checking Python dependencies..."
 
 # Check critical dependencies
 MISSING_DEPS=()
-for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika python-dotenv; do
+for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika; do
     if ! python3 -c "import ${dep//-/_}" 2>/dev/null; then
         MISSING_DEPS+=("$dep")
     fi
 done
+
+# Check python-dotenv separately (import name is 'dotenv')
+if ! python3 -c "import dotenv" 2>/dev/null; then
+    MISSING_DEPS+=("python-dotenv")
+fi
 
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     print_warning "⚠️  Missing dependencies: ${MISSING_DEPS[*]}"
@@ -111,13 +116,19 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     
     # Verify critical dependencies
     print_status "Verifying dependencies..."
-    for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika python-dotenv; do
+    for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika; do
         if python3 -c "import ${dep//-/_}" 2>/dev/null; then
             print_success "   ✅ $dep"
         else
             print_error "   ❌ $dep (missing)"
         fi
     done
+    # Check python-dotenv separately
+    if python3 -c "import dotenv" 2>/dev/null; then
+        print_success "   ✅ python-dotenv"
+    else
+        print_error "   ❌ python-dotenv (missing)"
+    fi
     
     touch .deps_installed
     print_success "✅ Dependencies installed"
@@ -174,6 +185,22 @@ if [ "$WHISPER_PROVIDER" = "openai-whisper" ]; then
         echo ""
         print_status "💡 To pre-download a model, run:"
         echo "   python3 -c 'import whisper; whisper.load_model(\"large-v3\")'"
+    fi
+    
+    # Check for old whisper.cpp models in models/ directory
+    print_status "Checking for old whisper.cpp models in models/ directory..."
+    OLD_MODELS=$(find models/ -name "ggml-*.bin" 2>/dev/null | wc -l || echo "0")
+    if [ "$OLD_MODELS" -gt 0 ]; then
+        print_warning "⚠️  Found $OLD_MODELS old whisper.cpp model file(s) in models/ directory"
+        print_status "💡 These are not needed for openai-whisper provider"
+        echo ""
+        read -p "Delete old whisper.cpp models? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -f models/ggml-*.bin && print_success "✅ Old whisper.cpp models removed"
+        else
+            print_status "💡 Old models kept (can be deleted later: rm -f models/ggml-*.bin)"
+        fi
     fi
 else
     # Check whisper.cpp models (ggml-*.bin files)
