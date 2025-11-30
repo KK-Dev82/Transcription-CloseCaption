@@ -75,6 +75,19 @@ EOF
 fi
 echo ""
 
+# Install system timezone data (required for pythainlp)
+print_status "Checking system timezone data..."
+if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
+    print_warning "⚠️  System timezone data not found, installing..."
+    apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 || {
+        print_warning "⚠️  Failed to install system tzdata, trying alternative..."
+        # Try to set TZDIR if available
+        if [ -d "/usr/share/zoneinfo" ]; then
+            export TZDIR=/usr/share/zoneinfo
+        fi
+    }
+fi
+
 # Install Python dependencies if needed
 if [ ! -d "venv" ] && [ ! -f ".deps_installed" ]; then
     print_status "Installing Python dependencies..."
@@ -159,16 +172,28 @@ else
     export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
     export RABBITMQ_USER=${RABBITMQ_USER:-senate}
     export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    # Set timezone environment variables for pythainlp
+    export TZ=Asia/Bangkok
+    [ -d "/usr/share/zoneinfo" ] && export TZDIR=/usr/share/zoneinfo || true
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
              RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \
+             TZ="${TZ}" \
+             TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
              python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 & disown
-    sleep 3
-    if curl -f http://localhost:8001/health > /dev/null 2>&1; then
-        print_success "✅ Main API started"
+    sleep 5
+    # Check if process is still running (not crashed)
+    if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
+        if curl -f http://localhost:8001/health > /dev/null 2>&1; then
+            print_success "✅ Main API started"
+        else
+            print_warning "⚠️  Main API started but health check failed - check logs"
+            print_status "💡 Check logs: tail -f /tmp/main-api.log"
+        fi
     else
-        print_warning "⚠️  Main API may not be ready yet"
+        print_error "❌ Main API failed to start - check logs"
+        print_status "💡 Check logs: tail -20 /tmp/main-api.log"
     fi
 fi
 echo ""
