@@ -852,24 +852,24 @@ class VideoWorker:
             while self.running:
                 self.connection.process_data_events(time_limit=1)
                 
-            except KeyboardInterrupt:
-                logger.info("ได้รับ interrupt signal")
+        except KeyboardInterrupt:
+            logger.info("ได้รับ interrupt signal")
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดใน worker: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+        finally:
+            try:
+                if self.connection and not self.connection.is_closed:
+                    self.connection.close()
             except Exception as e:
-                logger.error(f"เกิดข้อผิดพลาดใน worker: {e}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-            finally:
-                try:
-                    if self.connection and not self.connection.is_closed:
-                        self.connection.close()
-                except Exception as e:
-                    logger.warning(f"Error closing connection: {e}")
-                try:
-                    if self.channel and not self.channel.is_closed:
-                        self.channel.close()
-                except Exception as e:
-                    logger.warning(f"Error closing channel: {e}")
-                logger.info("Video Worker ปิดตัวลง")
+                logger.warning(f"Error closing connection: {e}")
+            try:
+                if self.channel and not self.channel.is_closed:
+                    self.channel.close()
+            except Exception as e:
+                logger.warning(f"Error closing channel: {e}")
+            logger.info("Video Worker ปิดตัวลง")
 
 def main():
     """Main function สำหรับรัน worker"""

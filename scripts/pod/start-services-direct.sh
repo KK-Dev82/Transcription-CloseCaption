@@ -52,14 +52,14 @@ ENVIRONMENT=runpod
 STORAGE_TYPE=json
 JSON_STORAGE_DIR=/workspace/transcription-service/storage
 
-# RabbitMQ Configuration
-# สำหรับ Backend Server Dev: ใช้ IP 178.128.105.100
-# สำหรับ Local Testing: ใช้ localhost (ผ่าน SSH Tunnel)
-# สำหรับ Staging: ใช้ IP ของ Backend server (10.200.22.61)
-RABBITMQ_HOST=\${RABBITMQ_HOST:-178.128.105.100}
-RABBITMQ_PORT=\${RABBITMQ_PORT:-5672}
-RABBITMQ_USER=\${RABBITMQ_USER:-senate}
-RABBITMQ_PASSWORD=\${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+# RabbitMQ Configuration (Backend Server Dev)
+# Auto-configured for Backend Server at 178.128.105.100
+# สำหรับ Local Testing: เปลี่ยนเป็น localhost (ผ่าน SSH Tunnel)
+# สำหรับ Staging: เปลี่ยนเป็น IP ของ Backend server (10.200.22.61)
+RABBITMQ_HOST=178.128.105.100
+RABBITMQ_PORT=5672
+RABBITMQ_USER=senate
+RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
 
 # Redis Configuration (local)
 REDIS_URL=\${REDIS_URL:-redis://localhost:6379}
@@ -142,21 +142,26 @@ if [ -d "whisper-service" ]; then
     cd ..
 fi
 
-# Download Whisper models (ถ้ายังไม่มี)
+# Check Whisper models (skip download if any model exists)
 echo "📦 Checking Whisper models..."
-if [ ! -f "models/ggml-base.bin" ]; then
-    echo "📥 Downloading Whisper models..."
-    mkdir -p models
-    
-    # Download base model
-    if [ -d "whisper-service" ] && [ -f "whisper-service/models/download-ggml-model.sh" ]; then
-        cd whisper-service
-        bash models/download-ggml-model.sh base || echo "⚠️  Failed to download base model"
-        cp models/ggml-base.bin ../models/ 2>/dev/null || true
-        cd ..
-    else
-        echo "⚠️  Whisper models download script not found"
+MODEL_FOUND=""
+for variant in "ggml-large-v3.bin" "ggml-large-v2.bin" "ggml-large.bin" "ggml-medium.bin" "ggml-small.bin" "ggml-base.bin"; do
+    if [ -f "models/$variant" ]; then
+        FILE_SIZE=$(stat -c%s "models/$variant" 2>/dev/null || stat -f%z "models/$variant" 2>/dev/null || echo "0")
+        if [ "$FILE_SIZE" -gt 100000000 ]; then  # > 100MB
+            MODEL_FOUND="$variant"
+            echo "✅ Whisper model found: $variant ($(du -h "models/$variant" | cut -f1))"
+            break
+        fi
     fi
+done
+
+# Only download if no model found
+if [ -z "$MODEL_FOUND" ]; then
+    echo "📥 No Whisper model found. You can download manually:"
+    echo "   bash scripts/utility/download-models.sh large-v3"
+    echo "   # หรือ"
+    echo "   bash scripts/utility/download-models.sh medium"
 fi
 
 # Create necessary directories
@@ -187,9 +192,11 @@ if [ -f "whisper_api.py" ]; then
     export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
     export WHISPER_CUBLAS=1
     
-    # Start Whisper API in background
+    # Start Whisper API in background with nohup and disown
     nohup python3 whisper_api.py > /tmp/whisper.log 2>&1 &
     WHISPER_PID=$!
+    # Disown the process to prevent it from being killed when script exits
+    disown $WHISPER_PID 2>/dev/null || true
     echo "✅ Whisper API started (PID: $WHISPER_PID)"
     
     # Wait for Whisper API to be ready
@@ -218,6 +225,8 @@ if [ -f "app/workers/video_worker.py" ]; then
     export PYTHONPATH=/workspace/transcription-service
     nohup python3 -m app.workers.video_worker > /tmp/video-worker.log 2>&1 &
     VIDEO_WORKER_PID=$!
+    # Disown the process to prevent it from being killed when script exits
+    disown $VIDEO_WORKER_PID 2>/dev/null || true
     echo "✅ Video Worker started (PID: $VIDEO_WORKER_PID)"
     sleep 2
 else
@@ -234,6 +243,8 @@ if [ -f "app/main.py" ]; then
     # Start Main API in background with nohup
     nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 &
     MAIN_API_PID=$!
+    # Disown the process to prevent it from being killed when script exits
+    disown $MAIN_API_PID 2>/dev/null || true
     echo "✅ Main API started (PID: $MAIN_API_PID)"
     
     # Wait for Main API to be ready
@@ -286,33 +297,24 @@ if [ -f "app/main.py" ]; then
     echo "💡 Services will continue running even if you exit the terminal"
     echo ""
     
-    # Setup signal handler to prevent Ctrl+C from killing services
-    trap 'echo ""; echo "⚠️  Received interrupt signal. Services will continue running in background."; echo "💡 To stop services, run: bash scripts/pod/stop-services.sh"; exit 0' INT TERM
-    
-    # Keep container running (wait for processes) - non-blocking
-    echo "⏳ Monitoring services... (Press Ctrl+C to exit - services will continue running)"
+    # Services are now running in background with disown
+    # They will continue running even if this script exits
+    echo ""
+    echo "✅ All services started successfully!"
+    echo "💡 Services are running in background and will continue even if you exit this terminal"
+    echo ""
+    echo "📋 To check service status:"
+    echo "   bash scripts/pod/check-services-status.sh"
+    echo ""
+    echo "📋 To view logs:"
+    echo "   tail -f /tmp/main-api.log /tmp/whisper.log /tmp/video-worker.log"
+    echo ""
+    echo "📋 To stop services:"
+    echo "   bash scripts/pod/stop-services.sh"
     echo ""
     
-    # Background monitoring (non-blocking)
-    (
-        while true; do
-            sleep 30
-            # Check if processes are still running
-            if [ -n "$MAIN_API_PID" ] && ! kill -0 $MAIN_API_PID 2>/dev/null; then
-                echo "⚠️  Main API process died. Check logs: tail -f /tmp/main-api.log"
-            fi
-            if [ -n "$WHISPER_PID" ] && ! kill -0 $WHISPER_PID 2>/dev/null; then
-                echo "⚠️  Whisper API process died. Check logs: tail -f /tmp/whisper.log"
-            fi
-            if [ -n "$VIDEO_WORKER_PID" ] && ! kill -0 $VIDEO_WORKER_PID 2>/dev/null; then
-                echo "⚠️  Video Worker process died. Check logs: tail -f /tmp/video-worker.log"
-            fi
-        done
-    ) &
-    MONITOR_PID=$!
-    
-    # Keep main process alive (but allow Ctrl+C to exit gracefully)
-    tail -f /dev/null
+    # Exit script - services will continue running (disowned)
+    exit 0
 else
     echo "❌ app/main.py not found"
     echo "⏳ Keeping container running..."
