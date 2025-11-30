@@ -407,21 +407,33 @@ class VideoWorker:
                 monitor_running = True
                 
                 def monitor_progress():
-                    """Monitor progress และ log updates"""
+                    """Monitor progress และ log updates (only when changed)"""
                     last_progress = -1
                     last_status = ""
+                    last_log_time = 0
                     while monitor_running:
                         try:
                             task_info = self.json_storage.get_transcription(task_id)
                             if task_info:
                                 current_progress = task_info.get('progress', 0)
                                 current_status = task_info.get('status', '')
+                                current_time = time.time()
                                 
                                 # Log เมื่อ progress หรือ status เปลี่ยน
-                                if current_progress != last_progress or current_status != last_status:
-                                    logger.info(f"📊 Task {task_id}: Progress {current_progress}% - Status: {current_status}")
+                                # หรือทุก 30 วินาที (เพื่อให้เห็นว่า task ยังทำงานอยู่)
+                                progress_changed = (current_progress != last_progress or current_status != last_status)
+                                time_since_last_log = current_time - last_log_time
+                                
+                                if progress_changed or time_since_last_log >= 30:
+                                    if progress_changed:
+                                        logger.info(f"📊 Task {task_id}: Progress {current_progress}% - Status: {current_status}")
+                                    else:
+                                        # Log heartbeat every 30 seconds if no change
+                                        logger.debug(f"📊 Task {task_id}: Progress {current_progress}% - Status: {current_status} (heartbeat)")
+                                    
                                     last_progress = current_progress
                                     last_status = current_status
+                                    last_log_time = current_time
                             
                             time.sleep(5)  # Check every 5 seconds
                         except Exception as e:

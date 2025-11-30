@@ -41,6 +41,7 @@ NC='\033[0m'
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_perf() { echo -e "${CYAN}[PERF]${NC} $1"; }
 
 echo "🧪 Testing Transcription"
@@ -114,6 +115,24 @@ print_status "Monitoring progress..."
 MAX_WAIT=3600
 WAIT_INTERVAL=5
 ELAPSED_WAIT=0
+LAST_PROGRESS=-1
+LAST_STATUS=""
+
+# Function to format elapsed time
+format_time() {
+    local seconds=$1
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+    
+    if [ $hours -gt 0 ]; then
+        printf "%dh %dm %ds" $hours $minutes $secs
+    elif [ $minutes -gt 0 ]; then
+        printf "%dm %ds" $minutes $secs
+    else
+        printf "%ds" $secs
+    fi
+}
 
 while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
     # Try multiple endpoints
@@ -136,7 +155,7 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
             ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
             continue
         else
-            print_warning "⚠️  Invalid API response, retrying..."
+            print_warning "⚠️  Invalid API response, retrying... (Elapsed: $(format_time $ELAPSED_WAIT))"
             sleep $WAIT_INTERVAL
             ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
             continue
@@ -167,21 +186,23 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
         PROGRESS=0
     fi
     
-    # Only show progress if we have valid data
-    if [ "$STATUS" != "unknown" ] && [ "$STATUS" != "" ]; then
-        print_status "Progress: ${PROGRESS}% - Status: ${STATUS}"
-    elif [ "$PROGRESS" -gt 0 ]; then
-        print_status "Progress: ${PROGRESS}% - Status: processing"
-    else
-        # If status is unknown and progress is 0, might be API issue or task not started yet
-        if [ $ELAPSED_WAIT -lt 30 ]; then
-            # First 30 seconds, wait silently
-            sleep $WAIT_INTERVAL
-            ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
-            continue
+    # Only show progress if it changed or status changed
+    if [ "$PROGRESS" != "$LAST_PROGRESS" ] || [ "$STATUS" != "$LAST_STATUS" ]; then
+        ELAPSED_TIME=$(format_time $ELAPSED_WAIT)
+        
+        if [ "$STATUS" != "unknown" ] && [ "$STATUS" != "" ]; then
+            print_status "Progress: ${PROGRESS}% - Status: ${STATUS} - Elapsed: ${ELAPSED_TIME}"
+        elif [ "$PROGRESS" -gt 0 ]; then
+            print_status "Progress: ${PROGRESS}% - Status: processing - Elapsed: ${ELAPSED_TIME}"
         else
-            print_warning "⚠️  Status unknown (Progress: ${PROGRESS}%), checking again..."
+            # If status is unknown and progress is 0, might be API issue or task not started yet
+            if [ $ELAPSED_WAIT -ge 30 ]; then
+                print_warning "⚠️  Status unknown (Progress: ${PROGRESS}%), checking again... (Elapsed: ${ELAPSED_TIME})"
+            fi
         fi
+        
+        LAST_PROGRESS=$PROGRESS
+        LAST_STATUS=$STATUS
     fi
     
     if [ "$STATUS" = "completed" ] || [ "$STATUS" = "success" ]; then
@@ -190,11 +211,11 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
         
         echo ""
         print_success "✅ Transcription completed!"
-        print_perf "⏱️  Transcription time: ${TRANSCRIBE_TIME}s"
+        print_perf "⏱️  Total time: $(format_time $TRANSCRIBE_TIME) (${TRANSCRIBE_TIME}s)"
         echo ""
         exit 0
     elif [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ]; then
-        print_error "❌ Transcription failed!"
+        print_error "❌ Transcription failed! (Elapsed: $(format_time $ELAPSED_WAIT))"
         exit 1
     fi
     
