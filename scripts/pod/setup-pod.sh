@@ -69,19 +69,15 @@ EOF
 fi
 echo ""
 
-# Check system timezone data (required for pythainlp)
-print_status "Checking system timezone data..."
+# Install system timezone data (required for pythainlp)
+print_status "Installing system timezone data..."
 if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-    print_warning "⚠️  System timezone data not found"
-    read -p "Install system tzdata? (Y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 && {
-            print_success "✅ System tzdata installed"
-        } || {
-            print_warning "⚠️  Failed to install system tzdata"
-        }
-    fi
+    print_status "Installing tzdata..."
+    apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 && {
+        print_success "✅ System tzdata installed"
+    } || {
+        print_warning "⚠️  Failed to install system tzdata (may need sudo)"
+    }
 else
     print_success "✅ System timezone data available"
 fi

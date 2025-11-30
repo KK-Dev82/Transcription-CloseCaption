@@ -94,6 +94,17 @@ bash scripts/pod/test-transcription.sh uploads/video.mp4 large-v3
 bash scripts/pod/test-transcription.sh uploads/video.mp4 medium http://localhost:8001
 ```
 
+### 9. `result-view.sh` (Optional)
+ดูผลลัพธ์ transcription
+
+```bash
+# ดูผลลัพธ์ของ task-id
+bash scripts/pod/result-view.sh <task-id>
+
+# แสดง list ให้เลือก
+bash scripts/pod/result-view.sh
+```
+
 ## 🚀 Quick Start
 
 ### 1. Setup ครั้งแรก
