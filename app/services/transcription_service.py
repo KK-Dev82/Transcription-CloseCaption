@@ -300,11 +300,33 @@ class TranscriptionService:
             
             # สร้าง audio chunks
             logger.info("กำลังแบ่งไฟล์เป็น audio chunks...")
-            chunks = self.video_service.extract_audio_chunks(local_file_path, chunk_duration)
+            logger.info(f"   File path: {local_file_path}")
+            logger.info(f"   Chunk duration: {chunk_duration}s")
+            
+            try:
+                chunks = self.video_service.extract_audio_chunks(local_file_path, chunk_duration)
+                logger.info(f"✅ สร้าง audio chunks สำเร็จ: {len(chunks)} chunks")
+                
+                if not chunks or len(chunks) == 0:
+                    logger.error(f"❌ ไม่สามารถสร้าง audio chunks ได้ - chunks list is empty!")
+                    raise ValueError(f"ไม่สามารถสร้าง audio chunks จากไฟล์ {local_file_path} ได้")
+                
+                # ตรวจสอบว่า chunks มีไฟล์จริงหรือไม่
+                for i, chunk_path in enumerate(chunks[:3]):  # ตรวจสอบแค่ 3 chunks แรก
+                    chunk_file = Path(chunk_path)
+                    if chunk_file.exists():
+                        logger.info(f"   Chunk {i+1}: {chunk_path} exists ({chunk_file.stat().st_size} bytes)")
+                    else:
+                        logger.error(f"   ❌ Chunk {i+1}: {chunk_path} NOT FOUND!")
+                        
+            except Exception as e:
+                logger.error(f"❌ เกิดข้อผิดพลาดในการสร้าง audio chunks: {e}", exc_info=True)
+                raise
             
             # ดึงข้อมูลไฟล์
             file_info = self.file_service.get_file_info(local_file_path)
             task.total_duration = file_info.get("duration")
+            logger.info(f"📊 File info: duration={task.total_duration}s, size={file_info.get('size', 'N/A')} bytes")
             
             # แปลงเสียงแต่ละ chunk พร้อม progress tracking
             logger.info(f"กำลังแปลงเสียง {len(chunks)} chunks...")

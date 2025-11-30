@@ -340,54 +340,117 @@ class WhisperService:
         }
         
         current_time = 0
+        total_transcriptions = len(transcriptions)
+        logger.info(f"📊 Starting merge_transcriptions: {total_transcriptions} transcriptions, chunk_duration={chunk_duration}s")
         
         for i, trans in enumerate(transcriptions):
             if "error" in trans:
+                logger.warning(f"⚠️  Transcription {i+1}/{total_transcriptions} has error: {trans.get('error')}, skipping...")
                 continue
+            
+            logger.info(f"📝 Processing transcription {i+1}/{total_transcriptions}: has_text={bool(trans.get('text'))}, has_segments={bool(trans.get('segments'))}")
                 
             # รวมข้อความ
             if "text" in trans:
                 text_value = trans["text"]
                 if not isinstance(text_value, str):
                     text_value = str(text_value) if text_value is not None else ""
-                merged["text"] += " " + text_value.strip()
+                if text_value.strip():
+                    merged["text"] += " " + text_value.strip()
+                    logger.debug(f"   Added text: {len(text_value.strip())} chars")
             
             # รวม segments
-            if "segments" in trans:
-                for segment in trans["segments"]:
+            segments_count = 0
+            if "segments" in trans and trans["segments"]:
+                segments_list = trans["segments"]
+                logger.info(f"   Found {len(segments_list)} segments in transcription {i+1}")
+                for j, segment in enumerate(segments_list):
+                    if not isinstance(segment, dict):
+                        logger.warning(f"⚠️  Segment {j+1} in transcription {i+1} is not a dict: {type(segment)}, skipping...")
+                        continue
+                    
                     # ปรับเวลาให้ต่อเนื่อง
                     adjusted_segment = segment.copy()
                     
-                    # แปลง timestamp string เป็นวินาที
-                    start_seconds = self._timestamp_to_seconds(segment["start"])
-                    end_seconds = self._timestamp_to_seconds(segment["end"])
+                    # แปลง timestamp เป็นวินาที (รองรับทั้ง string และ float/int)
+                    start_value = segment.get("start") or segment.get("start_time") or 0
+                    end_value = segment.get("end") or segment.get("end_time") or 0
                     
-                    adjusted_segment["start"] = start_seconds + current_time
-                    adjusted_segment["end"] = end_seconds + current_time
-                    merged["segments"].append(adjusted_segment)
+                    start_seconds = self._timestamp_to_seconds(start_value)
+                    end_seconds = self._timestamp_to_seconds(end_value)
+                    
+                    # ปรับเวลาให้ต่อเนื่องกับ chunks ก่อนหน้า
+                    adjusted_start = start_seconds + current_time
+                    adjusted_end = end_seconds + current_time
+                    adjusted_segment["start"] = adjusted_start
+                    adjusted_segment["end"] = adjusted_end
+                    
+                    # เก็บ text จาก segment
+                    segment_text = adjusted_segment.get("text", "").strip()
+                    if segment_text:
+                        merged["segments"].append(adjusted_segment)
+                        segments_count += 1
+                        logger.debug(f"   Added segment {j+1}: {adjusted_start:.2f}s - {adjusted_end:.2f}s ({len(segment_text)} chars)")
+                    else:
+                        logger.warning(f"⚠️  Segment {j+1} in transcription {i+1} has no text, skipping...")
+            
+            if segments_count > 0:
+                logger.info(f"   ✅ Added {segments_count} segments from transcription {i+1}")
             
             current_time += chunk_duration
         
         # ทำความสะอาดข้อความ
         merged["text"] = merged["text"].strip()
         
+        logger.info(f"📊 Merge completed: text length={len(merged['text'])}, segments count={len(merged['segments'])}")
+        if merged["text"]:
+            logger.info(f"   Text preview: {merged['text'][:200]}...")
+        
         return merged
     
-    def _timestamp_to_seconds(self, timestamp: str) -> float:
-        """แปลง timestamp string (HH:MM:SS,mmm) เป็นวินาที"""
+    def _timestamp_to_seconds(self, timestamp) -> float:
+        """แปลง timestamp เป็นวินาที (รองรับทั้ง string และ float/int)"""
+        # ถ้าเป็นตัวเลขอยู่แล้ว (float/int) → คืนค่าตรงๆ
+        if isinstance(timestamp, (int, float)):
+            return float(timestamp)
+        
+        # ถ้าเป็น string → พยายามแปลง
+        if not isinstance(timestamp, str):
+            try:
+                return float(timestamp)
+            except (ValueError, TypeError):
+                return 0.0
+        
         try:
-            # แยกส่วนเวลาและมิลลิวินาที
-            time_part, ms_part = timestamp.split(',')
-            
-            # แยกชั่วโมง นาที วินาที
-            hours, minutes, seconds = map(int, time_part.split(':'))
-            
-            # คำนวณวินาทีรวม
-            total_seconds = hours * 3600 + minutes * 60 + seconds + int(ms_part) / 1000
-            
-            return total_seconds
-        except (ValueError, AttributeError):
-            # ถ้าแปลงไม่ได้ ให้คืนค่า 0
+            # รองรับรูปแบบ timestamp string (HH:MM:SS,mmm)
+            if ',' in timestamp:
+                # แยกส่วนเวลาและมิลลิวินาที
+                time_part, ms_part = timestamp.split(',')
+                
+                # แยกชั่วโมง นาที วินาที
+                hours, minutes, seconds = map(int, time_part.split(':'))
+                
+                # คำนวณวินาทีรวม
+                total_seconds = hours * 3600 + minutes * 60 + seconds + int(ms_part) / 1000
+                
+                return total_seconds
+            else:
+                # ถ้าไม่มี comma → ลองแปลงเป็น float ตรงๆ (อาจเป็น "0.5" หรือ "5.2")
+                try:
+                    return float(timestamp)
+                except ValueError:
+                    # ลอง parse เป็น HH:MM:SS
+                    parts = timestamp.split(':')
+                    if len(parts) == 3:
+                        hours, minutes, seconds = map(float, parts)
+                        return hours * 3600 + minutes * 60 + seconds
+                    elif len(parts) == 2:
+                        minutes, seconds = map(float, parts)
+                        return minutes * 60 + seconds
+                    else:
+                        return 0.0
+        except (ValueError, AttributeError, TypeError) as e:
+            logger.warning(f"ไม่สามารถแปลง timestamp '{timestamp}' (type: {type(timestamp)}) เป็นวินาที: {e}")
             return 0.0
     
     def create_srt_subtitles(self, transcription: Dict) -> str:

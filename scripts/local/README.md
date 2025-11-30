@@ -59,9 +59,40 @@ bash scripts/local/dev-setup.sh
 
 ---
 
+### `stop-transcription-containers.sh`
+**Stop Transcription Containers เดิม**
+- หาและ stop transcription containers ทั้งหมด
+- ใช้ก่อน setup Local Direct Mode
+
+**Usage:**
+```bash
+bash scripts/local/stop-transcription-containers.sh
+```
+
+---
+
+### `setup-local-direct.sh`
+**Setup Local Direct Mode Testing**
+- Stop containers เดิม
+- Build base image (ไม่ใช้ CUDA)
+- Start container สำหรับ Direct Mode
+- Setup dependencies และ environment
+
+**Usage:**
+```bash
+bash scripts/local/setup-local-direct.sh
+```
+
+**หมายเหตุ:** ใช้แนวทางเดียวกับ RunPod - ดูรายละเอียดใน `LOCAL_DIRECT_MODE.md`
+
+---
+
 ## 🔗 Related Files
 
 - `docker-compose.local.yml` - Docker Compose สำหรับ local
+- `docker-compose.local-direct.yml` - Docker Compose สำหรับ Local Direct Mode
 - `docker-compose.minimal.yml` - Docker Compose สำหรับ minimal server
 - `docker-compose.dev.yml` - Docker Compose สำหรับ development
+- `Dockerfile.local-base` - Base image สำหรับ Local Direct Mode (ไม่ใช้ CUDA)
+- `LOCAL_DIRECT_MODE.md` - คู่มือ Local Direct Mode Testing
 
