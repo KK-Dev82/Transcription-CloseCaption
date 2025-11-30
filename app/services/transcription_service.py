@@ -314,10 +314,21 @@ class TranscriptionService:
             
             for i, chunk_path in enumerate(chunks):
                 try:
-                    logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}")
+                    logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}: {chunk_path}")
                     result = self.whisper_service.transcribe_file(
                         chunk_path, model_size, language, use_thai_processor=True
                     )
+                    
+                    # Log result details
+                    if result:
+                        result_text = result.get("text", "") or ""
+                        result_segments = result.get("segments", []) or []
+                        logger.info(f"✅ Chunk {i+1} result: text length={len(result_text)}, segments count={len(result_segments)}")
+                        if result_text:
+                            logger.debug(f"   Text preview: {result_text[:100]}...")
+                    else:
+                        logger.warning(f"⚠️  Chunk {i+1} returned empty result")
+                    
                     chunk_results.append(result)
                     
                     # สร้าง partial results สำหรับ real-time display
@@ -367,6 +378,11 @@ class TranscriptionService:
             
             # รวมผลลัพธ์
             logger.info("กำลังรวมผลลัพธ์...")
+            logger.info(f"📊 Chunk results summary: total={len(chunk_results)}, "
+                       f"with_text={sum(1 for r in chunk_results if r and r.get('text') and r.get('text').strip())}, "
+                       f"with_segments={sum(1 for r in chunk_results if r and r.get('segments'))}, "
+                       f"errors={sum(1 for r in chunk_results if r and 'error' in r)}")
+            
             task.progress = 90
             task.status = "merging_results"
             self.json_storage.save_transcription(task_id, task.__dict__)
@@ -375,11 +391,29 @@ class TranscriptionService:
                 chunk_results, chunk_duration
             )
             
-            logger.info(f"Merged result: {merged_result}")
+            merged_text = merged_result.get("text", "") or ""
+            merged_segments = merged_result.get("segments", []) or []
+            logger.info(f"📊 Merged result: text length={len(merged_text)}, segments count={len(merged_segments)}")
+            if merged_text:
+                logger.info(f"   Text preview: {merged_text[:200]}...")
+            else:
+                logger.warning(f"⚠️  Merged result has no text!")
+                logger.warning(f"   Chunk results details:")
+                for i, chunk_result in enumerate(chunk_results):
+                    if chunk_result:
+                        if "error" in chunk_result:
+                            logger.warning(f"   Chunk {i+1}: ERROR - {chunk_result.get('error')}")
+                        else:
+                            chunk_text = chunk_result.get("text", "") or ""
+                            chunk_segments = chunk_result.get("segments", []) or []
+                            logger.warning(f"   Chunk {i+1}: text length={len(chunk_text)}, segments count={len(chunk_segments)}")
+                    else:
+                        logger.warning(f"   Chunk {i+1}: None/Empty")
             
             # แปลงเป็น TranscriptionChunk objects
             task.chunks = []
             if "segments" in merged_result and merged_result["segments"]:
+                logger.info(f"📦 Converting {len(merged_result['segments'])} segments to TranscriptionChunk objects...")
                 for segment in merged_result["segments"]:
                     chunk = TranscriptionChunk(
                         start_time=self._normalize_time_value(segment.get("start")),
@@ -388,15 +422,29 @@ class TranscriptionService:
                         confidence=segment.get("avg_logprob", None)
                     )
                     task.chunks.append(chunk)
+                logger.info(f"✅ Created {len(task.chunks)} TranscriptionChunk objects")
             else:
-                logger.warning("No segments found in merged result")
+                logger.warning(f"⚠️  No segments found in merged result. Merged result keys: {list(merged_result.keys())}")
+                # ถ้าไม่มี segments แต่มี text ให้สร้าง chunk เดียว
+                if merged_result.get("text") and merged_result.get("text").strip():
+                    logger.warning(f"⚠️  Creating single chunk from text (no segments available)")
+                    task.chunks = [TranscriptionChunk(
+                        start_time=0.0,
+                        end_time=task.total_duration or 0.0,
+                        text=merged_result.get("text", ""),
+                        confidence=None
+                    )]
             
-            task.full_text = merged_result.get("text", "")
+            task.full_text = merged_result.get("text", "") or ""
             task.progress = 95
             task.status = "finalizing"
             task.updated_at = datetime.now()
             
-            logger.info(f"Final task data - full_text: '{task.full_text}', chunks: {len(task.chunks)}")
+            logger.info(f"📋 Final task data - full_text length: {len(task.full_text)}, chunks count: {len(task.chunks)}")
+            if task.full_text:
+                logger.info(f"   Full text preview: {task.full_text[:200]}...")
+            else:
+                logger.error(f"❌ Final task data has NO full_text!")
             
             # แปลง task เป็น dict ที่ JSON serializable ได้
             chunks_list = [chunk.dict() for chunk in task.chunks] if task.chunks else []
