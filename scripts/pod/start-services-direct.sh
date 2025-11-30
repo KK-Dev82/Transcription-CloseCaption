@@ -53,9 +53,10 @@ STORAGE_TYPE=json
 JSON_STORAGE_DIR=/workspace/transcription-service/storage
 
 # RabbitMQ Configuration
+# สำหรับ Backend Server Dev: ใช้ IP 178.128.105.100
 # สำหรับ Local Testing: ใช้ localhost (ผ่าน SSH Tunnel)
-# สำหรับ Staging: ใช้ IP ของ Backend server
-RABBITMQ_HOST=\${RABBITMQ_HOST:-localhost}
+# สำหรับ Staging: ใช้ IP ของ Backend server (10.200.22.61)
+RABBITMQ_HOST=\${RABBITMQ_HOST:-178.128.105.100}
 RABBITMQ_PORT=\${RABBITMQ_PORT:-5672}
 RABBITMQ_USER=\${RABBITMQ_USER:-senate}
 RABBITMQ_PASSWORD=\${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}

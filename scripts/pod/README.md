@@ -160,6 +160,37 @@ bash scripts/pod/setup-rabbitmq-backend.sh 178.128.105.100 5672 senate password
 
 ---
 
+### `fix-rabbitmq-config.sh` ⭐ (ใหม่)
+**แก้ไข RabbitMQ Configuration ใน .env.runpod**
+- อัปเดต RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_USER, RABBITMQ_PASSWORD
+- Backup .env.runpod ก่อนแก้ไข
+- ทดสอบ connection หลังแก้ไข
+
+**Usage:**
+```bash
+# แก้ไข RabbitMQ configuration
+bash scripts/pod/fix-rabbitmq-config.sh 178.128.105.100 5672
+
+# แก้ไขด้วย custom credentials
+bash scripts/pod/fix-rabbitmq-config.sh 178.128.105.100 5672 senate password
+```
+
+---
+
+### `test-rabbitmq-connection.sh` ⭐ (ใหม่)
+**ทดสอบ RabbitMQ Connection**
+- ทดสอบ network connectivity (port)
+- ทดสอบ RabbitMQ connection (AMQP)
+- ตรวจสอบ queues
+
+**Usage:**
+```bash
+# ทดสอบ RabbitMQ connection
+bash scripts/pod/test-rabbitmq-connection.sh 178.128.105.100 5672 senate qP2VtHz6fAX4xDksEpMrLT
+```
+
+---
+
 ### `get-acr-credentials.sh`
 **ดึง ACR Credentials สำหรับ RunPod Registry Auth**
 - Enable Admin User (ถ้ายังไม่เปิด)
