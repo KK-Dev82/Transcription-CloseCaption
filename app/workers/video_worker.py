@@ -62,8 +62,15 @@ class VideoWorker:
         """จัดการ signal สำหรับ graceful shutdown"""
         logger.info(f"ได้รับ signal {signum} กำลังปิด worker...")
         self.running = False
-        if self.connection and not self.connection.is_closed:
-            self.connection.close()
+        try:
+            if self.connection:
+                try:
+                    if not self.connection.is_closed:
+                        self.connection.close()
+                except (AttributeError, pika.exceptions.ConnectionClosed):
+                    pass  # Already closed
+        except Exception as e:
+            logger.warning(f"Error closing connection in signal handler: {e}")
     
     def connect_rabbitmq(self, max_retries=5, retry_delay=5):
         """เชื่อมต่อกับ RabbitMQ พร้อม retry logic"""
@@ -205,14 +212,28 @@ class VideoWorker:
             # ประมวลผลการตัดวิดีโอ
             asyncio.run(self._execute_trim_task(task_data))
             
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"trim task เสร็จสิ้น: {task_data.get('task_id')}")
+            # Acknowledge message (with connection check)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"trim task เสร็จสิ้น: {task_data.get('task_id')}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge trim task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge trim task: {ack_error}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล trim task: {e}")
             # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack trim task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack trim task ได้: {ack_error}")
     
     def _process_merge_task(self, ch, method, properties, body):
         """ประมวลผล merge video task"""
@@ -227,14 +248,28 @@ class VideoWorker:
             # ประมวลผลการรวมวิดีโอ
             asyncio.run(self._execute_merge_task(task_data))
             
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"merge task เสร็จสิ้น: {task_data.get('task_id')}")
+            # Acknowledge message (with connection check)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"merge task เสร็จสิ้น: {task_data.get('task_id')}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge merge task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge merge task: {ack_error}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล merge task: {e}")
             # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack merge task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack merge task ได้: {ack_error}")
     
     def _process_convert_task(self, ch, method, properties, body):
         """ประมวลผล convert format task"""
@@ -249,14 +284,28 @@ class VideoWorker:
             # ประมวลผลการแปลงรูปแบบ
             asyncio.run(self._execute_convert_task(task_data))
             
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"convert task เสร็จสิ้น: {task_data.get('task_id')}")
+            # Acknowledge message (with connection check)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"convert task เสร็จสิ้น: {task_data.get('task_id')}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge convert task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge convert task: {ack_error}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล convert task: {e}")
             # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack convert task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack convert task ได้: {ack_error}")
     
     def _process_resize_task(self, ch, method, properties, body):
         """ประมวลผล resize video task"""
@@ -271,14 +320,28 @@ class VideoWorker:
             # ประมวลผลการปรับขนาดวิดีโอ
             asyncio.run(self._execute_resize_task(task_data))
             
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"resize task เสร็จสิ้น: {task_data.get('task_id')}")
+            # Acknowledge message (with connection check)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"resize task เสร็จสิ้น: {task_data.get('task_id')}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge resize task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge resize task: {ack_error}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล resize task: {e}")
             # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack resize task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack resize task ได้: {ack_error}")
     
     def _process_transcription_task(self, ch, method, properties, body):
         """ประมวลผล transcription task - ใช้ threading เพื่อให้ worker รับงานใหม่ได้ทันที"""
@@ -321,8 +384,15 @@ class VideoWorker:
                     existing_status = existing_task.get('status', '')
                     if existing_status in ['completed', 'processing']:
                         logger.warning(f"⚠️ Task {task_id} มีสถานะ '{existing_status}' แล้ว, ข้ามการประมวลผลซ้ำ (อาจเป็น duplicate message)")
-                        # Acknowledge message เพื่อไม่ให้ requeue
-                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        # Acknowledge message เพื่อไม่ให้ requeue (with connection check)
+                        try:
+                            if ch and not ch.is_closed:
+                                ch.basic_ack(delivery_tag=method.delivery_tag)
+                            else:
+                                logger.warning(f"⚠️ Channel is closed, cannot acknowledge duplicate message")
+                        except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                                pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                            logger.warning(f"⚠️ Cannot acknowledge duplicate message: {ack_error}")
                         return
                 
                 # อัปเดตสถานะเป็น processing
@@ -369,11 +439,20 @@ class VideoWorker:
                 # Stop monitoring
                 monitor_running = False
                 
-                # Acknowledge message
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
-                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                # Acknowledge message (with connection check)
+                try:
+                    if ch and not ch.is_closed:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    else:
+                        logger.warning(f"⚠️ Channel is closed, cannot acknowledge message for task {task_id}")
+                        logger.warning(f"⚠️ Task completed but message may be redelivered")
+                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
+                        pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                    logger.error(f"❌ Cannot acknowledge message (connection lost): {ack_error}")
+                    logger.warning(f"⚠️ Task {task_id} completed but message may be redelivered")
                 
             except Exception as e:
                 logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -381,8 +460,12 @@ class VideoWorker:
                 logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
                 try:
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-                except Exception as ack_error:
+                    if ch and not ch.is_closed:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                    else:
+                        logger.warning(f"⚠️ Channel is closed, cannot nack message for task {task_id}")
+                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                        pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
                     logger.error(f"ไม่สามารถ nack message ได้: {ack_error}")
         
         # เริ่มประมวลผลใน thread แยก เพื่อให้ worker รับงานใหม่ได้ทันที
@@ -676,15 +759,29 @@ class VideoWorker:
             # ประมวลผล audio chunk และ transcribe
             asyncio.run(self._execute_audio_chunk_transcription(message_data))
             
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"audio chunk transcription เสร็จสิ้น: {chunk_id}")
+            # Acknowledge message (with connection check)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"audio chunk transcription เสร็จสิ้น: {chunk_id}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge audio chunk task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge audio chunk task: {ack_error}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล audio chunk extracted: {e}", exc_info=True)
             # ไม่ requeue เพื่อป้องกัน infinite retry loop
             # ส่งไป DLQ แทน (requeue=False)
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack audio chunk task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack audio chunk task ได้: {ack_error}")
     
     async def _execute_audio_chunk_transcription(self, message_data: Dict[str, Any]):
         """ดำเนินการ transcribe audio chunk"""
@@ -957,9 +1054,25 @@ class VideoWorker:
                             logger.debug("💓 Video Worker is alive and waiting for messages...")
                             self._last_heartbeat = current_time
                 except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
-                        pika.exceptions.AMQPConnectionError, ConnectionResetError) as e:
+                        pika.exceptions.AMQPConnectionError, ConnectionResetError,
+                        AttributeError, IndexError) as e:
                     logger.warning(f"RabbitMQ connection lost: {e}")
                     logger.info("Attempting to reconnect to RabbitMQ...")
+                    
+                    # Reset connection state
+                    try:
+                        if self.channel and not self.channel.is_closed:
+                            self.channel.close()
+                    except:
+                        pass
+                    self.channel = None
+                    
+                    try:
+                        if self.connection and not self.connection.is_closed:
+                            self.connection.close()
+                    except:
+                        pass
+                    self.connection = None
                     
                     # Try to reconnect
                     if self.connect_rabbitmq(max_retries=5, retry_delay=5):
@@ -988,13 +1101,21 @@ class VideoWorker:
             logger.error(f"Traceback: {traceback.format_exc()}")
         finally:
             try:
-                if self.connection and not self.connection.is_closed:
-                    self.connection.close()
+                if self.connection:
+                    try:
+                        if not self.connection.is_closed:
+                            self.connection.close()
+                    except (AttributeError, pika.exceptions.ConnectionClosed):
+                        pass  # Already closed
             except Exception as e:
                 logger.warning(f"Error closing connection: {e}")
             try:
-                if self.channel and not self.channel.is_closed:
-                    self.channel.close()
+                if self.channel:
+                    try:
+                        if not self.channel.is_closed:
+                            self.channel.close()
+                    except (AttributeError, pika.exceptions.ChannelClosed):
+                        pass  # Already closed
             except Exception as e:
                 logger.warning(f"Error closing channel: {e}")
             logger.info("Video Worker ปิดตัวลง")

@@ -1,0 +1,377 @@
+#!/bin/bash
+# Script สำหรับจัดการ Transcription Tasks
+#
+# วิธีใช้งาน:
+#   bash scripts/pod/task-service.sh list                    # แสดง list tasks
+#   bash scripts/pod/task-service.sh stop <task-id>          # หยุด task
+#   bash scripts/pod/task-service.sh clear <task-id>         # ลบ task
+#   bash scripts/pod/task-service.sh clear-all                # ลบ tasks ทั้งหมด (completed/failed/cancelled)
+#   bash scripts/pod/task-service.sh status <task-id>         # ดูสถานะ task
+#   bash scripts/pod/task-service.sh cleanup [hours]          # ลบ tasks เก่า (default: 24 hours)
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_header() { echo -e "${CYAN}$1${NC}"; }
+
+ACTION="${1}"
+TASK_ID="${2}"
+API_URL="${API_URL:-http://localhost:8001}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Function to check API health
+check_api_health() {
+    if ! curl -f -s --max-time 5 "$API_URL/health" > /dev/null 2>&1; then
+        print_error "❌ API is not responding at $API_URL"
+        print_status "💡 Check if services are running: bash scripts/pod/check-pod.sh"
+        exit 1
+    fi
+}
+
+# Function to list all tasks
+list_tasks() {
+    print_header "📋 Transcription Tasks List"
+    echo "📅 $(date)"
+    echo ""
+    
+    check_api_health
+    
+    print_status "Fetching tasks..."
+    
+    # Try /api/history/transcriptions first
+    RESPONSE=$(curl -s "$API_URL/api/history/transcriptions?limit=100" 2>/dev/null || echo "")
+    
+    # Fallback to /transcribe/
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s "$API_URL/transcribe/" 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s "$API_URL/api/transcription/" 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$RESPONSE" ]; then
+        print_error "❌ Failed to fetch tasks"
+        exit 1
+    fi
+    
+    if command -v jq &> /dev/null; then
+        TASK_COUNT=$(echo "$RESPONSE" | jq 'length' 2>/dev/null || echo "0")
+        
+        if [ "$TASK_COUNT" -eq 0 ]; then
+            print_warning "⚠️  No tasks found"
+            exit 0
+        fi
+        
+        echo ""
+        print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        print_header "Available Tasks ($TASK_COUNT)"
+        print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        echo "$RESPONSE" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
+            if [ -n "$task_id" ]; then
+                # Color code by status
+                if [ "$status" = "completed" ]; then
+                    STATUS_COLOR="${GREEN}"
+                elif [ "$status" = "processing" ] || [ "$status" = "pending" ]; then
+                    STATUS_COLOR="${YELLOW}"
+                elif [ "$status" = "failed" ]; then
+                    STATUS_COLOR="${RED}"
+                elif [ "$status" = "cancelled" ]; then
+                    STATUS_COLOR="${CYAN}"
+                else
+                    STATUS_COLOR="${NC}"
+                fi
+                
+                echo -e "  ${STATUS_COLOR}${status}${NC} | ${progress}% | ${task_id}"
+                echo "      File: $filename"
+                echo "      Created: $created_at"
+                echo ""
+            fi
+        done
+    else
+        print_error "❌ jq not found - cannot parse JSON"
+        print_status "💡 Install jq: apt-get install -y jq"
+        echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+    fi
+}
+
+# Function to stop/cancel a task
+stop_task() {
+    local task_id=$1
+    
+    if [ -z "$task_id" ]; then
+        print_error "❌ Task ID is required"
+        echo ""
+        echo "Usage:"
+        echo "  bash scripts/pod/task-service.sh stop <task-id>"
+        exit 1
+    fi
+    
+    print_header "🛑 Stopping Task: $task_id"
+    echo ""
+    
+    check_api_health
+    
+    print_status "Cancelling task..."
+    
+    # Try DELETE /transcribe/{task_id}
+    RESPONSE=$(curl -s -X DELETE "$API_URL/transcribe/$task_id" 2>/dev/null || echo "")
+    
+    # Check response
+    if echo "$RESPONSE" | grep -q "ยกเลิก\|success\|message" 2>/dev/null; then
+        print_success "✅ Task cancelled successfully"
+        if command -v jq &> /dev/null; then
+            echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+        else
+            echo "$RESPONSE"
+        fi
+    elif echo "$RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
+        print_error "❌ Task not found: $task_id"
+        exit 1
+    else
+        print_warning "⚠️  Unexpected response:"
+        echo "$RESPONSE"
+        exit 1
+    fi
+}
+
+# Function to clear/delete a task
+clear_task() {
+    local task_id=$1
+    
+    if [ -z "$task_id" ]; then
+        print_error "❌ Task ID is required"
+        echo ""
+        echo "Usage:"
+        echo "  bash scripts/pod/task-service.sh clear <task-id>"
+        exit 1
+    fi
+    
+    print_header "🗑️  Clearing Task: $task_id"
+    echo ""
+    
+    check_api_health
+    
+    print_warning "⚠️  This will permanently delete the task and its data"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Cancelled"
+        exit 0
+    fi
+    
+    print_status "Deleting task..."
+    
+    # Try DELETE /api/history/transcriptions/{task_id}
+    RESPONSE=$(curl -s -X DELETE "$API_URL/api/history/transcriptions/$task_id" 2>/dev/null || echo "")
+    
+    # Fallback to DELETE /transcribe/{task_id} (if it supports permanent delete)
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s -X DELETE "$API_URL/transcribe/$task_id" 2>/dev/null || echo "")
+    fi
+    
+    # Also delete from storage directly
+    TASK_DIR="$PROJECT_ROOT/storage/transcriptions/$task_id"
+    if [ -d "$TASK_DIR" ]; then
+        print_status "Removing storage directory..."
+        rm -rf "$TASK_DIR" && print_success "✅ Storage directory removed"
+    fi
+    
+    OLD_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id.json"
+    if [ -f "$OLD_FILE" ]; then
+        print_status "Removing old format file..."
+        rm -f "$OLD_FILE" && print_success "✅ Old format file removed"
+    fi
+    
+    if echo "$RESPONSE" | grep -q "success\|deleted\|ลบ" 2>/dev/null; then
+        print_success "✅ Task deleted successfully"
+    elif echo "$RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
+        print_warning "⚠️  Task not found in API, but storage files removed"
+    else
+        print_success "✅ Task storage files removed"
+    fi
+}
+
+# Function to clear all tasks
+clear_all() {
+    print_header "🗑️  Clearing All Tasks"
+    echo ""
+    
+    check_api_health
+    
+    print_warning "⚠️  This will permanently delete ALL completed/failed/cancelled tasks"
+    print_warning "⚠️  Tasks with status: pending, processing will NOT be deleted"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Cancelled"
+        exit 0
+    fi
+    
+    print_status "Cleaning up tasks..."
+    
+    # Use cleanup endpoint
+    RESPONSE=$(curl -s -X POST "$API_URL/transcribe/cleanup" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "max_age_hours": 0,
+            "statuses": ["completed", "failed", "cancelled"]
+        }' 2>/dev/null || echo "")
+    
+    if echo "$RESPONSE" | grep -q "success\|removed\|ลบ" 2>/dev/null; then
+        if command -v jq &> /dev/null; then
+            REMOVED_COUNT=$(echo "$RESPONSE" | jq -r '.removed_count // .count // 0' 2>/dev/null || echo "0")
+            print_success "✅ Cleaned up $REMOVED_COUNT tasks"
+            echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+        else
+            print_success "✅ Tasks cleaned up"
+            echo "$RESPONSE"
+        fi
+    else
+        print_warning "⚠️  Unexpected response:"
+        echo "$RESPONSE"
+    fi
+}
+
+# Function to cleanup old tasks
+cleanup_tasks() {
+    local max_age_hours="${1:-24}"
+    
+    print_header "🧹 Cleanup Old Tasks (older than $max_age_hours hours)"
+    echo ""
+    
+    check_api_health
+    
+    print_status "Cleaning up tasks older than $max_age_hours hours..."
+    
+    RESPONSE=$(curl -s -X POST "$API_URL/transcribe/cleanup" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"max_age_hours\": $max_age_hours,
+            \"statuses\": [\"completed\", \"failed\", \"cancelled\"]
+        }" 2>/dev/null || echo "")
+    
+    if echo "$RESPONSE" | grep -q "success\|removed\|ลบ" 2>/dev/null; then
+        if command -v jq &> /dev/null; then
+            REMOVED_COUNT=$(echo "$RESPONSE" | jq -r '.removed_count // .count // 0' 2>/dev/null || echo "0")
+            print_success "✅ Cleaned up $REMOVED_COUNT tasks"
+            echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+        else
+            print_success "✅ Tasks cleaned up"
+            echo "$RESPONSE"
+        fi
+    else
+        print_warning "⚠️  Unexpected response:"
+        echo "$RESPONSE"
+    fi
+}
+
+# Function to get task status
+get_task_status() {
+    local task_id=$1
+    
+    if [ -z "$task_id" ]; then
+        print_error "❌ Task ID is required"
+        echo ""
+        echo "Usage:"
+        echo "  bash scripts/pod/task-service.sh status <task-id>"
+        exit 1
+    fi
+    
+    print_header "📊 Task Status: $task_id"
+    echo ""
+    
+    check_api_health
+    
+    print_status "Fetching task status..."
+    
+    # Try /transcribe/{task_id}
+    RESPONSE=$(curl -s "$API_URL/transcribe/$task_id" 2>/dev/null || echo "")
+    
+    # Fallback to /api/history/transcriptions/{task_id}
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s "$API_URL/api/history/transcriptions/$task_id" 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
+        print_error "❌ Task not found: $task_id"
+        exit 1
+    fi
+    
+    if command -v jq &> /dev/null; then
+        STATUS=$(echo "$RESPONSE" | jq -r '.status // .basic_info.status // "unknown"' 2>/dev/null)
+        PROGRESS=$(echo "$RESPONSE" | jq -r '.progress // .basic_info.progress // 0' 2>/dev/null)
+        FILENAME=$(echo "$RESPONSE" | jq -r '.file_name // .filename // .file_path // "N/A"' 2>/dev/null)
+        
+        echo ""
+        echo "   Status: $STATUS"
+        echo "   Progress: ${PROGRESS}%"
+        echo "   File: $FILENAME"
+        echo ""
+        echo "$RESPONSE" | jq . 2>/dev/null
+    else
+        echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+    fi
+}
+
+# Main command router
+case "$ACTION" in
+    list)
+        list_tasks
+        ;;
+    stop)
+        stop_task "$TASK_ID"
+        ;;
+    clear)
+        clear_task "$TASK_ID"
+        ;;
+    clear-all)
+        clear_all
+        ;;
+    cleanup)
+        cleanup_tasks "$TASK_ID"  # TASK_ID is used as max_age_hours here
+        ;;
+    status)
+        get_task_status "$TASK_ID"
+        ;;
+    *)
+        echo "📋 Task Service - Manage Transcription Tasks"
+        echo ""
+        echo "Usage:"
+        echo "  bash scripts/pod/task-service.sh <command> [options]"
+        echo ""
+        echo "Commands:"
+        echo "  list                    List all tasks"
+        echo "  stop <task-id>          Stop/cancel a running task"
+        echo "  clear <task-id>         Permanently delete a task"
+        echo "  clear-all               Delete all completed/failed/cancelled tasks"
+        echo "  cleanup [hours]         Cleanup old tasks (default: 24 hours)"
+        echo "  status <task-id>        View task status"
+        echo ""
+        echo "Examples:"
+        echo "  bash scripts/pod/task-service.sh list"
+        echo "  bash scripts/pod/task-service.sh stop 34a7d75c-2cc3-4138-a548-9955010cf2e2"
+        echo "  bash scripts/pod/task-service.sh clear 34a7d75c-2cc3-4138-a548-9955010cf2e2"
+        echo "  bash scripts/pod/task-service.sh clear-all"
+        echo "  bash scripts/pod/task-service.sh cleanup 48"
+        echo "  bash scripts/pod/task-service.sh status 34a7d75c-2cc3-4138-a548-9955010cf2e2"
+        exit 1
+        ;;
+esac
+
