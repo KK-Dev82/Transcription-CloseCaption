@@ -42,13 +42,27 @@ RUN apt-get update && apt-get install -y \
 # Install Azure CLI (สำหรับ pull images จาก ACR)
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
+# Install PyTorch with CUDA support (for openai-whisper)
+# CUDA 12.1 → PyTorch with CUDA 11.8 (backward compatible)
+# Note: PyTorch 2.1.1 supports CUDA 11.8 (compatible with CUDA 12.1)
+# For CUDA 12.1, use cu118 wheel (backward compatible)
+RUN pip3 install --no-cache-dir \
+    torch==2.1.1 \
+    torchaudio==2.1.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+
 # Install Python dependencies (พื้นฐาน)
 RUN pip3 install --no-cache-dir \
     fastapi \
     uvicorn \
     pydantic \
     requests \
-    aiohttp
+    aiohttp \
+    aiofiles \
+    redis \
+    pika \
+    python-dotenv \
+    tzdata
 
 # Create working directory
 WORKDIR /workspace
@@ -64,7 +78,10 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_VISIBLE_DEVICES=0
-ENV WHISPER_CUBLAS=1
+# Note: openai-whisper ใช้ PyTorch CUDA โดยอัตโนมัติ (ไม่ต้องตั้ง WHISPER_CUBLAS)
+ENV WHISPER_PROVIDER=openai-whisper
+ENV WHISPER_MODEL=large-v3
+ENV WHISPER_DEVICE=auto
 
 # Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
 EXPOSE 8001 8002 6379

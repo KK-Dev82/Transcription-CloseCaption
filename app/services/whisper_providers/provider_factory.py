@@ -21,6 +21,7 @@ from enum import Enum
 from .base_provider import WhisperProvider
 from .builtin_provider import BuiltinProvider
 from .groq_provider import GroqProvider
+from .openai_whisper_provider import OpenAIWhisperProvider
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class ProviderType(Enum):
     """Supported provider types"""
     BUILTIN = "builtin"
     GROQ = "groq"
+    OPENAI_WHISPER = "openai-whisper"
     # Future providers
     # FIREWORKS = "fireworks"
     # OPENAI = "openai"
@@ -45,7 +47,7 @@ class WhisperProviderFactory:
     - Configuration จาก environment variables
     
     Environment Variables:
-    - WHISPER_PROVIDER: Provider ที่ใช้ (builtin, groq) - default: builtin
+    - WHISPER_PROVIDER: Provider ที่ใช้ (builtin, groq, openai-whisper) - default: builtin
     - WHISPER_FALLBACK_ENABLED: เปิด fallback (true/false) - default: true
     """
     
@@ -53,7 +55,8 @@ class WhisperProviderFactory:
     _providers: Dict[str, WhisperProvider] = {}
     
     # Fallback order (primary -> fallback)
-    _fallback_order = [ProviderType.GROQ, ProviderType.BUILTIN]
+    # Note: openai-whisper ควรเป็น primary สำหรับ Local Direct Mode
+    _fallback_order = [ProviderType.OPENAI_WHISPER, ProviderType.GROQ, ProviderType.BUILTIN]
     
     @classmethod
     def get_provider(cls, provider_type: str = None) -> WhisperProvider:
@@ -95,6 +98,8 @@ class WhisperProviderFactory:
             return BuiltinProvider(config)
         elif provider_type == ProviderType.GROQ.value:
             return GroqProvider(config)
+        elif provider_type == ProviderType.OPENAI_WHISPER.value:
+            return OpenAIWhisperProvider(config)
         else:
             logger.warning(f"[Factory] ⚠️ Unknown provider '{provider_type}', using builtin")
             return BuiltinProvider(config)
@@ -114,6 +119,12 @@ class WhisperProviderFactory:
                 'api_url': os.getenv('WHISPER_API_URL', 'http://whisper:8002'),
                 'model': os.getenv('WHISPER_MODEL', 'base'),
                 'timeout': int(os.getenv('WHISPER_TIMEOUT', '600'))
+            }
+        elif provider_type == ProviderType.OPENAI_WHISPER.value:
+            return {
+                'model': os.getenv('WHISPER_MODEL', 'base'),
+                'device': os.getenv('WHISPER_DEVICE', 'auto'),
+                'download_root': os.getenv('WHISPER_DOWNLOAD_ROOT', None)
             }
         return {}
     

@@ -34,8 +34,9 @@ services:
       - RABBITMQ_USER=senate
       - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
       - REDIS_URL=redis://localhost:6379
-      - WHISPER_PROVIDER=builtin
-      - WHISPER_API_URL=http://localhost:8002
+      - WHISPER_PROVIDER=openai-whisper
+      - WHISPER_MODEL=base
+      - WHISPER_DEVICE=auto
       - TZ=Asia/Bangkok
       - TZDIR=/usr/share/zoneinfo
     networks:
