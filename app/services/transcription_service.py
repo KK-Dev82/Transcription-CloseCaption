@@ -465,6 +465,7 @@ class TranscriptionService:
                 "progress": task.progress
             }
             
+            # บันทึกข้อมูลทันทีหลังจาก merge เสร็จ (ก่อนที่ video_worker จะดึงข้อมูล)
             logger.info(f"💾 Saving transcription to storage: task_id={task_id}, full_text length={len(task.full_text) if task.full_text else 0}, chunks count={len(chunks_list)}")
             try:
                 self.json_storage.save_transcription(task_id, task_data)
@@ -476,6 +477,16 @@ class TranscriptionService:
                     verify_full_text = verify_data.get('full_text', '') or ''
                     verify_chunks = verify_data.get('chunks', []) or []
                     logger.info(f"✅ Verified saved data: full_text length={len(verify_full_text)}, chunks count={len(verify_chunks)}")
+                    
+                    # Log final results summary
+                    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    logger.info(f"🎉 Transcription completed successfully: {task_id}")
+                    logger.info(f"   📝 Full text: {len(verify_full_text)} characters")
+                    logger.info(f"   📦 Chunks: {len(verify_chunks)} segments")
+                    logger.info(f"   ⏱️  Duration: {task.total_duration} seconds")
+                    if verify_full_text:
+                        logger.info(f"   📄 Text preview: {verify_full_text[:300]}...")
+                    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 else:
                     logger.error(f"❌ Verification failed: Could not retrieve saved data for {task_id}")
             except Exception as e:
@@ -502,11 +513,12 @@ class TranscriptionService:
                 except Exception as e:
                     logger.warning(f"Backend callback failed: {e}")
             
-            # บันทึกข้อมูลสุดท้าย - ครั้งเดียวเท่านั้น
-            logger.info("กำลังบันทึกผลลัพธ์สุดท้าย...")
+            # บันทึกข้อมูลสุดท้าย - อัปเดต metadata เพิ่มเติม (job_id, user_id, callback_url)
+            # Note: full_text และ chunks ถูกบันทึกไปแล้วที่บรรทัด 470
+            logger.info("กำลังบันทึกผลลัพธ์สุดท้าย (metadata update)...")
             final_data = {
                 "task_id": task.task_id,
-                "status": task.status,
+                "status": "completed",  # อัปเดต status เป็น completed
                 "file_path": task.file_path,
                 "file_url": task.file_url,
                 "file_name": task.file_name,
@@ -516,17 +528,20 @@ class TranscriptionService:
                 "partial_text": task.partial_text,
                 "language": task.language,
                 "created_at": task.created_at.isoformat() if task.created_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                "completed_at": datetime.now().isoformat(),  # อัปเดต completed_at
+                "updated_at": datetime.now().isoformat(),
                 "error_message": task.error_message,
-                "progress": task.progress,
+                "progress": 100,  # อัปเดต progress เป็น 100
                 "job_id": getattr(task, "job_id", None),
                 "user_id": getattr(task, "user_id", None),
                 "callback_url": getattr(task, "callback_url", None)
             }
+            
+            # บันทึก metadata อัปเดต (จะ merge กับข้อมูลเดิม)
+            logger.info(f"💾 Updating final metadata: task_id={task_id}, full_text length={len(task.full_text) if task.full_text else 0}, chunks count={len(final_data['chunks'])}")
             self.json_storage.save_transcription(task_id, final_data)
             
-            logger.info(f"แปลงเสียงเสร็จสิ้น: {task_id}")
+            logger.info(f"✅ แปลงเสียงเสร็จสิ้น: {task_id}")
             
             # ลบไฟล์ชั่วคราวหลังจากประมวลผลเสร็จแล้ว (ปิดไว้เพื่อ debug)
             # if 'chunks' in locals():

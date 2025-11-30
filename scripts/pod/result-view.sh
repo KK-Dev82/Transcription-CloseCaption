@@ -63,8 +63,13 @@ check_api_health() {
 
 # Function to get transcription list
 get_transcription_list() {
-    # Try /api/history/transcriptions first
-    RESPONSE=$(curl -s "$API_URL/api/history/transcriptions?limit=50" 2>/dev/null || echo "")
+    # Try /history/transcriptions first (correct endpoint)
+    RESPONSE=$(curl -s "$API_URL/history/transcriptions?limit=50" 2>/dev/null || echo "")
+    
+    # Fallback to /api/history/transcriptions (for backward compatibility)
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s "$API_URL/api/history/transcriptions?limit=50" 2>/dev/null || echo "")
+    fi
     
     # Fallback to /transcribe/ or /api/transcription/
     if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
@@ -128,8 +133,13 @@ get_transcription_details() {
     fi
     
     # Fallback to API
-    # Try /api/history/transcriptions/{task_id} first
-    RESPONSE=$(curl -s "$API_URL/api/history/transcriptions/$task_id" 2>/dev/null || echo "")
+    # Try /history/transcriptions/{task_id} first (correct endpoint)
+    RESPONSE=$(curl -s "$API_URL/history/transcriptions/$task_id" 2>/dev/null || echo "")
+    
+    # Fallback to /api/history/transcriptions/{task_id} (for backward compatibility)
+    if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        RESPONSE=$(curl -s "$API_URL/api/history/transcriptions/$task_id" 2>/dev/null || echo "")
+    fi
     
     # Fallback to /transcribe/{task_id}
     if [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
