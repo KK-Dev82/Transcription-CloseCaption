@@ -68,8 +68,12 @@ class RabbitMQService:
     def _ensure_connection(self):
         """ตรวจสอบการเชื่อมต่อและเชื่อมต่อใหม่หากจำเป็น"""
         if not self.connection or self.connection.is_closed:
-            logger.info("เชื่อมต่อ RabbitMQ ใหม่...")
+            logger.info(f"🔌 เชื่อมต่อ RabbitMQ ใหม่...")
+            logger.info(f"   Host: {self.host}:{self.port}")
+            logger.info(f"   User: {self.username}")
             self._connect()
+        else:
+            logger.debug(f"✅ RabbitMQ connection is active: {self.host}:{self.port}")
     
     def _reset_connection(self):
         """รีเซ็ตการเชื่อมต่อ RabbitMQ"""
@@ -138,12 +142,18 @@ class RabbitMQService:
         max_retries = 3
         retry_delay = 1  # seconds
         
+        task_id = None  # Initialize outside try block
         for attempt in range(max_retries):
             try:
                 # เชื่อมต่อ RabbitMQ ก่อนใช้งาน
+                logger.info(f"🔌 Ensuring RabbitMQ connection (attempt {attempt + 1}/{max_retries})...")
+                logger.info(f"   RabbitMQ Host: {self.host}:{self.port}")
+                logger.info(f"   RabbitMQ User: {self.username}")
                 self._ensure_connection()
+                logger.info(f"✅ RabbitMQ connection ensured")
                 
-                task_id = str(uuid.uuid4())
+                if task_id is None:
+                    task_id = str(uuid.uuid4())
                 task_data = {
                     "task_id": task_id,
                     "task_type": "transcription",
