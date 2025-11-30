@@ -53,12 +53,25 @@ fi
 print_success "✅ Video Worker stopped"
 echo ""
 
+# Load environment variables from .env.runpod FIRST
+if [ -f ".env.runpod" ]; then
+    print_status "Loading environment variables from .env.runpod..."
+    set -a
+    source .env.runpod
+    set +a
+    print_success "✅ Environment variables loaded"
+else
+    print_warning "⚠️  .env.runpod not found"
+fi
+
 # Check RabbitMQ configuration
 print_status "Checking RabbitMQ configuration..."
 if [ -f ".env.runpod" ]; then
-    source .env.runpod
+    # Use loaded variables or defaults
     RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
     RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+    RABBITMQ_USER=${RABBITMQ_USER:-senate}
+    RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
     
     print_status "RabbitMQ Host: $RABBITMQ_HOST:$RABBITMQ_PORT"
     
@@ -97,12 +110,46 @@ else
 fi
 echo ""
 
+# Ensure environment variables are loaded (already loaded above, but ensure they're set)
+if [ -z "$RABBITMQ_HOST" ]; then
+    # If not loaded, try to load again
+    if [ -f ".env.runpod" ]; then
+        set -a
+        source .env.runpod
+        set +a
+    fi
+    # Set defaults if still not set
+    RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
+    RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+    RABBITMQ_USER=${RABBITMQ_USER:-senate}
+    RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+fi
+
+print_status "Final RabbitMQ configuration:"
+print_status "  RABBITMQ_HOST=$RABBITMQ_HOST"
+print_status "  RABBITMQ_PORT=$RABBITMQ_PORT"
+echo ""
+
 # Start Video Worker
 print_status "Starting Video Worker..."
 export PYTHONPATH="$PROJECT_ROOT"
 
+# Export RabbitMQ environment variables explicitly
+if [ -n "$RABBITMQ_HOST" ]; then
+    export RABBITMQ_HOST
+    export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+    export RABBITMQ_USER=${RABBITMQ_USER:-senate}
+    export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    print_status "Exported RabbitMQ env vars: RABBITMQ_HOST=$RABBITMQ_HOST"
+fi
+
 if [ -f "app/workers/video_worker.py" ]; then
-    nohup python3 -m app.workers.video_worker > /tmp/video-worker.log 2>&1 & disown
+    # Start with environment variables
+    nohup env RABBITMQ_HOST="${RABBITMQ_HOST:-178.128.105.100}" \
+             RABBITMQ_PORT="${RABBITMQ_PORT:-5672}" \
+             RABBITMQ_USER="${RABBITMQ_USER:-senate}" \
+             RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}" \
+             python3 -m app.workers.video_worker > /tmp/video-worker.log 2>&1 & disown
     VIDEO_WORKER_PID=$!
     
     sleep 2
