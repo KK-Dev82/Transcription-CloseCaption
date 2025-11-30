@@ -260,8 +260,15 @@ class TranscriptionService:
         file_name: Optional[str] = None
     ):
         """ประมวลผลการแปลงเสียง"""
+        logger.info(f"🎬 Starting _process_transcription: task_id={task_id}, file_path={file_path}, model={model_size}, language={language}")
+        
+        if task_id not in self.tasks:
+            logger.error(f"❌ Task {task_id} not found in transcription_service.tasks")
+            raise ValueError(f"Task {task_id} not found")
+        
         task = self.tasks[task_id]
         task.status = "processing"
+        logger.info(f"📋 Task object found: status={task.status}, file_path={task.file_path}")
         
         # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
         # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
