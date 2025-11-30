@@ -1,11 +1,14 @@
-# Custom Base Image สำหรับ RunPod และ HP Z2 Workstation
-# มี CUDA + Docker + Azure CLI + Setup Scripts พร้อมใช้งาน
+# Minimal Base Image สำหรับ RunPod และ HP Z2 Workstation
+# มีแค่ CUDA + Dependencies พื้นฐาน (ไม่ start services อัตโนมัติ)
 #
 # ใช้ได้ทั้ง:
-# - RunPod: Pull image นี้ → Start services อัตโนมัติ
-# - HP Z2: Pull image นี้ → Start services (ไม่ต้องติดตั้ง CUDA Toolkit แยก)
+# - RunPod: Pull image นี้ → Clone repo → Start services แบบ Direct mode
+# - HP Z2: Pull image นี้ → Clone repo → Start services แบบ Direct mode
 #
-# ⚠️ หมายเหตุ: Z2 ต้องมี NVIDIA drivers และ nvidia-container-toolkit (ไม่ใช่ CUDA Toolkit)
+# ⚠️ หมายเหตุ:
+# - Image นี้เป็น minimal base - ไม่มี services start อัตโนมัติ
+# - User ต้อง clone repo และ run scripts/pod/start-services-direct.sh เอง
+# - Z2 ต้องมี NVIDIA drivers และ nvidia-container-toolkit (ไม่ใช่ CUDA Toolkit)
 
 # Build for linux/amd64 (RunPod and HP Z2)
 # Note: Use --platform=linux/amd64 when building on ARM64 (MacOS M1/M2)
@@ -50,18 +53,11 @@ RUN pip3 install --no-cache-dir \
 # Create working directory
 WORKDIR /workspace
 
-# Create directories structure
-RUN mkdir -p /workspace/uploads \
-    /workspace/storage/transcriptions \
-    /workspace/storage/metadata \
-    /workspace/storage/captions \
-    /workspace/temp \
-    /workspace/models \
-    /workspace/test-files
+# Create directories structure (สำหรับ workspace)
+RUN mkdir -p /workspace
 
-# Copy setup scripts
-COPY scripts/pod/start-services-direct.sh /workspace/start-services.sh
-RUN chmod +x /workspace/start-services.sh
+# ⚠️ ไม่ copy setup scripts - ให้ user clone repo และ run scripts เอง
+# ⚠️ ไม่มี CMD - ให้ user start services แบบ Direct mode เอง
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -70,13 +66,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_VISIBLE_DEVICES=0
 ENV WHISPER_CUBLAS=1
 
-# Expose ports
+# Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
 EXPOSE 8001 8002 6379
 
-# Health check script
-COPY scripts/pod/healthcheck.sh /workspace/healthcheck.sh
-RUN chmod +x /workspace/healthcheck.sh
+# ⚠️ ไม่มี CMD - Image นี้เป็น minimal base
+# User ต้อง:
+# 1. Clone repository: git clone <repo> /workspace/transcription-service
+# 2. Start services: bash scripts/pod/start-services-direct.sh
+# หรือ
+# 3. Use restart script: bash scripts/pod/restart-pod-services.sh
 
-# Default command: Start services
-CMD ["/workspace/start-services.sh"]
+# Default: Keep container running (wait for user to start services)
+CMD ["/bin/bash", "-c", "echo '🚀 Minimal Base Image Ready'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/restart-pod-services.sh'; echo ''; tail -f /dev/null"]
 
