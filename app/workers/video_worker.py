@@ -279,10 +279,19 @@ class VideoWorker:
         
         def process_in_thread():
             """ประมวลผลใน thread แยกเพื่อไม่ block worker"""
+            task_id = None
             try:
                 task_data = json.loads(body.decode('utf-8'))
                 task_id = task_data.get('task_id')
-                logger.info(f"เริ่มประมวลผล transcription task: {task_id}")
+                file_path = task_data.get('file_path', 'N/A')
+                model_size = task_data.get('model_size', 'base')
+                language = task_data.get('language', 'th')
+                
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.info(f"🎬 เริ่มประมวลผล transcription task: {task_id}")
+                logger.info(f"   File: {file_path}")
+                logger.info(f"   Model: {model_size}, Language: {language}")
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 
                 # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่ (ป้องกัน duplicate processing)
                 existing_task = self.json_storage.get_transcription(task_id)
@@ -297,17 +306,57 @@ class VideoWorker:
                 # อัปเดตสถานะเป็น processing
                 task_data['status'] = 'processing'
                 task_data['started_at'] = datetime.now().isoformat()
+                task_data['progress'] = 0
                 self.json_storage.save_transcription(task_id, task_data)
+                logger.info(f"📝 อัปเดตสถานะเป็น 'processing' (Progress: 0%)")
+                
+                # เริ่ม monitor progress ใน background thread
+                import time
+                monitor_running = True
+                
+                def monitor_progress():
+                    """Monitor progress และ log updates"""
+                    last_progress = -1
+                    last_status = ""
+                    while monitor_running:
+                        try:
+                            task_info = self.json_storage.get_transcription(task_id)
+                            if task_info:
+                                current_progress = task_info.get('progress', 0)
+                                current_status = task_info.get('status', '')
+                                
+                                # Log เมื่อ progress หรือ status เปลี่ยน
+                                if current_progress != last_progress or current_status != last_status:
+                                    logger.info(f"📊 Task {task_id}: Progress {current_progress}% - Status: {current_status}")
+                                    last_progress = current_progress
+                                    last_status = current_status
+                            
+                            time.sleep(5)  # Check every 5 seconds
+                        except Exception as e:
+                            logger.warning(f"Error monitoring progress: {e}")
+                            time.sleep(5)
+                
+                # Start progress monitor
+                progress_thread = threading.Thread(target=monitor_progress, daemon=True)
+                progress_thread.start()
                 
                 # ประมวลผล transcription
+                logger.info(f"🚀 เริ่มประมวลผล transcription...")
                 asyncio.run(self._execute_transcription_task(task_data))
+                
+                # Stop monitoring
+                monitor_running = False
                 
                 # Acknowledge message
                 ch.basic_ack(delivery_tag=method.delivery_tag)
-                logger.info(f"transcription task เสร็จสิ้น: {task_id}")
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 
             except Exception as e:
-                logger.error(f"เกิดข้อผิดพลาดในการประมวลผล transcription task: {e}", exc_info=True)
+                logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล transcription task {task_id}: {e}", exc_info=True)
+                logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
                 try:
                     ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
@@ -777,13 +826,15 @@ class VideoWorker:
     
     async def _execute_transcription_task(self, task_data: Dict[str, Any]):
         """ดำเนินการ transcription"""
+        task_id = task_data.get('task_id')
         try:
             file_path = task_data['file_path']
             language = task_data.get('language', 'th')
             model_size = task_data.get('model_size', 'base')
             chunk_duration = task_data.get('chunk_duration', 30)
             
-            logger.info(f"เริ่ม transcription: {file_path}")
+            logger.info(f"📂 เริ่ม transcription: {file_path}")
+            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s")
             
             # สร้าง task object สำหรับ transcription service
             from app.models.transcription import TranscriptionResponse
@@ -805,6 +856,8 @@ class VideoWorker:
             # เพิ่ม task เข้าไปใน transcription service
             self.transcription_service.tasks[task_data['task_id']] = task
             
+            logger.info(f"🔄 เรียกใช้ transcription service...")
+            
             # เรียกใช้ transcription service
             await self.transcription_service._process_transcription(
                 task_data['task_id'],
@@ -819,15 +872,19 @@ class VideoWorker:
             # อัปเดต task
             task_data['status'] = 'completed'
             task_data['completed_at'] = datetime.now().isoformat()
+            task_data['progress'] = 100
             
             # บันทึกลง JSON storage
             self.json_storage.save_transcription(task_data['task_id'], task_data)
             
+            logger.info(f"✅ Transcription completed successfully: {task_id}")
+            
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการ transcription: {e}")
+            logger.error(f"❌ เกิดข้อผิดพลาดในการ transcription {task_id}: {e}", exc_info=True)
             task_data['status'] = 'failed'
             task_data['error_message'] = str(e)
             task_data['completed_at'] = datetime.now().isoformat()
+            task_data['progress'] = 0
             self.json_storage.save_transcription(task_data['task_id'], task_data)
     
     def run(self):
