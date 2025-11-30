@@ -891,12 +891,26 @@ class VideoWorker:
                 file_name=task_data.get('file_name')
             )
             
-            # อัปเดต task
-            task_data['status'] = 'completed'
-            task_data['completed_at'] = datetime.now().isoformat()
-            task_data['progress'] = 100
+            # ดึงข้อมูล transcription ที่บันทึกไว้แล้วจาก transcription_service
+            # (transcription_service บันทึก full_text และ chunks ไว้แล้ว)
+            existing_transcription = self.json_storage.get_transcription(task_data['task_id'])
             
-            # บันทึกลง JSON storage
+            # อัปเดต task - ใช้ข้อมูลจาก existing_transcription ถ้ามี
+            if existing_transcription:
+                # Merge ข้อมูล: ใช้ full_text และ chunks จาก existing_transcription
+                task_data['status'] = 'completed'
+                task_data['completed_at'] = datetime.now().isoformat()
+                task_data['progress'] = 100
+                task_data['full_text'] = existing_transcription.get('full_text', task_data.get('full_text', ''))
+                task_data['chunks'] = existing_transcription.get('chunks', task_data.get('chunks', []))
+                task_data['total_duration'] = existing_transcription.get('total_duration', task_data.get('total_duration'))
+            else:
+                # ถ้าไม่มี existing_transcription ให้บันทึกตามปกติ
+                task_data['status'] = 'completed'
+                task_data['completed_at'] = datetime.now().isoformat()
+                task_data['progress'] = 100
+            
+            # บันทึกลง JSON storage (จะ merge กับข้อมูลเดิมอัตโนมัติ)
             self.json_storage.save_transcription(task_data['task_id'], task_data)
             
             logger.info(f"✅ Transcription completed successfully: {task_id}")
