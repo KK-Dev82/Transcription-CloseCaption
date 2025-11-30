@@ -105,6 +105,29 @@ bash scripts/pod/result-view.sh <task-id>
 bash scripts/pod/result-view.sh
 ```
 
+### 10. `task-service.sh` (Optional)
+จัดการ Transcription Tasks (stop, clear, cleanup)
+
+```bash
+# แสดง list tasks
+bash scripts/pod/task-service.sh list
+
+# หยุด task ที่กำลังทำงาน
+bash scripts/pod/task-service.sh stop <task-id>
+
+# ลบ task (permanent)
+bash scripts/pod/task-service.sh clear <task-id>
+
+# ลบ tasks ทั้งหมด (completed/failed/cancelled)
+bash scripts/pod/task-service.sh clear-all
+
+# ลบ tasks เก่า (default: 24 hours)
+bash scripts/pod/task-service.sh cleanup [hours]
+
+# ดูสถานะ task
+bash scripts/pod/task-service.sh status <task-id>
+```
+
 ## 🚀 Quick Start
 
 ### 1. Setup ครั้งแรก
