@@ -290,6 +290,139 @@ bash scripts/pod/test-health-runpod-url.sh \
 
 ---
 
+### `test-transcription-performance.sh` ⭐ (ใหม่)
+**ทดสอบ Transcription Performance และวัดเวลา**
+- อัปโหลด video และเริ่ม transcription
+- วัดเวลา: Upload, Transcription, Total
+- แสดง Performance Metrics: Ratio, Speedup
+- Monitor GPU usage (ถ้ามี)
+- แสดง transcription result และ statistics
+
+**Usage:**
+```bash
+# จาก RunPod Pod
+bash scripts/pod/test-transcription-performance.sh /path/to/video.mp4 medium
+
+# จาก Local Machine (ใช้ RunPod URL)
+bash scripts/pod/test-transcription-performance.sh \
+  /path/to/video.mp4 \
+  medium \
+  https://xxxxx-8001.proxy.runpod.net
+```
+
+**Output:**
+- File information (size, duration)
+- Timing (upload, transcription, total)
+- Performance metrics (ratio, speedup)
+- GPU usage (if available)
+- Transcription result (preview + full text saved to file)
+
+---
+
+### `test-rabbitmq-connection.sh` ⭐ (ใหม่)
+**ทดสอบ RabbitMQ Connection**
+- ทดสอบ network connectivity (port)
+- ทดสอบ RabbitMQ connection (AMQP)
+- ตรวจสอบ queues
+
+**Usage:**
+```bash
+# ทดสอบ RabbitMQ connection
+bash scripts/pod/test-rabbitmq-connection.sh 178.128.105.100 5672 senate qP2VtHz6fAX4xDksEpMrLT
+```
+
+---
+
+### `fix-rabbitmq-config.sh` ⭐ (ใหม่)
+**แก้ไข RabbitMQ Configuration ใน .env.runpod**
+- อัปเดต RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_USER, RABBITMQ_PASSWORD
+- Backup .env.runpod ก่อนแก้ไข
+- ทดสอบ connection หลังแก้ไข
+
+**Usage:**
+```bash
+# แก้ไข RabbitMQ configuration
+bash scripts/pod/fix-rabbitmq-config.sh 178.128.105.100 5672
+```
+
+---
+
+### `download-video.sh` ⭐ (ใหม่)
+**Download Video และเก็บไว้ใน Pod**
+- รองรับทั้ง URL และ Local File
+- จัดการ permission อัตโนมัติ
+- แสดง file info (size, duration)
+
+**Usage:**
+```bash
+# บน Pod - Download จาก URL
+bash scripts/pod/download-video.sh https://example.com/video.mp4 uploads/
+
+# บน Pod - Copy จาก local file
+bash scripts/pod/download-video.sh /tmp/video.mp4 uploads/
+```
+
+---
+
+### `download-video-from-local.sh` ⭐ (ใหม่)
+**Upload Video จาก Local Machine (MacOS) ไปยัง Pod**
+- ใช้ SCP เพื่อ copy ไฟล์ผ่าน SSH
+- จัดการ permission อัตโนมัติ
+- ตรวจสอบ file size เพื่อยืนยัน
+
+**Usage:**
+```bash
+# จาก Local Machine (MacOS)
+bash scripts/pod/download-video-from-local.sh \
+  /path/to/video.mp4 \
+  <pod-ip> \
+  <pod-ssh-port> \
+  uploads/
+```
+
+**ตัวอย่าง:**
+```bash
+bash scripts/pod/download-video-from-local.sh \
+  ~/Downloads/test-video.mp4 \
+  205.196.17.108 \
+  13027 \
+  uploads/
+```
+
+---
+
+### `download-test-video.sh` ⭐ (ใหม่)
+**Download Test Video จาก URL**
+- Download video จาก URL สำหรับทดสอบ
+- แสดง progress และ download speed
+- ตรวจสอบ duration (ถ้ามี ffprobe)
+- จัดการ permission อัตโนมัติ
+
+**Usage:**
+```bash
+# บน Pod - Download test video
+bash scripts/pod/download-test-video.sh http://korrakang.com/meeting2.mp4 uploads/
+
+# หรือใช้ default URL
+bash scripts/pod/download-test-video.sh
+```
+
+---
+
+### `download-large-model.sh` ⭐ (ใหม่)
+**Download Large Model โดยเฉพาะ**
+- ใช้เมื่อ download ผ่าน start-services-direct.sh ไม่สำเร็จ
+- รองรับหลายวิธี: utility script, whisper.cpp script, direct download
+- ตรวจสอบ file size และ integrity
+
+**Usage:**
+```bash
+# บน Pod
+bash scripts/pod/download-large-model.sh
+```
+
+---
+
 ## 🔗 Related Files
 
 - `Dockerfile.runpod-base` - Custom Base Image สำหรับ RunPod/Z2

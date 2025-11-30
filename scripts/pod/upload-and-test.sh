@@ -1,11 +1,14 @@
 #!/bin/bash
 # Script สำหรับอัปโหลด Video และทดสอบ Transcription จาก Local Machine
+# รวม Performance Metrics และ Timing
 #
 # วิธีใช้งาน:
 # bash scripts/pod/upload-and-test.sh <video-file> <pod-ip> [pod-port] [model-size]
 #
 # ตัวอย่าง:
 # bash scripts/pod/upload-and-test.sh /path/to/video.mp4 205.196.17.108 8001 medium
+#
+# หมายเหตุ: สำหรับ Performance Testing แนะนำใช้ test-transcription-performance.sh
 
 set -e
 
