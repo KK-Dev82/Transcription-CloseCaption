@@ -418,8 +418,21 @@ class TranscriptionService:
             }
             
             logger.info(f"💾 Saving transcription to storage: task_id={task_id}, full_text length={len(task.full_text) if task.full_text else 0}, chunks count={len(chunks_list)}")
-            self.json_storage.save_transcription(task_id, task_data)
-            logger.info(f"✅ Transcription saved to storage successfully: {task_id}")
+            try:
+                self.json_storage.save_transcription(task_id, task_data)
+                logger.info(f"✅ Transcription saved to storage successfully: {task_id}")
+                
+                # Verify that data was saved correctly
+                verify_data = self.json_storage.get_transcription(task_id)
+                if verify_data:
+                    verify_full_text = verify_data.get('full_text', '') or ''
+                    verify_chunks = verify_data.get('chunks', []) or []
+                    logger.info(f"✅ Verified saved data: full_text length={len(verify_full_text)}, chunks count={len(verify_chunks)}")
+                else:
+                    logger.error(f"❌ Verification failed: Could not retrieve saved data for {task_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to save transcription to storage: {e}", exc_info=True)
+                raise
             
             task.status = "completed"
             task.progress = 100
