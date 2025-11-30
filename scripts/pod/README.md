@@ -244,6 +244,28 @@ cat .env.runpod | grep RABBITMQ
 bash scripts/pod/setup-pod.sh
 ```
 
+### Multiple Consumers Issue
+```bash
+# ตรวจสอบ multiple consumers
+bash scripts/pod/check-pod.sh
+
+# แก้ไข multiple consumers
+bash scripts/pod/fix-multiple-consumers.sh
+
+# หรือ restart services
+bash scripts/pod/restart-pod.sh
+```
+
+**สาเหตุที่เป็นไปได้:**
+- Old connections จาก previous sessions
+- Workers จาก environments อื่น (staging/local)
+- Duplicate worker instances
+
+**วิธีแก้ไข:**
+1. รัน `fix-multiple-consumers.sh` เพื่อ restart Video Worker
+2. ตรวจสอบ RabbitMQ Management UI สำหรับ active connections
+3. รอสักครู่ - old connections จะ timeout อัตโนมัติ (heartbeat: 600s)
+
 ## 📂 File Locations
 
 - Logs: `/tmp/main-api.log`, `/tmp/whisper.log`, `/tmp/video-worker.log`
@@ -258,3 +280,4 @@ bash scripts/pod/setup-pod.sh
 
 - `build-and-push-runpod-base.sh` - Build และ push base image ไป ACR
 - `healthcheck.sh` - Health check script สำหรับ Docker
+- `fix-multiple-consumers.sh` - แก้ไขปัญหา multiple consumers ใน RabbitMQ
