@@ -439,20 +439,36 @@ class VideoWorker:
                 # Stop monitoring
                 monitor_running = False
                 
-                # Acknowledge message (with connection check)
-                try:
-                    if ch and not ch.is_closed:
-                        ch.basic_ack(delivery_tag=method.delivery_tag)
-                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
-                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    else:
-                        logger.warning(f"⚠️ Channel is closed, cannot acknowledge message for task {task_id}")
-                        logger.warning(f"⚠️ Task completed but message may be redelivered")
-                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
-                        pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
-                    logger.error(f"❌ Cannot acknowledge message (connection lost): {ack_error}")
-                    logger.warning(f"⚠️ Task {task_id} completed but message may be redelivered")
+                # Acknowledge message (with connection check and retry)
+                ack_success = False
+                max_ack_retries = 3
+                for ack_attempt in range(max_ack_retries):
+                    try:
+                        if ch and not ch.is_closed:
+                            # Use a short timeout to avoid hanging
+                            ch.basic_ack(delivery_tag=method.delivery_tag)
+                            logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
+                            logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            ack_success = True
+                            break
+                        else:
+                            logger.warning(f"⚠️ Channel is closed (attempt {ack_attempt + 1}/{max_ack_retries})")
+                            if ack_attempt < max_ack_retries - 1:
+                                import time
+                                time.sleep(0.5)  # Wait a bit before retry
+                    except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed, 
+                            pika.exceptions.AMQPConnectionError, AttributeError, IndexError) as ack_error:
+                        logger.warning(f"⚠️ Cannot acknowledge message (attempt {ack_attempt + 1}/{max_ack_retries}): {ack_error}")
+                        if ack_attempt < max_ack_retries - 1:
+                            import time
+                            time.sleep(0.5)  # Wait a bit before retry
+                        else:
+                            logger.error(f"❌ Failed to acknowledge message after {max_ack_retries} attempts")
+                            logger.warning(f"⚠️ Task {task_id} completed but message may be redelivered")
+                
+                if not ack_success:
+                    logger.warning(f"⚠️ Task {task_id} completed but message acknowledgment failed")
                 
             except Exception as e:
                 logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

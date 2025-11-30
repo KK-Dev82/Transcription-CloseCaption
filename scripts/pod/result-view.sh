@@ -2,8 +2,10 @@
 # Script สำหรับดูผลลัพธ์ Transcription
 #
 # วิธีใช้งาน:
-#   bash scripts/pod/result-view.sh [task-id]     # ดูผลลัพธ์ของ task-id
-#   bash scripts/pod/result-view.sh                # แสดง list ให้เลือก
+#   bash scripts/pod/result-view.sh [task-id]              # ดูผลลัพธ์ของ task-id
+#   bash scripts/pod/result-view.sh                        # แสดง list ให้เลือก
+#   bash scripts/pod/result-view.sh -detail [number]       # แสดงรายละเอียดข้อความที่แปลงได้ทันที (เรียงจากล่าสุด)
+#   bash scripts/pod/result-view.sh --detail [number]       # เหมือน -detail
 
 set -e
 
@@ -21,8 +23,30 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_header() { echo -e "${CYAN}$1${NC}"; }
 
-TASK_ID="${1}"
+# Parse arguments
+DETAIL_MODE=false
+DETAIL_COUNT=5
+TASK_ID=""
 API_URL="${API_URL:-http://localhost:8001}"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -detail|--detail)
+            DETAIL_MODE=true
+            if [[ $# -gt 1 ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                DETAIL_COUNT="$2"
+                shift
+            fi
+            shift
+            ;;
+        *)
+            if [ -z "$TASK_ID" ]; then
+                TASK_ID="$1"
+            fi
+            shift
+            ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -111,6 +135,182 @@ get_transcription_details() {
     echo "$RESPONSE"
 }
 
+# Function to calculate processing time
+calculate_processing_time() {
+    local created_at="$1"
+    local completed_at="$2"
+    
+    if [ "$created_at" = "N/A" ] || [ "$completed_at" = "N/A" ]; then
+        echo "N/A"
+        return
+    fi
+    
+    # Try to parse ISO format dates
+    if command -v date &> /dev/null; then
+        # Convert ISO format to epoch seconds
+        # Try GNU date format first (Linux)
+        CREATED_EPOCH=$(date -d "$created_at" +%s 2>/dev/null || echo "")
+        COMPLETED_EPOCH=$(date -d "$completed_at" +%s 2>/dev/null || echo "")
+        
+        # Fallback: Try Python if date command fails (works on both Linux and macOS)
+        if [ -z "$CREATED_EPOCH" ] || [ -z "$COMPLETED_EPOCH" ]; then
+            if command -v python3 &> /dev/null; then
+                CREATED_EPOCH=$(python3 -c "from datetime import datetime; print(int(datetime.fromisoformat('${created_at%+*}'.replace('Z', '+00:00')).timestamp()))" 2>/dev/null || echo "")
+                COMPLETED_EPOCH=$(python3 -c "from datetime import datetime; print(int(datetime.fromisoformat('${completed_at%+*}'.replace('Z', '+00:00')).timestamp()))" 2>/dev/null || echo "")
+            fi
+        fi
+        
+        if [ -n "$CREATED_EPOCH" ] && [ -n "$COMPLETED_EPOCH" ] && [ "$CREATED_EPOCH" != "" ] && [ "$COMPLETED_EPOCH" != "" ]; then
+            DIFF=$((COMPLETED_EPOCH - CREATED_EPOCH))
+            
+            if [ $DIFF -lt 0 ]; then
+                echo "N/A"
+                return
+            fi
+            
+            if [ $DIFF -lt 60 ]; then
+                echo "${DIFF}s"
+            elif [ $DIFF -lt 3600 ]; then
+                MIN=$((DIFF / 60))
+                SEC=$((DIFF % 60))
+                echo "${MIN}m ${SEC}s"
+            else
+                HOUR=$((DIFF / 3600))
+                MIN=$(((DIFF % 3600) / 60))
+                SEC=$((DIFF % 60))
+                echo "${HOUR}h ${MIN}m ${SEC}s"
+            fi
+            return
+        fi
+    fi
+    
+    echo "N/A"
+}
+
+# Function to display transcription detail
+display_transcription_detail() {
+    local task_id=$1
+    local show_full_text=${2:-true}
+    
+    DETAILS_RESPONSE=$(get_transcription_details "$task_id" 2>/dev/null || echo "")
+    
+    if [ -z "$DETAILS_RESPONSE" ] || echo "$DETAILS_RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
+        return 1
+    fi
+    
+    if command -v jq &> /dev/null; then
+        STATUS=$(echo "$DETAILS_RESPONSE" | jq -r '.status // .basic_info.status // "unknown"' 2>/dev/null)
+        PROGRESS=$(echo "$DETAILS_RESPONSE" | jq -r '.progress // .basic_info.progress // 0' 2>/dev/null)
+        FILENAME=$(echo "$DETAILS_RESPONSE" | jq -r '.file_name // .filename // .basic_info.filename // .file_path // "N/A"' 2>/dev/null)
+        CREATED_AT=$(echo "$DETAILS_RESPONSE" | jq -r '.created_at // .timestamps.created_at // "N/A"' 2>/dev/null)
+        COMPLETED_AT=$(echo "$DETAILS_RESPONSE" | jq -r '.completed_at // .timestamps.completed_at // "N/A"' 2>/dev/null)
+        
+        # Calculate processing time
+        PROCESSING_TIME=$(calculate_processing_time "$CREATED_AT" "$COMPLETED_AT")
+        
+        # Status color
+        if [ "$STATUS" = "completed" ]; then
+            STATUS_COLOR="${GREEN}"
+        elif [ "$STATUS" = "processing" ] || [ "$STATUS" = "pending" ]; then
+            STATUS_COLOR="${YELLOW}"
+        elif [ "$STATUS" = "failed" ]; then
+            STATUS_COLOR="${RED}"
+        elif [ "$STATUS" = "cancelled" ]; then
+            STATUS_COLOR="${CYAN}"
+        else
+            STATUS_COLOR="${NC}"
+        fi
+        
+        echo -e "  ${STATUS_COLOR}${STATUS}${NC} | ${PROGRESS}% | $task_id"
+        echo "      File: $FILENAME"
+        if [ "$PROCESSING_TIME" != "N/A" ] && [ "$STATUS" = "completed" ]; then
+            echo "      Processing Time: $PROCESSING_TIME"
+        fi
+        echo "      Created: $CREATED_AT"
+        if [ "$COMPLETED_AT" != "N/A" ]; then
+            echo "      Completed: $COMPLETED_AT"
+        fi
+        
+        # Show full text if requested and available
+        if [ "$show_full_text" = "true" ] && [ "$STATUS" = "completed" ]; then
+            FULL_TEXT=$(echo "$DETAILS_RESPONSE" | jq -r '.result.full_text // .full_text // .results.full_text // ""' 2>/dev/null)
+            
+            # Try reading from storage file if not in API response
+            if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+                FULL_TEXT_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id/full_text.json"
+                if [ -f "$FULL_TEXT_FILE" ]; then
+                    FULL_TEXT=$(jq -r '.full_text // ""' "$FULL_TEXT_FILE" 2>/dev/null || echo "")
+                fi
+                
+                if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ]; then
+                    METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$task_id/metadata.json"
+                    if [ -f "$METADATA_FILE" ]; then
+                        FULL_TEXT=$(jq -r '.full_text // ""' "$METADATA_FILE" 2>/dev/null || echo "")
+                    fi
+                fi
+            fi
+            
+            if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                WORD_COUNT=$(echo "$FULL_TEXT" | wc -w 2>/dev/null || echo "0")
+                echo "      Text: ${WORD_COUNT} words"
+                echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                # Show first 200 characters
+                TEXT_PREVIEW=$(echo "$FULL_TEXT" | head -c 200)
+                echo "      $TEXT_PREVIEW"
+                if [ ${#FULL_TEXT} -gt 200 ]; then
+                    echo "..."
+                fi
+                echo "      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            fi
+        fi
+        echo ""
+        return 0
+    fi
+    
+    return 1
+}
+
+# If detail mode, show details directly
+if [ "$DETAIL_MODE" = "true" ]; then
+    print_header "📋 Transcription Details (Latest $DETAIL_COUNT)"
+    echo "📅 $(date)"
+    echo ""
+    
+    check_api_health
+    
+    print_status "Fetching latest transcriptions..."
+    LIST_RESPONSE=$(get_transcription_list)
+    
+    if [ -z "$LIST_RESPONSE" ]; then
+        print_error "❌ Failed to fetch transcription list"
+        exit 1
+    fi
+    
+    if command -v jq &> /dev/null; then
+        # Sort by created_at descending (latest first) and take first N
+        TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r 'sort_by(.created_at // "") | reverse | .[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$' | head -n "$DETAIL_COUNT"))
+        
+        if [ ${#TASK_IDS_ARRAY[@]} -eq 0 ]; then
+            print_warning "⚠️  No transcriptions found"
+            exit 0
+        fi
+        
+        print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        
+        for task_id in "${TASK_IDS_ARRAY[@]}"; do
+            display_transcription_detail "$task_id" true
+        done
+        
+        print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    else
+        print_error "❌ jq not found - cannot parse JSON"
+        exit 1
+    fi
+    
+    exit 0
+fi
+
 # If no task_id provided, show list
 if [ -z "$TASK_ID" ]; then
     echo "📋 Transcription Results List"
@@ -144,12 +344,25 @@ if [ -z "$TASK_ID" ]; then
         # Display list with numbers
         INDEX=1
         TASK_IDS=()
-        echo "$LIST_RESPONSE" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .file_path // "N/A")|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename created_at; do
+        echo "$LIST_RESPONSE" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
             if [ -n "$task_id" ]; then
                 TASK_IDS+=("$task_id")
+                
+                # Status color
+                if [ "$status" = "completed" ]; then
+                    STATUS_COLOR="${GREEN}"
+                elif [ "$status" = "processing" ] || [ "$status" = "pending" ]; then
+                    STATUS_COLOR="${YELLOW}"
+                elif [ "$status" = "failed" ]; then
+                    STATUS_COLOR="${RED}"
+                elif [ "$status" = "cancelled" ]; then
+                    STATUS_COLOR="${CYAN}"
+                else
+                    STATUS_COLOR="${NC}"
+                fi
+                
                 printf "  %2d. " "$INDEX"
-                print_status "Task ID: $task_id"
-                echo "      Status: $status"
+                echo -e "${STATUS_COLOR}${status}${NC} | ${progress}% | $task_id"
                 echo "      File: $filename"
                 echo "      Created: $created_at"
                 echo ""
@@ -252,14 +465,24 @@ if command -v jq &> /dev/null; then
         print_header "⏰ Timestamps:"
         [ "$CREATED_AT" != "N/A" ] && echo "   Created: $CREATED_AT"
         [ "$COMPLETED_AT" != "N/A" ] && echo "   Completed: $COMPLETED_AT"
+        
+        # Calculate and display processing time if completed
+        if [ "$STATUS" = "completed" ] && [ "$CREATED_AT" != "N/A" ] && [ "$COMPLETED_AT" != "N/A" ]; then
+            PROCESSING_TIME=$(calculate_processing_time "$CREATED_AT" "$COMPLETED_AT")
+            if [ "$PROCESSING_TIME" != "N/A" ]; then
+                echo "   Processing Time: $PROCESSING_TIME"
+            fi
+        fi
         echo ""
     fi
     
-    # Full Text - try multiple sources
-    FULL_TEXT=$(echo "$DETAILS_RESPONSE" | jq -r '.result.full_text // .full_text // .results.full_text // ""' 2>/dev/null)
-    
-    # If not found in API response, try reading from storage file directly
-    if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+    # Full Text - only show if completed
+    FULL_TEXT=""
+    if [ "$STATUS" = "completed" ]; then
+        FULL_TEXT=$(echo "$DETAILS_RESPONSE" | jq -r '.result.full_text // .full_text // .results.full_text // ""' 2>/dev/null)
+        
+        # If not found in API response, try reading from storage file directly
+        if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
         # Try reading from full_text.json (new structure)
         FULL_TEXT_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/full_text.json"
         if [ -f "$FULL_TEXT_FILE" ]; then
@@ -290,6 +513,73 @@ if command -v jq &> /dev/null; then
                 fi
             fi
         fi
+        
+        # If still no full_text, try to build it from chunks
+        if [ -z "$FULL_TEXT" ] || [ "$FULL_TEXT" = "null" ] || [ "$FULL_TEXT" = "" ]; then
+            CHUNKS=$(echo "$DETAILS_RESPONSE" | jq -r '.result.chunks // .chunks // .results.chunks // []' 2>/dev/null)
+            
+            # Try reading chunks from storage if not in API response
+            if [ -z "$CHUNKS" ] || [ "$CHUNKS" = "[]" ] || [ "$CHUNKS" = "null" ]; then
+                METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/metadata.json"
+                if [ -f "$METADATA_FILE" ]; then
+                    CHUNKS=$(jq -r '.chunks // []' "$METADATA_FILE" 2>/dev/null || echo "[]")
+                fi
+            fi
+            
+            # Build full_text from chunks
+            if [ -n "$CHUNKS" ] && [ "$CHUNKS" != "[]" ] && [ "$CHUNKS" != "null" ]; then
+                CHUNK_COUNT=$(echo "$CHUNKS" | jq 'length' 2>/dev/null || echo "0")
+                if [ "$CHUNK_COUNT" -gt 0 ]; then
+                    FULL_TEXT=$(echo "$CHUNKS" | jq -r '[.[] | .text // ""] | join(" ")' 2>/dev/null || echo "")
+                    if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
+                        print_status "   ✅ Built full_text from $CHUNK_COUNT chunks"
+                    fi
+                fi
+            fi
+        fi
+    fi
+    
+    # Show status-specific information
+    if [ "$STATUS" = "pending" ] || [ "$STATUS" = "processing" ]; then
+        print_header "⏳ Task Status: $STATUS"
+        echo "   Progress: ${PROGRESS}%"
+        if [ "$STATUS" = "processing" ]; then
+            print_status "   💡 Task is currently being processed"
+            print_status "   💡 Check logs: bash scripts/pod/logs-pod.sh worker"
+        else
+            print_status "   💡 Task is waiting to be processed"
+        fi
+        echo ""
+    elif [ "$STATUS" = "cancelled" ]; then
+        print_header "🚫 Task Status: Cancelled"
+        echo "   This task was cancelled before completion"
+        echo ""
+    elif [ "$STATUS" = "failed" ]; then
+        ERROR_MSG=$(echo "$DETAILS_RESPONSE" | jq -r '.error_message // .error_info.error_message // ""' 2>/dev/null)
+        print_header "❌ Task Status: Failed"
+        if [ -n "$ERROR_MSG" ] && [ "$ERROR_MSG" != "null" ]; then
+            echo "   Error: $ERROR_MSG"
+        fi
+        echo ""
+    elif [ "$STATUS" = "completed" ]; then
+        # Check if transcription actually has content
+        CHUNKS_COUNT=$(echo "$DETAILS_RESPONSE" | jq -r '.result.chunks // .chunks // .results.chunks // [] | length' 2>/dev/null || echo "0")
+        
+        # Try reading from storage
+        if [ "$CHUNKS_COUNT" -eq 0 ]; then
+            METADATA_FILE="$PROJECT_ROOT/storage/transcriptions/$TASK_ID/metadata.json"
+            if [ -f "$METADATA_FILE" ]; then
+                CHUNKS_COUNT=$(jq -r '.chunks // [] | length' "$METADATA_FILE" 2>/dev/null || echo "0")
+            fi
+        fi
+        
+        if [ "$CHUNKS_COUNT" -gt 0 ]; then
+            print_success "✅ Transcription completed successfully"
+            echo "   Chunks: $CHUNKS_COUNT"
+        else
+            print_warning "⚠️  Task marked as completed but no transcription content found"
+        fi
+        echo ""
     fi
     
     if [ -n "$FULL_TEXT" ] && [ "$FULL_TEXT" != "null" ] && [ "$FULL_TEXT" != "" ]; then
@@ -304,8 +594,8 @@ if command -v jq &> /dev/null; then
         echo "$FULL_TEXT"
         print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
-    else
-        print_warning "⚠️  No transcription text available"
+    elif [ "$STATUS" = "completed" ]; then
+        print_warning "⚠️  No transcription text available (task is completed but text is missing)"
         print_status "💡 Checking storage files..."
         
         # List available files
@@ -331,9 +621,35 @@ if command -v jq &> /dev/null; then
                     FULL_TEXT_VALUE=$(jq -r '.full_text' "$METADATA_FILE" 2>/dev/null || echo "")
                     if [ -z "$FULL_TEXT_VALUE" ] || [ "$FULL_TEXT_VALUE" = "null" ]; then
                         print_warning "      ⚠️  full_text exists but is empty or null"
+                        
+                        # Try to build from chunks
+                        CHUNKS=$(jq -r '.chunks // []' "$METADATA_FILE" 2>/dev/null || echo "[]")
+                        if [ -n "$CHUNKS" ] && [ "$CHUNKS" != "[]" ] && [ "$CHUNKS" != "null" ]; then
+                            CHUNK_COUNT=$(echo "$CHUNKS" | jq 'length' 2>/dev/null || echo "0")
+                            if [ "$CHUNK_COUNT" -gt 0 ]; then
+                                BUILT_TEXT=$(echo "$CHUNKS" | jq -r '[.[] | .text // ""] | join(" ")' 2>/dev/null || echo "")
+                                if [ -n "$BUILT_TEXT" ] && [ "$BUILT_TEXT" != "null" ] && [ "$BUILT_TEXT" != "" ]; then
+                                    print_success "      ✅ Can build full_text from $CHUNK_COUNT chunks"
+                                    FULL_TEXT="$BUILT_TEXT"
+                                fi
+                            fi
+                        fi
                     fi
                 else
                     print_warning "      ⚠️  full_text key not found in metadata.json"
+                    
+                    # Try to build from chunks
+                    CHUNKS=$(jq -r '.chunks // []' "$METADATA_FILE" 2>/dev/null || echo "[]")
+                    if [ -n "$CHUNKS" ] && [ "$CHUNKS" != "[]" ] && [ "$CHUNKS" != "null" ]; then
+                        CHUNK_COUNT=$(echo "$CHUNKS" | jq 'length' 2>/dev/null || echo "0")
+                        if [ "$CHUNK_COUNT" -gt 0 ]; then
+                            BUILT_TEXT=$(echo "$CHUNKS" | jq -r '[.[] | .text // ""] | join(" ")' 2>/dev/null || echo "")
+                            if [ -n "$BUILT_TEXT" ] && [ "$BUILT_TEXT" != "null" ] && [ "$BUILT_TEXT" != "" ]; then
+                                print_success "      ✅ Can build full_text from $CHUNK_COUNT chunks"
+                                FULL_TEXT="$BUILT_TEXT"
+                            fi
+                        fi
+                    fi
                 fi
             fi
             
@@ -415,11 +731,13 @@ if command -v jq &> /dev/null; then
         echo ""
     fi
     
-    # Error Info
-    ERROR_MSG=$(echo "$DETAILS_RESPONSE" | jq -r '.error_message // .error_info.error_message // ""' 2>/dev/null)
-    if [ -n "$ERROR_MSG" ] && [ "$ERROR_MSG" != "null" ]; then
-        print_error "❌ Error: $ERROR_MSG"
-        echo ""
+    # Error Info (only show if failed)
+    if [ "$STATUS" = "failed" ]; then
+        ERROR_MSG=$(echo "$DETAILS_RESPONSE" | jq -r '.error_message // .error_info.error_message // ""' 2>/dev/null)
+        if [ -n "$ERROR_MSG" ] && [ "$ERROR_MSG" != "null" ]; then
+            print_error "❌ Error: $ERROR_MSG"
+            echo ""
+        fi
     fi
     
 else
