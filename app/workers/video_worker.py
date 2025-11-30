@@ -65,63 +65,79 @@ class VideoWorker:
         if self.connection and not self.connection.is_closed:
             self.connection.close()
     
-    def connect_rabbitmq(self):
-        """เชื่อมต่อกับ RabbitMQ"""
-        try:
-            credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
-            parameters = pika.ConnectionParameters(
-                host=self.rabbitmq_host,
-                port=self.rabbitmq_port,
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
-            
-            self.connection = pika.BlockingConnection(parameters)
-            self.channel = self.connection.channel()
-            
-            # สร้าง exchanges
-            self.channel.exchange_declare(
-                exchange='media.exchange',
-                exchange_type='topic',
-                durable=True
-            )
-            self.channel.exchange_declare(
-                exchange=self.transcription_exchange,
-                exchange_type='topic',
-                durable=True
-            )
-            
-            # สร้าง queues
-            self.channel.queue_declare(queue=self.trim_queue, durable=True)
-            self.channel.queue_declare(queue=self.merge_queue, durable=True)
-            self.channel.queue_declare(queue=self.convert_queue, durable=True)
-            self.channel.queue_declare(queue=self.resize_queue, durable=True)
-            self.channel.queue_declare(queue=self.transcription_queue, durable=True)
-            
-            # Queue สำหรับ audio chunk extracted (จาก Backend)
-            self.channel.queue_declare(
-                queue=self.audio_chunk_extracted_queue,
-                durable=True
-            )
-            self.channel.queue_bind(
-                exchange='media.exchange',
-                queue=self.audio_chunk_extracted_queue,
-                routing_key='media.audio.chunk.extracted'
-            )
-            
-            # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
-            # prefetch_count=3 หมายความว่าแต่ละ worker จะรับงานได้ 3 งานพร้อมกัน
-            # เมื่อมี 2 workers → สามารถประมวลผลได้ 6 งานพร้อมกัน
-            # ⚠️ ปรับตาม server resources: 4 cores, 8GB RAM
-            self.channel.basic_qos(prefetch_count=3)
-            
-            logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
-            return True
-            
-        except AMQPConnectionError as e:
-            logger.error(f"ไม่สามารถเชื่อมต่อ RabbitMQ: {e}")
-            return False
+    def connect_rabbitmq(self, max_retries=5, retry_delay=5):
+        """เชื่อมต่อกับ RabbitMQ พร้อม retry logic"""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to connect to RabbitMQ at {self.rabbitmq_host}:{self.rabbitmq_port} (attempt {attempt + 1}/{max_retries})...")
+                
+                credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
+                parameters = pika.ConnectionParameters(
+                    host=self.rabbitmq_host,
+                    port=self.rabbitmq_port,
+                    credentials=credentials,
+                    heartbeat=600,
+                    blocked_connection_timeout=300,
+                    connection_attempts=3,
+                    retry_delay=2
+                )
+                
+                self.connection = pika.BlockingConnection(parameters)
+                self.channel = self.connection.channel()
+                
+                # สร้าง exchanges
+                self.channel.exchange_declare(
+                    exchange='media.exchange',
+                    exchange_type='topic',
+                    durable=True
+                )
+                self.channel.exchange_declare(
+                    exchange=self.transcription_exchange,
+                    exchange_type='topic',
+                    durable=True
+                )
+                
+                # สร้าง queues
+                self.channel.queue_declare(queue=self.trim_queue, durable=True)
+                self.channel.queue_declare(queue=self.merge_queue, durable=True)
+                self.channel.queue_declare(queue=self.convert_queue, durable=True)
+                self.channel.queue_declare(queue=self.resize_queue, durable=True)
+                self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+                
+                # Queue สำหรับ audio chunk extracted (จาก Backend)
+                self.channel.queue_declare(
+                    queue=self.audio_chunk_extracted_queue,
+                    durable=True
+                )
+                self.channel.queue_bind(
+                    exchange='media.exchange',
+                    queue=self.audio_chunk_extracted_queue,
+                    routing_key='media.audio.chunk.extracted'
+                )
+                
+                # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
+                # prefetch_count=3 หมายความว่าแต่ละ worker จะรับงานได้ 3 งานพร้อมกัน
+                # เมื่อมี 2 workers → สามารถประมวลผลได้ 6 งานพร้อมกัน
+                # ⚠️ ปรับตาม server resources: 4 cores, 8GB RAM
+                self.channel.basic_qos(prefetch_count=3)
+                
+                logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
+                return True
+                
+            except (AMQPConnectionError, Exception) as e:
+                logger.warning(f"ไม่สามารถเชื่อมต่อ RabbitMQ (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"ไม่สามารถเชื่อมต่อ RabbitMQ หลังจากลอง {max_retries} ครั้ง")
+                    logger.error(f"RabbitMQ Host: {self.rabbitmq_host}:{self.rabbitmq_port}")
+                    logger.error("💡 Solutions:")
+                    logger.error("   1. Check if RabbitMQ is running")
+                    logger.error("   2. Check RABBITMQ_HOST and RABBITMQ_PORT environment variables")
+                    logger.error("   3. For local testing, use SSH Tunnel: ssh -L 5672:localhost:5672 ...")
+                    return False
     
     def setup_consumers(self):
         """ตั้งค่า consumers สำหรับแต่ละ queue"""
@@ -817,10 +833,13 @@ class VideoWorker:
     def run(self):
         """เริ่มต้น worker"""
         logger.info("เริ่มต้น Video Worker...")
+        logger.info(f"RabbitMQ Configuration: {self.rabbitmq_host}:{self.rabbitmq_port}")
         
-        # เชื่อมต่อ RabbitMQ
-        if not self.connect_rabbitmq():
-            logger.error("ไม่สามารถเชื่อมต่อ RabbitMQ ได้")
+        # เชื่อมต่อ RabbitMQ (with retry)
+        if not self.connect_rabbitmq(max_retries=10, retry_delay=5):
+            logger.error("ไม่สามารถเชื่อมต่อ RabbitMQ ได้ - Worker will exit")
+            logger.warning("💡 Video Worker will not process tasks without RabbitMQ connection")
+            logger.warning("💡 Services will continue running, but transcription tasks will not be processed")
             return
         
         # ตั้งค่า consumers
