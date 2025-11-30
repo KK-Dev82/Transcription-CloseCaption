@@ -438,30 +438,45 @@ class JSONStorage:
         transcriptions = []
         transcription_dir = self.storage_dir / "transcriptions"
         
+        if not transcription_dir.exists():
+            logger.warning(f"Transcription directory does not exist: {transcription_dir}")
+            return []
+        
+        logger.info(f"📂 Listing transcriptions from: {transcription_dir}")
+        
         # วิธีใหม่: หา folders แล้วอ่าน metadata.json
-        for task_folder in transcription_dir.iterdir():
-            if task_folder.is_dir():
-                task_id = task_folder.name
-                metadata_file = task_folder / "metadata.json"
-                
-                if metadata_file.exists():
-                    try:
-                        with open(metadata_file, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                            # เพิ่ม task_id ถ้าไม่มี
-                            if 'task_id' not in data:
-                                data['task_id'] = task_id
-                            transcriptions.append(data)
-                    except Exception as e:
-                        logger.warning(f"ไม่สามารถอ่าน metadata.json สำหรับ {task_id}: {e}")
+        task_folders = [f for f in transcription_dir.iterdir() if f.is_dir()]
+        logger.info(f"📁 Found {len(task_folders)} task folders")
+        
+        for task_folder in task_folders:
+            task_id = task_folder.name
+            metadata_file = task_folder / "metadata.json"
+            
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        # เพิ่ม task_id ถ้าไม่มี
+                        if 'task_id' not in data:
+                            data['task_id'] = task_id
+                        transcriptions.append(data)
+                        logger.debug(f"✅ Loaded transcription: {task_id}, status={data.get('status')}, full_text length={len(data.get('full_text', '') or '')}, chunks count={len(data.get('chunks', []) or [])}")
+                except Exception as e:
+                    logger.warning(f"ไม่สามารถอ่าน metadata.json สำหรับ {task_id}: {e}")
+            else:
+                logger.debug(f"⚠️  metadata.json not found in {task_folder}")
         
         # วิธีเก่า: หา .json files โดยตรง (สำหรับ backward compatibility)
-        for json_file in transcription_dir.glob("*.json"):
+        json_files = list(transcription_dir.glob("*.json"))
+        logger.info(f"📄 Found {len(json_files)} old format JSON files")
+        for json_file in json_files:
             task_id = json_file.stem
             stats = self.get_transcription_stats(task_id)
             if stats:
                 transcriptions.append(stats)
+                logger.debug(f"✅ Loaded old format transcription: {task_id}")
         
+        logger.info(f"📊 Total transcriptions found: {len(transcriptions)}")
         return transcriptions
     
     def list_all_video_tasks(self) -> List[Dict]:

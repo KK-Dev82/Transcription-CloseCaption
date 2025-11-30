@@ -992,17 +992,26 @@ class VideoWorker:
             self.transcription_service.tasks[task_data['task_id']] = task
             
             logger.info(f"🔄 เรียกใช้ transcription service...")
+            logger.info(f"   Task ID: {task_data['task_id']}")
+            logger.info(f"   File path: {file_path}")
+            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s")
             
             # เรียกใช้ transcription service
-            await self.transcription_service._process_transcription(
-                task_data['task_id'],
-                file_path,
-                language,
-                model_size,
-                chunk_duration,
-                file_url=task_data.get('file_url'),
-                file_name=task_data.get('file_name')
-            )
+            try:
+                logger.info(f"📞 Calling transcription_service._process_transcription...")
+                await self.transcription_service._process_transcription(
+                    task_data['task_id'],
+                    file_path,
+                    language,
+                    model_size,
+                    chunk_duration,
+                    file_url=task_data.get('file_url'),
+                    file_name=task_data.get('file_name')
+                )
+                logger.info(f"✅ transcription_service._process_transcription completed")
+            except Exception as e:
+                logger.error(f"❌ Error in transcription_service._process_transcription: {e}", exc_info=True)
+                raise
             
             # ดึงข้อมูล transcription ที่บันทึกไว้แล้วจาก transcription_service
             # (transcription_service บันทึก full_text และ chunks ไว้แล้ว)
