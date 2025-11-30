@@ -75,7 +75,9 @@ async def get_transcription_history(
         for item in paginated_results:
             history_items.append({
                 "task_id": item.get("task_id"),
-                "filename": item.get("filename"),
+                "id": item.get("task_id"),  # Alias for compatibility
+                "filename": item.get("filename") or item.get("file_name"),  # Support both field names
+                "file_name": item.get("file_name") or item.get("filename"),  # Support both field names
                 "file_path": item.get("file_path"),  # Add file path
                 "status": item.get("status"),
                 "progress": item.get("progress", 0),

@@ -444,8 +444,14 @@ if [ "$DETAIL_MODE" = "true" ]; then
     fi
     
     if command -v jq &> /dev/null; then
-        # Sort by created_at descending (latest first) and take first N
-        TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r 'sort_by(.created_at // "") | reverse | .[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$' | head -n "$DETAIL_COUNT"))
+        # Check if response has "history" field (from /history/transcriptions endpoint)
+        if echo "$LIST_RESPONSE" | jq -e '.history' > /dev/null 2>&1; then
+            # Response format: {"history": [...], "pagination": {...}}
+            TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r '.history | sort_by(.created_at // "") | reverse | .[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$' | head -n "$DETAIL_COUNT"))
+        else
+            # Response format: [...] (direct array)
+            TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r 'sort_by(.created_at // "") | reverse | .[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$' | head -n "$DETAIL_COUNT"))
+        fi
         
         if [ ${#TASK_IDS_ARRAY[@]} -eq 0 ]; then
             print_warning "⚠️  No transcriptions found"
@@ -485,7 +491,16 @@ if [ -z "$TASK_ID" ]; then
     
     # Parse JSON list
     if command -v jq &> /dev/null; then
-        TASK_COUNT=$(echo "$LIST_RESPONSE" | jq 'length' 2>/dev/null || echo "0")
+        # Check if response has "history" field (from /history/transcriptions endpoint)
+        if echo "$LIST_RESPONSE" | jq -e '.history' > /dev/null 2>&1; then
+            # Response format: {"history": [...], "pagination": {...}}
+            TASK_COUNT=$(echo "$LIST_RESPONSE" | jq '.history | length' 2>/dev/null || echo "0")
+            LIST_DATA=$(echo "$LIST_RESPONSE" | jq -c '.history' 2>/dev/null || echo "[]")
+        else
+            # Response format: [...] (direct array)
+            TASK_COUNT=$(echo "$LIST_RESPONSE" | jq 'length' 2>/dev/null || echo "0")
+            LIST_DATA="$LIST_RESPONSE"
+        fi
         
         if [ "$TASK_COUNT" -eq 0 ]; then
             print_warning "⚠️  No transcriptions found"
@@ -501,7 +516,7 @@ if [ -z "$TASK_ID" ]; then
         # Display list with numbers
         INDEX=1
         TASK_IDS=()
-        echo "$LIST_RESPONSE" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
+        echo "$LIST_DATA" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .filename // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
             if [ -n "$task_id" ]; then
                 TASK_IDS+=("$task_id")
                 
@@ -528,7 +543,13 @@ if [ -z "$TASK_ID" ]; then
         done
         
         # Store task IDs in a way we can access
-        TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r '.[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$'))
+        if echo "$LIST_RESPONSE" | jq -e '.history' > /dev/null 2>&1; then
+            # Response format: {"history": [...], "pagination": {...}}
+            TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r '.history[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$'))
+        else
+            # Response format: [...] (direct array)
+            TASK_IDS_ARRAY=($(echo "$LIST_RESPONSE" | jq -r '.[] | .task_id // .id // empty' 2>/dev/null | grep -v '^$'))
+        fi
         
         if [ ${#TASK_IDS_ARRAY[@]} -eq 0 ]; then
             print_warning "⚠️  No valid task IDs found"

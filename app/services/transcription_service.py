@@ -115,6 +115,12 @@ class TranscriptionService:
             except Exception:
                 progress_value = 0
             
+            # ถ้า task completed แต่ progress ไม่ใช่ 100 ให้ set เป็น 100
+            status = str(data.get("status", getattr(existing, "status", "pending") if existing else "pending"))
+            if status == "completed" and progress_value < 100:
+                logger.debug(f"⚠️  Task {task_id} is completed but progress={progress_value}, setting to 100")
+                progress_value = 100
+            
             response = TranscriptionResponse(
                 task_id=task_id,
                 status=str(data.get("status", getattr(existing, "status", "pending"))),
@@ -680,16 +686,34 @@ class TranscriptionService:
 
     def get_task_status(self, task_id: str) -> Optional[TranscriptionResponse]:
         """ดึงสถานะของ task พร้อม fallback ไปยัง storage"""
-        task = self.tasks.get(task_id)
-        if task and task.status in ["completed", "failed", "cancelled"]:
-            return task
-        
+        # ดึงข้อมูลจาก storage เสมอ (เพราะ Video Worker update storage โดยตรง)
+        # Memory cache อาจไม่ sync กับ storage เมื่อ task กำลัง processing
         stored_data = self.json_storage.load_transcription(task_id)
+        existing_task = self.tasks.get(task_id)
+        
         if stored_data:
-            task = self._build_task_from_storage(task_id, stored_data, existing=task)
+            # Log สำหรับ debugging
+            logger.debug(f"📋 Loaded task {task_id} from storage: status={stored_data.get('status')}, progress={stored_data.get('progress')}, full_text length={len(stored_data.get('full_text', '') or '')}, chunks count={len(stored_data.get('chunks', []) or [])}")
+            
+            # Build task จาก storage data (priority สูงสุด)
+            task = self._build_task_from_storage(task_id, stored_data, existing=existing_task)
             if task:
+                # Update memory cache เพื่อให้เร็วขึ้นในครั้งถัดไป
                 self.tasks[task_id] = task
-        return task
+                logger.debug(f"✅ Built task {task_id}: status={task.status}, progress={task.progress}")
+                return task
+            else:
+                logger.warning(f"⚠️  Failed to build task {task_id} from storage data")
+        else:
+            logger.debug(f"⚠️  No storage data found for task {task_id}")
+        
+        # Fallback: ถ้าไม่มีใน storage แต่มีใน memory (สำหรับ pending tasks ที่ยังไม่เริ่ม)
+        if existing_task:
+            logger.debug(f"📋 Using memory cache for task {task_id}: status={existing_task.status}, progress={existing_task.progress}")
+            return existing_task
+        
+        logger.warning(f"❌ Task {task_id} not found in storage or memory")
+        return None
     
     def get_all_tasks(self) -> List[TranscriptionResponse]:
         """ดึงรายการ tasks ทั้งหมด"""

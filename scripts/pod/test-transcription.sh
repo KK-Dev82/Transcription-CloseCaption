@@ -116,22 +116,73 @@ WAIT_INTERVAL=5
 ELAPSED_WAIT=0
 
 while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
+    # Try multiple endpoints
     STATUS_RESPONSE=$(curl -s "$API_URL/transcribe/$TASK_ID" 2>/dev/null || echo "")
     
+    # Fallback to other endpoints if needed
     if [ -z "$STATUS_RESPONSE" ] || echo "$STATUS_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
         STATUS_RESPONSE=$(curl -s "$API_URL/api/transcription/$TASK_ID" 2>/dev/null || echo "")
     fi
     
-    if [ -z "$STATUS_RESPONSE" ]; then
-        sleep $WAIT_INTERVAL
-        ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
-        continue
+    if [ -z "$STATUS_RESPONSE" ] || echo "$STATUS_RESPONSE" | grep -q "404\|Not Found" 2>/dev/null; then
+        STATUS_RESPONSE=$(curl -s "$API_URL/history/transcriptions/$TASK_ID" 2>/dev/null || echo "")
+    fi
+    
+    # Check if response is valid JSON
+    if [ -z "$STATUS_RESPONSE" ] || ! echo "$STATUS_RESPONSE" | jq . > /dev/null 2>&1; then
+        # If first few attempts, wait a bit longer (task might not be created yet)
+        if [ $ELAPSED_WAIT -lt 30 ]; then
+            sleep $WAIT_INTERVAL
+            ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
+            continue
+        else
+            print_warning "⚠️  Invalid API response, retrying..."
+            sleep $WAIT_INTERVAL
+            ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
+            continue
+        fi
+    fi
+    
+    # Check for error response
+    if echo "$STATUS_RESPONSE" | jq -e '.detail' > /dev/null 2>&1; then
+        ERROR_MSG=$(echo "$STATUS_RESPONSE" | jq -r '.detail' 2>/dev/null)
+        if echo "$ERROR_MSG" | grep -q "ไม่พบ\|not found\|404" 2>/dev/null; then
+            if [ $ELAPSED_WAIT -lt 30 ]; then
+                # First 30 seconds, task might not be created yet
+                sleep $WAIT_INTERVAL
+                ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
+                continue
+            else
+                print_error "❌ Task not found: $TASK_ID"
+                exit 1
+            fi
+        fi
     fi
     
     STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // .state // "unknown"' 2>/dev/null || echo "unknown")
     PROGRESS=$(echo "$STATUS_RESPONSE" | jq -r '.progress // 0' 2>/dev/null || echo "0")
     
-    print_status "Progress: ${PROGRESS}% - Status: ${STATUS}"
+    # Validate progress value (should be 0-100)
+    if ! [[ "$PROGRESS" =~ ^[0-9]+$ ]] || [ "$PROGRESS" -lt 0 ] || [ "$PROGRESS" -gt 100 ]; then
+        PROGRESS=0
+    fi
+    
+    # Only show progress if we have valid data
+    if [ "$STATUS" != "unknown" ] && [ "$STATUS" != "" ]; then
+        print_status "Progress: ${PROGRESS}% - Status: ${STATUS}"
+    elif [ "$PROGRESS" -gt 0 ]; then
+        print_status "Progress: ${PROGRESS}% - Status: processing"
+    else
+        # If status is unknown and progress is 0, might be API issue or task not started yet
+        if [ $ELAPSED_WAIT -lt 30 ]; then
+            # First 30 seconds, wait silently
+            sleep $WAIT_INTERVAL
+            ELAPSED_WAIT=$((ELAPSED_WAIT + WAIT_INTERVAL))
+            continue
+        else
+            print_warning "⚠️  Status unknown (Progress: ${PROGRESS}%), checking again..."
+        fi
+    fi
     
     if [ "$STATUS" = "completed" ] || [ "$STATUS" = "success" ]; then
         TRANSCRIBE_END=$(date +%s)
