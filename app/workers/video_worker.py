@@ -1447,7 +1447,8 @@ class VideoWorker:
                 # Shutdown thread pool executor
                 if hasattr(self, 'executor') and self.executor:
                     logger.info("Shutting down thread pool executor...")
-                    self.executor.shutdown(wait=True, timeout=30)
+                    # ⚠️ Python 3.10 ไม่รองรับ timeout parameter ใน shutdown()
+                    self.executor.shutdown(wait=True)
                     logger.info("Thread pool executor shut down")
             except Exception as e:
                 logger.warning(f"Error shutting down executor: {e}")
