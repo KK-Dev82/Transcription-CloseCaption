@@ -361,12 +361,16 @@ class TranscriptionService:
                     # เรียกใช้ whisper service โดยตรง (ไม่ผ่าน queue)
                     # ⚠️ transcribe_file ไม่ใช่ async function แต่ใช้ asyncio.run() ภายใน
                     logger.info(f"🔍 Calling whisper_service.transcribe_file()...")
-                    result = self.whisper_service.transcribe_file(
-                        audio_path,
-                        language=language,
-                        model_size=model_size
-                    )
-                    logger.info(f"✅ whisper_service.transcribe_file() returned")
+                    try:
+                        result = self.whisper_service.transcribe_file(
+                            audio_path,
+                            language=language,
+                            model_size=model_size
+                        )
+                        logger.info(f"✅ whisper_service.transcribe_file() returned, result type: {type(result)}")
+                    except Exception as transcribe_error:
+                        logger.error(f"❌ Error in transcribe_file(): {transcribe_error}", exc_info=True)
+                        raise
                     
                     # เก็บผลลัพธ์
                     if result:
