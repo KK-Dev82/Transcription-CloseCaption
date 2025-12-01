@@ -234,10 +234,14 @@ class FasterWhisperProvider(WhisperProvider):
             
             processing_time = time.time() - start_time
             
+            logger.info(f"[Faster Whisper] ⏱️  Transcription processing time: {processing_time:.2f}s")
+            
             # Convert segments to list and extract text
             segments_list = []
             text_parts = []
             
+            logger.info(f"[Faster Whisper] 📝 Processing segments...")
+            segment_count = 0
             for segment in segments:
                 segment_dict = {
                     "start": segment.start,
@@ -246,6 +250,11 @@ class FasterWhisperProvider(WhisperProvider):
                 }
                 segments_list.append(segment_dict)
                 text_parts.append(segment.text.strip())
+                segment_count += 1
+                if segment_count % 10 == 0:
+                    logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+            
+            logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
             
             # Combine all text
             text = " ".join(text_parts).strip()
