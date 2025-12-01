@@ -185,9 +185,15 @@ else
     export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
     export RABBITMQ_USER=${RABBITMQ_USER:-senate}
     export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
-    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
-    export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
-    export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-faster-whisper}
+    export WHISPER_MODEL=${WHISPER_MODEL:-medium}
+    export WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+    # Set LD_LIBRARY_PATH for cuDNN (required for faster-whisper/CTranslate2)
+    CTRANSLATE2_LIBS="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+    if [ -d "$CTRANSLATE2_LIBS" ]; then
+        export LD_LIBRARY_PATH="${CTRANSLATE2_LIBS}:${LD_LIBRARY_PATH:-}"
+        print_status "✅ Set LD_LIBRARY_PATH for cuDNN: $CTRANSLATE2_LIBS"
+    fi
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
@@ -195,6 +201,7 @@ else
              WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
              WHISPER_MODEL="${WHISPER_MODEL}" \
              WHISPER_DEVICE="${WHISPER_DEVICE}" \
+             LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" \
              python3 -m app.workers.video_worker > /tmp/video-worker.log 2>&1 & disown
     sleep 2
     if pgrep -f "python.*video_worker" > /dev/null; then
