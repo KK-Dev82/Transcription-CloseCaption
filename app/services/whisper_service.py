@@ -141,25 +141,9 @@ class WhisperService:
             # Use provider to transcribe
             logger.info(f"📝 Transcribing with provider: {self.provider.provider_name}")
             
-            # Run async transcribe in sync context
-            # Check if there's already an event loop running
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're in an async context, we need to run in a thread
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(self._run_async_transcribe, audio_path, language, model_size)
-                    result: TranscriptionResult = future.result()
-            except RuntimeError:
-                # No event loop running, create a new one
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    result: TranscriptionResult = loop.run_until_complete(
-                        self.provider.transcribe(audio_path, language, model_size)
-                    )
-                finally:
-                    loop.close()
+            # ⚠️ ใช้ _run_async_transcribe เสมอ (ใช้ asyncio.run()) เพื่อป้องกัน event loop conflict
+            # ไม่ต้องตรวจสอบ event loop เพราะ _run_async_transcribe จะจัดการเอง
+            result: TranscriptionResult = self._run_async_transcribe(audio_path, language, model_size)
             
             # Convert to dict format (backward compatible)
             transcription_result = {
