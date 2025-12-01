@@ -136,12 +136,15 @@ class FasterWhisperProvider(WhisperProvider):
             try:
                 # Load model with download_root if specified
                 # เพิ่ม num_workers=1 และ cpu_threads=4 เพื่อลด concurrency/deadlock issues
+                # เพิ่ม device_index=0 เพื่อระบุ GPU device
                 model_kwargs = {
                     "device": self.device,
                     "compute_type": self.compute_type,
                     "num_workers": 1,  # ลด concurrency เพื่อหลีกเลี่ยง deadlock
                     "cpu_threads": 4,  # จำกัด CPU threads
                 }
+                if self.device == "cuda":
+                    model_kwargs["device_index"] = 0  # ระบุ GPU device
                 if self.download_root:
                     model_kwargs["download_root"] = self.download_root
                 
