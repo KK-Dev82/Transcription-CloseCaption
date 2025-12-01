@@ -20,12 +20,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
+    git-lfs \
     wget \
     curl \
     # Python
     python3 \
     python3-pip \
-    # Redis (สำหรับ local Redis service)
+    # Redis (สำหรับ local Redis service ใน Direct mode)
     redis-server \
     # Utilities
     ca-certificates \
@@ -39,8 +40,8 @@ RUN apt-get update && apt-get install -y \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Azure CLI (สำหรับ pull images จาก ACR)
-RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+# Initialize git-lfs (สำหรับโมเดล/ไฟล์ใหญ่ใน Git)
+RUN git lfs install
 
 # Install PyTorch with CUDA support
 # CUDA 12.1 → PyTorch with CUDA 11.8 (backward compatible)
@@ -78,6 +79,10 @@ WORKDIR /workspace
 # Create directories structure (สำหรับ workspace)
 RUN mkdir -p /workspace
 
+# Setup Hugging Face cache (ช่วยลด re-download ในแต่ละ Pod)
+ENV HF_HOME=/workspace/.cache/huggingface
+RUN mkdir -p $HF_HOME && chmod -R 777 /workspace
+
 # ⚠️ ไม่ copy setup scripts - ให้ user clone repo และ run scripts เอง
 # ⚠️ ไม่มี CMD - ให้ user start services แบบ Direct mode เอง
 
@@ -94,6 +99,8 @@ ENV MKL_NUM_THREADS=4
 ENV WHISPER_PROVIDER=faster-whisper
 ENV WHISPER_MODEL=medium
 ENV WHISPER_DEVICE=auto
+# เริ่มด้วย VAD=false (ผ่านแล้วค่อยเปิด true)
+ENV WHISPER_VAD_FILTER=false
 
 # Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
 EXPOSE 8001 8002 6379
