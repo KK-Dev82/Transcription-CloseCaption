@@ -165,12 +165,18 @@ class WhisperService:
             raise
     
     def _run_async_transcribe(self, audio_path: str, language: str, model_size: str) -> TranscriptionResult:
-        """Helper method to run async transcribe in a new event loop (for thread execution)"""
+        """
+        Helper method to run async transcribe
+        ⚠️ ต้องไม่ถูกเรียกจาก async function โดยตรง - ใช้ await provider.transcribe() แทน
+        """
         # ตรวจสอบว่ามี event loop อยู่แล้วหรือไม่
         try:
-            # ถ้ามี event loop อยู่แล้ว (เช่น ถูกเรียกจาก async function)
+            # ถ้ามี event loop อยู่แล้ว - หมายความว่าถูกเรียกจาก async function
+            # ในกรณีนี้ไม่ควรใช้ ThreadPoolExecutor เพราะจะทำให้เกิด nested event loop
+            # แต่เนื่องจาก transcribe_file เป็น sync function และถูกเรียกจาก async function
+            # เราต้องสร้าง event loop ใหม่ใน thread แยก
             loop = asyncio.get_running_loop()
-            # ใช้ ThreadPoolExecutor เพื่อรัน async function ใน thread แยก
+            # ใช้ ThreadPoolExecutor เพื่อรัน async function ใน thread แยก (ไม่มี event loop)
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._run_async_transcribe_in_new_loop, audio_path, language, model_size)
