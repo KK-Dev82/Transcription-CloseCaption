@@ -35,6 +35,10 @@ _model_cache = {}
 _model_locks = {}
 _cache_lock = threading.Lock()
 
+# Lock สำหรับการใช้ model (ป้องกัน race condition เมื่อหลาย threads ใช้ model พร้อมกัน)
+_model_usage_locks = {}
+_usage_lock = threading.Lock()
+
 
 class OpenAIWhisperProvider(WhisperProvider):
     """
@@ -189,19 +193,30 @@ class OpenAIWhisperProvider(WhisperProvider):
         logger.info(f"[OpenAI Whisper] 🌍 Language: {lang_code or 'auto-detect'}")
         logger.info(f"[OpenAI Whisper] 🖥️  Device: {self.device}")
         
-        # Transcribe
+        # Transcribe with thread-safe lock
+        # ⚠️ ต้องใช้ lock เพราะ model มี internal state (kv_cache) ที่ไม่ thread-safe
+        cache_key = f"{model}_{self.device}"
+        
+        # สร้าง lock สำหรับ model นี้ (ถ้ายังไม่มี)
+        with _usage_lock:
+            if cache_key not in _model_usage_locks:
+                _model_usage_locks[cache_key] = threading.Lock()
+            usage_lock = _model_usage_locks[cache_key]
+        
         start_time = time.time()
         try:
-            # ใช้ fp16 เพื่อเพิ่มประสิทธิภาพบน GPU (ถ้าใช้ CUDA)
-            fp16 = self.device == 'cuda'
-            
-            result = whisper_model.transcribe(
-                str(audio_path_obj),
-                language=lang_code,
-                task="transcribe",
-                verbose=False,  # ไม่แสดง progress bar
-                fp16=fp16  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
-            )
+            # ใช้ lock เมื่อใช้ model (ป้องกัน race condition)
+            with usage_lock:
+                # ใช้ fp16 เพื่อเพิ่มประสิทธิภาพบน GPU (ถ้าใช้ CUDA)
+                fp16 = self.device == 'cuda'
+                
+                result = whisper_model.transcribe(
+                    str(audio_path_obj),
+                    language=lang_code,
+                    task="transcribe",
+                    verbose=False,  # ไม่แสดง progress bar
+                    fp16=fp16  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
+                )
             processing_time = time.time() - start_time
             
             # Log GPU utilization hint
