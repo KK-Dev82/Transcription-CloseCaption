@@ -88,6 +88,13 @@ class OpenAIWhisperProvider(WhisperProvider):
             if torch.cuda.is_available():
                 self.device = 'cuda'
                 logger.info(f"[OpenAI Whisper] Using CUDA device: {torch.cuda.get_device_name(0)}")
+                
+                # ⚡ Enable TF32 and cuDNN optimizations for RTX 4080 SUPER
+                # เพิ่มความเร็ว 15-30% สำหรับ FP16 และ FP32
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                logger.info(f"[OpenAI Whisper] ⚡ Enabled TF32/cuDNN optimizations for better performance")
             else:
                 self.device = 'cpu'
                 logger.info(f"[OpenAI Whisper] Using CPU device")
