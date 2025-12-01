@@ -157,6 +157,12 @@ class VideoWorker:
     
     def setup_consumers(self):
         """ตั้งค่า consumers สำหรับแต่ละ queue"""
+        # ตั้งค่า QoS สำหรับ transcription_chunk_queue ก่อน consume
+        # ⚠️ ต้องเรียก basic_qos ก่อน basic_consume สำหรับ queue นี้
+        # prefetch_count=10 หมายความว่า worker จะรับ message ได้ 10 ตัวพร้อมกัน
+        self.channel.basic_qos(prefetch_count=10, prefetch_size=0, global_qos=False)
+        logger.info("✅ Set QoS: prefetch_count=10 for transcription_chunk_queue")
+        
         # Trim video consumer
         self.channel.basic_consume(
             queue=self.trim_queue,
@@ -200,6 +206,7 @@ class VideoWorker:
         )
         
         # Transcription chunk consumer (สำหรับ parallel processing)
+        # ⚠️ ต้อง consume หลังจาก set QoS แล้ว
         self.channel.basic_consume(
             queue=self.transcription_chunk_queue,
             on_message_callback=self._process_chunk_transcription_task,
@@ -834,6 +841,13 @@ class VideoWorker:
         chunk_task = None
         
         try:
+            # Log immediately when message is received
+            logger.info("=" * 80)
+            logger.info("📨 📨 📨 RECEIVED MESSAGE FROM transcription_chunk_queue!")
+            logger.info(f"   Message size: {len(body)} bytes")
+            logger.info(f"   Delivery tag: {delivery_tag}")
+            logger.info(f"   Active chunks in executor: {len(self.active_chunks)}")
+            
             chunk_task = json.loads(body.decode('utf-8'))
             parent_task_id = chunk_task.get('parent_task_id')
             chunk_path = chunk_task.get('chunk_path')
@@ -842,20 +856,27 @@ class VideoWorker:
             model_size = chunk_task.get('model_size', 'base')
             language = chunk_task.get('language', 'th')
             
+            logger.info(f"   Chunk Index: {chunk_index+1}/{total_chunks}")
+            logger.info(f"   Parent Task ID: {parent_task_id}")
+            logger.info("=" * 80)
+            
             logger.info(f"🎬 Processing chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
             logger.info(f"   Chunk path: {chunk_path}")
             logger.info(f"   Model: {model_size}, Language: {language}")
+            logger.info(f"   Active chunks in executor: {len(self.active_chunks)}")
             
             # ส่งไปยัง thread pool เพื่อประมวลผล parallel (ไม่ block)
             future = self.executor.submit(self._execute_chunk_transcription_sync, chunk_task, ch, delivery_tag)
             self.active_chunks[delivery_tag] = future
+            
+            logger.info(f"🚀 Chunk {chunk_index+1}/{total_chunks} submitted to thread pool (total active: {len(self.active_chunks)})")
             
             # Acknowledge message ทันที (ไม่รอให้เสร็จ) เพื่อให้ worker รับ message ใหม่ได้
             # ⚠️ หมายเหตุ: ถ้า task fail จะไม่สามารถ requeue ได้ แต่จะบันทึก error ใน storage
             try:
                 if ch and not ch.is_closed:
                     ch.basic_ack(delivery_tag=delivery_tag)
-                    logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} acknowledged - processing in background")
+                    logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} acknowledged - processing in background (active: {len(self.active_chunks)})")
                 else:
                     logger.warning(f"⚠️ Channel is closed, cannot acknowledge chunk task")
             except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
@@ -883,21 +904,30 @@ class VideoWorker:
     
     def _execute_chunk_transcription_sync(self, chunk_task: Dict[str, Any], ch, delivery_tag):
         """Execute chunk transcription in a synchronous way (for ThreadPoolExecutor)"""
+        chunk_index = chunk_task.get('chunk_index', 0)
+        total_chunks = chunk_task.get('total_chunks', 0)
+        parent_task_id = chunk_task.get('parent_task_id', 'unknown')
+        thread_name = threading.current_thread().name
+        
+        logger.info(f"🔄 [Thread {thread_name}] Starting chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
+        
         try:
             # สร้าง event loop ใหม่สำหรับ thread นี้
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(self._execute_chunk_transcription(chunk_task))
+                logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
             finally:
                 loop.close()
             
             # Clean up
             if delivery_tag in self.active_chunks:
                 del self.active_chunks[delivery_tag]
+                logger.info(f"🧹 [Thread {thread_name}] Cleaned up chunk {chunk_index+1} (remaining active: {len(self.active_chunks)})")
                 
         except Exception as e:
-            logger.error(f"❌ Error in chunk transcription thread: {e}", exc_info=True)
+            logger.error(f"❌ [Thread {thread_name}] Error in chunk {chunk_index+1} transcription: {e}", exc_info=True)
             # Clean up
             if delivery_tag in self.active_chunks:
                 del self.active_chunks[delivery_tag]
