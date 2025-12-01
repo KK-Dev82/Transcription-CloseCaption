@@ -209,8 +209,9 @@ class FasterWhisperProvider(WhisperProvider):
         start_time = time.time()
         try:
             # Transcribe with faster-whisper
-            # Note: faster-whisper 1.0.3 ไม่รองรับ batch_size parameter ใน transcribe()
-            # batch_size จะถูกจัดการโดย CTranslate2 internally
+            # Note: faster-whisper 1.0.3 รองรับเฉพาะ parameters หลักๆ
+            # Parameters ที่ไม่รองรับ: batch_size, logprob_threshold, compression_ratio_threshold, 
+            # best_of, patience, length_penalty, suppress_tokens, max_initial_timestamp
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,
@@ -225,14 +226,7 @@ class FasterWhisperProvider(WhisperProvider):
                 word_timestamps=False,  # ไม่ใช้ word-level timestamps
                 initial_prompt=None,  # ไม่ใช้ initial prompt
                 no_speech_threshold=0.6,
-                logprob_threshold=-1.0,
-                compression_ratio_threshold=2.4,
-                best_of=1,  # Greedy decoding
-                patience=1.0,
-                length_penalty=1.0,
-                suppress_tokens="-1",
                 without_timestamps=False,  # ยังคงใช้ timestamps (สำหรับ segments)
-                max_initial_timestamp=1.0,
             )
             
             processing_time = time.time() - start_time
