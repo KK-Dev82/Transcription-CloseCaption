@@ -63,6 +63,8 @@ echo ""
 
 # Test RabbitMQ connection
 print_status "Testing RabbitMQ connection..."
+USE_MGMT_API=false
+
 if curl -s -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" "http://${RABBITMQ_HOST}:${RABBITMQ_MGMT_PORT}/api/overview" > /dev/null 2>&1; then
     print_status "✅ RabbitMQ Management API accessible"
     USE_MGMT_API=true
@@ -71,10 +73,7 @@ else
     print_warning "   Trying to check queues using Python/pika instead..."
     
     # Fallback to Python/pika
-    if ! python3 << 'PYTHON_EOF' 2>/dev/null; then
-        print_error "Cannot connect to RabbitMQ"
-        exit 1
-    fi
+    python3 << 'PYTHON_EOF' 2>/dev/null
 import pika
 import sys
 import json
@@ -124,10 +123,13 @@ except Exception as e:
     print(f"❌ Connection failed: {e}")
     sys.exit(1)
 PYTHON_EOF
-    then
-        exit 0
+    
+    PYTHON_EXIT_CODE=$?
+    if [ $PYTHON_EXIT_CODE -ne 0 ]; then
+        print_error "Cannot connect to RabbitMQ"
+        exit 1
     fi
-    USE_MGMT_API=false
+    exit 0
 fi
 
 # If using Management API, continue with curl-based checks

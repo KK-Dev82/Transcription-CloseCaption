@@ -48,6 +48,7 @@ class VideoWorker:
         self.convert_queue = 'video_convert_queue'
         self.resize_queue = 'video_resize_queue'
         self.transcription_queue = 'transcription_queue'
+        self.transcription_chunk_queue = 'transcription_chunk_queue'
         self.audio_chunk_extracted_queue = 'media.audio.chunk.extracted'
         
         # Transcription exchange
@@ -110,6 +111,7 @@ class VideoWorker:
                 self.channel.queue_declare(queue=self.convert_queue, durable=True)
                 self.channel.queue_declare(queue=self.resize_queue, durable=True)
                 self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+                self.channel.queue_declare(queue=self.transcription_chunk_queue, durable=True)
                 
                 # Queue สำหรับ audio chunk extracted (จาก Backend)
                 self.channel.queue_declare(
@@ -123,10 +125,10 @@ class VideoWorker:
                 )
                 
                 # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
-                # prefetch_count=3 หมายความว่าแต่ละ worker จะรับงานได้ 3 งานพร้อมกัน
-                # เมื่อมี 2 workers → สามารถประมวลผลได้ 6 งานพร้อมกัน
-                # ⚠️ ปรับตาม server resources: 4 cores, 8GB RAM
-                self.channel.basic_qos(prefetch_count=3)
+                # prefetch_count=5 หมายความว่าแต่ละ worker จะรับงานได้ 5 งานพร้อมกัน (chunks)
+                # เมื่อมี 2 workers → สามารถประมวลผลได้ 10 chunks พร้อมกัน
+                # ⚠️ ปรับตาม server resources: RTX 4080 Super, 16GB VRAM
+                self.channel.basic_qos(prefetch_count=5)
                 
                 logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
                 return True
@@ -190,9 +192,17 @@ class VideoWorker:
             auto_ack=False
         )
         
+        # Transcription chunk consumer (สำหรับ parallel processing)
+        self.channel.basic_consume(
+            queue=self.transcription_chunk_queue,
+            on_message_callback=self._process_chunk_transcription_task,
+            auto_ack=False
+        )
+        
         logger.info("ตั้งค่า consumers เสร็จสิ้น")
         logger.info(f"📋 Listening to queues:")
         logger.info(f"   - {self.transcription_queue}")
+        logger.info(f"   - {self.transcription_chunk_queue}")
         logger.info(f"   - {self.trim_queue}")
         logger.info(f"   - {self.merge_queue}")
         logger.info(f"   - {self.convert_queue}")
@@ -810,6 +820,140 @@ class VideoWorker:
             except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
                     pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
                 logger.error(f"ไม่สามารถ nack audio chunk task ได้: {ack_error}")
+    
+    def _process_chunk_transcription_task(self, ch, method, properties, body):
+        """ประมวลผล chunk transcription task (สำหรับ parallel processing)"""
+        try:
+            chunk_task = json.loads(body.decode('utf-8'))
+            parent_task_id = chunk_task.get('parent_task_id')
+            chunk_path = chunk_task.get('chunk_path')
+            chunk_index = chunk_task.get('chunk_index', 0)
+            total_chunks = chunk_task.get('total_chunks', 0)
+            model_size = chunk_task.get('model_size', 'base')
+            language = chunk_task.get('language', 'th')
+            
+            logger.info(f"🎬 Processing chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
+            logger.info(f"   Chunk path: {chunk_path}")
+            logger.info(f"   Model: {model_size}, Language: {language}")
+            
+            # ประมวลผล chunk transcription
+            asyncio.run(self._execute_chunk_transcription(chunk_task))
+            
+            # Acknowledge message
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                    logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} completed for task {parent_task_id}")
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot acknowledge chunk task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"❌ Cannot acknowledge chunk task: {ack_error}")
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล chunk transcription: {e}", exc_info=True)
+            # Requeue เพื่อให้ worker อื่นลองประมวลผล
+            try:
+                if ch and not ch.is_closed:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                else:
+                    logger.warning(f"⚠️ Channel is closed, cannot nack chunk task")
+            except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
+                    pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
+                logger.error(f"ไม่สามารถ nack chunk task ได้: {ack_error}")
+    
+    async def _execute_chunk_transcription(self, chunk_task: Dict[str, Any]):
+        """ดำเนินการ transcribe chunk"""
+        try:
+            parent_task_id = chunk_task.get('parent_task_id')
+            chunk_path = chunk_task.get('chunk_path')
+            chunk_index = chunk_task.get('chunk_index', 0)
+            total_chunks = chunk_task.get('total_chunks', 0)
+            model_size = chunk_task.get('model_size', 'base')
+            language = chunk_task.get('language', 'th')
+            chunk_duration = chunk_task.get('chunk_duration', 30)
+            
+            # ตรวจสอบไฟล์ chunk
+            chunk_file = Path(chunk_path)
+            if not chunk_file.exists():
+                raise FileNotFoundError(f"Chunk file not found: {chunk_path}")
+            
+            # Transcribe chunk
+            logger.info(f"📝 Transcribing chunk {chunk_index+1}/{total_chunks}...")
+            result = self.transcription_service.whisper_service.transcribe_file(
+                str(chunk_path),
+                model_size,
+                language,
+                use_thai_processor=True
+            )
+            
+            if not result or not result.get('text'):
+                logger.warning(f"⚠️ Chunk {chunk_index+1} returned empty result")
+                result = {"text": "", "segments": []}
+            
+            # คำนวณ start_time และ end_time
+            start_time = chunk_index * chunk_duration
+            end_time = start_time + chunk_duration
+            
+            # สร้าง chunk data
+            chunk_data = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "text": result.get("text", ""),
+                "segments": result.get("segments", []),
+                "confidence": result.get("avg_logprob"),
+                "processing_time": result.get("processing_time", 0)
+            }
+            
+            # บันทึก chunk result ลง storage
+            self._save_chunk_result(parent_task_id, chunk_index, chunk_data, total_chunks)
+            
+            logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} transcribed: text length={len(chunk_data['text'])}, segments={len(chunk_data['segments'])}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error transcribing chunk {chunk_index+1}: {e}", exc_info=True)
+            raise
+    
+    def _save_chunk_result(self, parent_task_id: str, chunk_index: int, chunk_data: Dict, total_chunks: int):
+        """บันทึกผลลัพธ์ของ chunk ลง storage"""
+        try:
+            # Load parent task
+            parent_task = self.json_storage.get_transcription(parent_task_id)
+            if not parent_task:
+                logger.error(f"Parent task {parent_task_id} not found")
+                return
+            
+            # Initialize chunks array if not exists
+            if 'chunks' not in parent_task:
+                parent_task['chunks'] = [None] * total_chunks
+            
+            # Ensure chunks array has correct size
+            while len(parent_task['chunks']) < total_chunks:
+                parent_task['chunks'].append(None)
+            
+            # Save chunk result
+            parent_task['chunks'][chunk_index] = chunk_data
+            
+            # Update progress
+            completed_chunks = sum(1 for c in parent_task['chunks'] if c is not None)
+            progress = 10 + int((completed_chunks / total_chunks) * 80)  # 10-90%
+            parent_task['progress'] = progress
+            parent_task['status'] = f"processing_chunk_{completed_chunks}_of_{total_chunks}"
+            
+            # Save to storage
+            self.json_storage.save_transcription(parent_task_id, parent_task)
+            
+            logger.info(f"💾 Saved chunk {chunk_index+1}/{total_chunks} - Progress: {progress}% ({completed_chunks}/{total_chunks} completed)")
+            
+            # Check if all chunks completed
+            if completed_chunks >= total_chunks:
+                logger.info(f"🎉 All chunks completed for task {parent_task_id}!")
+                parent_task['status'] = 'merging_results'
+                parent_task['progress'] = 90
+                self.json_storage.save_transcription(parent_task_id, parent_task)
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving chunk result: {e}", exc_info=True)
     
     async def _execute_audio_chunk_transcription(self, message_data: Dict[str, Any]):
         """ดำเนินการ transcribe audio chunk"""
