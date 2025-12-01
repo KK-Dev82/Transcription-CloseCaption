@@ -495,12 +495,17 @@ class TranscriptionService:
             
             logger.info(f"📊 Found {len(chunk_results)} valid chunks out of {len(stored_chunks)} total")
             
+            # เรียง chunks ตาม chunk_index (start_time) เพื่อให้ได้ลำดับที่ถูกต้อง (1,2,3,4...)
+            # แม้ว่า workers จะประมวลผล parallel และเสร็จไม่ตามลำดับ แต่เราจะเรียงผลลัพธ์ตามลำดับ
+            chunk_results_sorted = sorted(chunk_results, key=lambda c: c.get('start_time', 0))
+            logger.info(f"✅ Sorted {len(chunk_results_sorted)} chunks by start_time (order: 1,2,3,4...)")
+            
             # เก็บ partial results
             partial_text = ""
             partial_chunks = []
             
-            # Process chunks ที่ได้จาก storage (chunks ถูกประมวลผลโดย workers แล้ว)
-            for i, chunk_data in enumerate(chunk_results):
+            # Process chunks ที่ได้จาก storage (เรียงตามลำดับแล้ว)
+            for i, chunk_data in enumerate(chunk_results_sorted):
                 try:
                     # chunk_data มาจาก storage ที่ workers บันทึกไว้แล้ว
                     if not isinstance(chunk_data, dict):
