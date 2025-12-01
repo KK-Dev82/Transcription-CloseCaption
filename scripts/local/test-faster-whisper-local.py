@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Script สำหรับทดสอบ Direct Transcription (ไม่ผ่าน RabbitMQ)
-- Extract audio จาก video (ถ้าเป็น video)
-- ส่งให้ faster-whisper แปลงเลย
-- ดู GPU utilization และผลลัพธ์
+Script สำหรับทดสอบ faster-whisper ที่ Local (ไม่ต้องใช้ GPU)
+- ใช้ CPU mode
+- ทดสอบการแปลงเสียงเป็นภาษาไทย
 """
 
 import sys
@@ -13,34 +12,41 @@ import asyncio
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.services.video_service import VideoService
+# Set environment variables for CPU mode
+os.environ['WHISPER_PROVIDER'] = 'faster-whisper'
+os.environ['WHISPER_DEVICE'] = 'cpu'  # ใช้ CPU สำหรับ local testing
+os.environ['WHISPER_MODEL'] = 'base'  # ใช้ base model (เล็กกว่า medium) สำหรับ local
+os.environ['WHISPER_COMPUTE_TYPE'] = 'float32'  # CPU ใช้ float32
+
 from app.services.whisper_service import WhisperService
 from app.services.file_service import FileService
+from app.services.video_service import VideoService
 
-async def test_direct_transcription(video_path: str, language: str = "th", model_size: str = "medium"):
+async def test_faster_whisper_local(audio_path: str, language: str = "th", model_size: str = "base"):
     """
-    ทดสอบ Direct Transcription
+    ทดสอบ faster-whisper ที่ local (CPU mode)
     
     Args:
-        video_path: Path ไปยังไฟล์ video/audio
+        audio_path: Path ไปยังไฟล์ audio/video
         language: ภาษา (default: th)
-        model_size: ขนาด model (default: medium)
+        model_size: ขนาด model (default: base สำหรับ CPU)
     """
     print("=" * 80)
-    print("🧪 Direct Transcription Test (Bypass RabbitMQ)")
+    print("🧪 Faster-Whisper Local Test (CPU Mode)")
     print("=" * 80)
-    print(f"📁 File: {video_path}")
+    print(f"📁 File: {audio_path}")
     print(f"🌍 Language: {language}")
     print(f"📦 Model: {model_size}")
+    print(f"🖥️  Device: CPU (local testing)")
     print()
     
-    video_path_obj = Path(video_path)
-    if not video_path_obj.exists():
-        print(f"❌ File not found: {video_path}")
-        return
+    audio_path_obj = Path(audio_path)
+    if not audio_path_obj.exists():
+        print(f"❌ File not found: {audio_path}")
+        return None
     
     # Initialize services
     file_service = FileService()
@@ -51,32 +57,32 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
     
     try:
         # Step 1: Extract audio (ถ้าเป็น video)
-        print("🎬 Step 1: Extracting audio...")
-        audio_extract_start = time.time()
+        print("🎬 Step 1: Checking file type...")
+        is_video = file_service.is_video_file(str(audio_path_obj))
         
-        is_video = file_service.is_video_file(str(video_path_obj))
         if is_video:
-            # Extract audio
+            print("   📹 File is video - extracting audio...")
+            audio_extract_start = time.time()
             audio_path = video_service.extract_audio(
-                str(video_path_obj),
-                output_path=str(video_path_obj.parent / f"{video_path_obj.stem}_direct_audio.wav")
+                str(audio_path_obj),
+                output_path=str(audio_path_obj.parent / f"{audio_path_obj.stem}_test_audio.wav")
             )
             audio_extract_time = time.time() - audio_extract_start
             print(f"✅ Audio extracted in {audio_extract_time:.2f}s")
             print(f"   Output: {audio_path}")
         else:
-            audio_path = str(video_path_obj)
+            audio_path = str(audio_path_obj)
             print(f"✅ File is already audio: {audio_path}")
             audio_extract_time = 0
         
         print()
         
         # Step 2: Direct Transcription with faster-whisper
-        print("🎯 Step 2: Direct Transcription with faster-whisper...")
+        print("🎯 Step 2: Starting transcription with faster-whisper...")
+        print("   (This may take a while on CPU...)")
         transcription_start = time.time()
         
-        # transcribe_file is not async, but uses async internally
-        result = whisper_service.transcribe_file(
+        result = await whisper_service.transcribe_file(
             audio_path,
             language=language,
             model_size=model_size
@@ -98,23 +104,27 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
         print(f"🌍 Language: {result.get('language', 'N/A')}")
         print(f"🔧 Provider: {result.get('provider', 'N/A')}")
         print(f"📦 Model: {result.get('model', 'N/A')}")
+        print(f"⏱️  Processing Time: {result.get('processing_time', 'N/A')}s")
         print()
         print("=" * 80)
-        print("📄 Transcription Result:")
+        print("📄 Transcription Result (First 500 chars):")
         print("=" * 80)
-        print(result.get('text', ''))
+        text = result.get('text', '')
+        print(text[:500])
+        if len(text) > 500:
+            print(f"... ({len(text) - 500} more characters)")
         print()
         print("=" * 80)
-        print("📦 Segments:")
+        print("📦 First 5 Segments:")
         print("=" * 80)
-        for i, segment in enumerate(result.get('segments', [])[:10], 1):  # Show first 10 segments
+        for i, segment in enumerate(result.get('segments', [])[:5], 1):
             print(f"{i}. [{segment.get('start', 0):.2f}s - {segment.get('end', 0):.2f}s]: {segment.get('text', '')[:80]}")
-        if len(result.get('segments', [])) > 10:
-            print(f"... and {len(result.get('segments', [])) - 10} more segments")
+        if len(result.get('segments', [])) > 5:
+            print(f"... and {len(result.get('segments', [])) - 5} more segments")
         print()
         
         # Cleanup
-        if is_video and Path(audio_path).exists() and audio_path != str(video_path_obj):
+        if is_video and Path(audio_path).exists() and audio_path != str(audio_path_obj):
             try:
                 Path(audio_path).unlink()
                 print(f"🧹 Cleaned up temporary audio file: {audio_path}")
@@ -132,16 +142,19 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
 def main():
     """Main function"""
     if len(sys.argv) < 2:
-        print("Usage: python3 test-direct-transcription.py <video_path> [language] [model_size]")
-        print("Example: python3 test-direct-transcription.py uploads/v05-1.mp4 th medium")
+        print("Usage: python3 test-faster-whisper-local.py <audio/video_path> [language] [model_size]")
+        print("Example: python3 test-faster-whisper-local.py uploads/test.mp4 th base")
+        print()
+        print("Note: For local testing, use 'base' model (smaller, faster on CPU)")
+        print("      GPU models (medium, large) will be very slow on CPU")
         sys.exit(1)
     
-    video_path = sys.argv[1]
+    audio_path = sys.argv[1]
     language = sys.argv[2] if len(sys.argv) > 2 else "th"
-    model_size = sys.argv[3] if len(sys.argv) > 3 else "medium"
+    model_size = sys.argv[3] if len(sys.argv) > 3 else "base"
     
     # Run async function
-    result = asyncio.run(test_direct_transcription(video_path, language, model_size))
+    result = asyncio.run(test_faster_whisper_local(audio_path, language, model_size))
     
     if result:
         print("✅ Test completed successfully!")
