@@ -18,6 +18,7 @@ sys.path.insert(0, str(project_root))
 
 from app.services.video_service import VideoService
 from app.services.whisper_service import WhisperService
+from app.services.file_service import FileService
 
 async def test_direct_transcription(video_path: str, language: str = "th", model_size: str = "medium"):
     """
@@ -42,6 +43,7 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
         return
     
     # Initialize services
+    file_service = FileService()
     video_service = VideoService()
     whisper_service = WhisperService()
     
@@ -52,7 +54,7 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
         print("🎬 Step 1: Extracting audio...")
         audio_extract_start = time.time()
         
-        is_video = video_service.is_video_file(str(video_path_obj))
+        is_video = file_service.is_video_file(str(video_path_obj))
         if is_video:
             # Extract audio
             audio_path = video_service.extract_audio(
