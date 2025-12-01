@@ -66,6 +66,10 @@ WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
 # Note: WHISPER_API_URL ไม่จำเป็นสำหรับ openai-whisper provider
 CUDA_VISIBLE_DEVICES=0
 WHISPER_CUBLAS=1
+# Parallel Processing Configuration
+WHISPER_USE_THREAD_LOCAL=true
+TRANSCRIPTION_MAX_WORKERS=5
+TRANSCRIPTION_PREFETCH_COUNT=20
 EOF
     print_success "✅ Created .env.runpod"
 fi
