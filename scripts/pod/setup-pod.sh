@@ -60,16 +60,21 @@ RABBITMQ_PORT=5672
 RABBITMQ_USER=senate
 RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
 REDIS_URL=redis://localhost:6379
-WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
-WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
+WHISPER_PROVIDER=${WHISPER_PROVIDER:-faster-whisper}
+WHISPER_MODEL=${WHISPER_MODEL:-medium}
 WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
-# Note: WHISPER_API_URL ไม่จำเป็นสำหรับ openai-whisper provider
+WHISPER_COMPUTE_TYPE=float16
+WHISPER_BATCH_SIZE=16
+# Note: WHISPER_API_URL ไม่จำเป็นสำหรับ faster-whisper และ openai-whisper provider
 CUDA_VISIBLE_DEVICES=0
 WHISPER_CUBLAS=1
 # Parallel Processing Configuration
-WHISPER_USE_THREAD_LOCAL=true
-TRANSCRIPTION_MAX_WORKERS=5
-TRANSCRIPTION_PREFETCH_COUNT=20
+WHISPER_USE_THREAD_LOCAL=false
+TRANSCRIPTION_MAX_WORKERS=1
+TRANSCRIPTION_CHUNK_DURATION=90
+TRANSCRIPTION_PREFETCH_COUNT=100
+# Simplified Flow (ไม่ chunk โดย default)
+USE_CHUNKING=false
 EOF
     print_success "✅ Created .env.runpod"
 fi
@@ -99,6 +104,11 @@ for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika; do
         MISSING_DEPS+=("$dep")
     fi
 done
+
+# Check faster-whisper separately (import name is 'faster_whisper')
+if ! python3 -c "import faster_whisper" 2>/dev/null; then
+    MISSING_DEPS+=("faster-whisper")
+fi
 
 # Check python-dotenv separately (import name is 'dotenv')
 if ! python3 -c "import dotenv" 2>/dev/null; then
@@ -133,6 +143,12 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     else
         print_error "   ❌ python-dotenv (missing)"
     fi
+    # Check faster-whisper separately
+    if python3 -c "import faster_whisper" 2>/dev/null; then
+        print_success "   ✅ faster-whisper"
+    else
+        print_error "   ❌ faster-whisper (missing)"
+    fi
     
     touch .deps_installed
     print_success "✅ Dependencies installed"
@@ -155,9 +171,45 @@ if [ -f ".env.runpod" ]; then
     set +a
 fi
 
-WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+WHISPER_PROVIDER=${WHISPER_PROVIDER:-faster-whisper}
 
-if [ "$WHISPER_PROVIDER" = "openai-whisper" ]; then
+if [ "$WHISPER_PROVIDER" = "faster-whisper" ]; then
+    # Check faster-whisper models (stored in ~/.cache/huggingface/hub/ by default)
+    print_status "Checking faster-whisper models..."
+    WHISPER_CACHE_DIR=${WHISPER_DOWNLOAD_ROOT:-~/.cache/huggingface/hub}
+    MODEL_FOUND=""
+    
+    # Check for common model directories
+    for model_name in "medium" "large-v3" "large-v2" "large" "small" "base" "tiny"; do
+        # faster-whisper models are stored in directories like:
+        # ~/.cache/huggingface/hub/models--guillaumekln--faster-whisper-{model_name}/
+        MODEL_PATTERN="*faster-whisper-${model_name}*"
+        MODEL_PATH=$(find "$WHISPER_CACHE_DIR" -type d -name "$MODEL_PATTERN" 2>/dev/null | head -1)
+        
+        if [ -n "$MODEL_PATH" ] && [ -d "$MODEL_PATH" ]; then
+            MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1)
+            MODEL_FOUND="$model_name"
+            print_success "✅ Found faster-whisper model: $model_name ($MODEL_SIZE)"
+            break
+        fi
+    done
+    
+    if [ -z "$MODEL_FOUND" ]; then
+        print_warning "⚠️  No faster-whisper model found in $WHISPER_CACHE_DIR"
+        print_status "💡 Models will be downloaded automatically on first use"
+        echo ""
+        echo "Available models (will be auto-downloaded):"
+        echo "  - tiny: Fastest, lowest accuracy (~39M parameters)"
+        echo "  - base: Fast, medium accuracy (~74M parameters)"
+        echo "  - small: Balanced (~244M parameters)"
+        echo "  - medium: Better accuracy (~769M parameters) ⭐ แนะนำสำหรับ RTX 4080"
+        echo "  - large-v3: Best accuracy, slowest (~1550M parameters)"
+        echo ""
+        print_status "💡 To pre-download a model, run:"
+        echo "   python3 -c 'from faster_whisper import WhisperModel; WhisperModel(\"medium\")'"
+    fi
+    
+elif [ "$WHISPER_PROVIDER" = "openai-whisper" ]; then
     # Check openai-whisper models (stored in ~/.cache/whisper/ by default)
     print_status "Checking openai-whisper models..."
     WHISPER_CACHE_DIR=${WHISPER_DOWNLOAD_ROOT:-~/.cache/whisper}
