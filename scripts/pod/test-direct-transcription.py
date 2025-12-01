@@ -18,7 +18,6 @@ sys.path.insert(0, str(project_root))
 
 from app.services.video_service import VideoService
 from app.services.whisper_service import WhisperService
-from app.services.whisper_providers.provider_factory import ProviderFactory
 
 async def test_direct_transcription(video_path: str, language: str = "th", model_size: str = "medium"):
     """
