@@ -961,12 +961,25 @@ class VideoWorker:
             
             # Transcribe chunk
             logger.info(f"📝 Transcribing chunk {chunk_index+1}/{total_chunks}...")
-            result = self.transcription_service.whisper_service.transcribe_file(
+            # ใช้ await provider.transcribe() โดยตรง (ไม่ผ่าน transcribe_file) เพื่อหลีกเลี่ยง event loop conflict
+            transcription_result = await self.transcription_service.whisper_service.provider.transcribe(
                 str(chunk_path),
-                model_size,
                 language,
-                use_thai_processor=True
+                model_size
             )
+            
+            # Convert TranscriptionResult to dict format
+            result = {
+                "text": transcription_result.text,
+                "segments": transcription_result.segments,
+                "provider": transcription_result.provider,
+                "model": transcription_result.model,
+                "processing_time": transcription_result.processing_time
+            }
+            
+            # Apply Thai processing if needed
+            if language == "th":
+                result = self.transcription_service.whisper_service._apply_thai_processing(result)
             
             if not result or not result.get('text'):
                 logger.warning(f"⚠️ Chunk {chunk_index+1} returned empty result")
