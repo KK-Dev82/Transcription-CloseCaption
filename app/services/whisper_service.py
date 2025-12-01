@@ -182,14 +182,11 @@ class WhisperService:
     
     def _run_async_transcribe(self, audio_path: str, language: str, model_size: str) -> TranscriptionResult:
         """Helper method to run async transcribe in a new event loop (for thread execution)"""
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            return loop.run_until_complete(
-                self.provider.transcribe(audio_path, language, model_size)
-            )
-        finally:
-            loop.close()
+        # ใช้ asyncio.run() แทน loop.run_until_complete() เพื่อป้องกัน event loop conflict
+        # asyncio.run() จะสร้าง event loop ใหม่และปิดอัตโนมัติ
+        return asyncio.run(
+            self.provider.transcribe(audio_path, language, model_size)
+        )
     
     def transcribe_file_legacy(self, audio_path: str, model_size: str = "base", 
                        language: str = "th", output_format: str = "json", 

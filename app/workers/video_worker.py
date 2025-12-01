@@ -58,8 +58,13 @@ class VideoWorker:
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
         
         # Thread pool สำหรับ parallel chunk processing
-        # RTX 4080 Super สามารถประมวลผลได้ 10-15 chunks พร้อมกัน
-        self.executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="chunk_worker")
+        # ⚠️ ลด max_workers เป็น 3-5 เพื่อป้องกัน CUDA OOM (แต่ละ thread ใช้ GPU memory)
+        # RTX 4080 Super 16GB → สามารถประมวลผลได้ 3-5 chunks พร้อมกัน (ขึ้นอยู่กับ model size)
+        # medium model ~2.4GB → 3-4 chunks พร้อมกัน
+        # large model ~3GB → 2-3 chunks พร้อมกัน
+        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '3'))
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="chunk_worker")
+        logger.info(f"🔧 ThreadPoolExecutor initialized with {max_workers} workers")
         self.active_chunks = {}  # Track active chunk tasks: {delivery_tag: future}
         
         # Setup signal handlers
@@ -159,9 +164,11 @@ class VideoWorker:
         """ตั้งค่า consumers สำหรับแต่ละ queue"""
         # ตั้งค่า QoS สำหรับ transcription_chunk_queue ก่อน consume
         # ⚠️ ต้องเรียก basic_qos ก่อน basic_consume สำหรับ queue นี้
-        # prefetch_count=10 หมายความว่า worker จะรับ message ได้ 10 ตัวพร้อมกัน
-        self.channel.basic_qos(prefetch_count=10, prefetch_size=0, global_qos=False)
-        logger.info("✅ Set QoS: prefetch_count=10 for transcription_chunk_queue")
+        # prefetch_count=3-5 หมายความว่า worker จะรับ message ได้ 3-5 ตัวพร้อมกัน (ลดลงเพื่อป้องกัน CUDA OOM)
+        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '3'))
+        prefetch_count = max_workers  # ตั้ง prefetch_count ให้เท่ากับ max_workers
+        self.channel.basic_qos(prefetch_count=prefetch_count, prefetch_size=0, global_qos=False)
+        logger.info(f"✅ Set QoS: prefetch_count={prefetch_count} for transcription_chunk_queue (max_workers={max_workers})")
         
         # Trim video consumer
         self.channel.basic_consume(
@@ -912,14 +919,10 @@ class VideoWorker:
         logger.info(f"🔄 [Thread {thread_name}] Starting chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
         
         try:
-            # สร้าง event loop ใหม่สำหรับ thread นี้
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self._execute_chunk_transcription(chunk_task))
-                logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
-            finally:
-                loop.close()
+            # ใช้ asyncio.run() แทน loop.run_until_complete() เพื่อป้องกัน event loop conflict
+            # asyncio.run() จะสร้าง event loop ใหม่และปิดอัตโนมัติ
+            asyncio.run(self._execute_chunk_transcription(chunk_task))
+            logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
             
             # Clean up
             if delivery_tag in self.active_chunks:
