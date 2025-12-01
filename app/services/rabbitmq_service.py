@@ -34,6 +34,7 @@ class RabbitMQService:
         self.merge_queue = 'video_merge_queue'
         self.convert_queue = 'video_convert_queue'
         self.transcription_queue = 'transcription_queue'
+        self.transcription_chunk_queue = 'transcription_chunk_queue'
         self.resize_queue = 'video_resize_queue'
     
     def _connect(self):
@@ -58,6 +59,7 @@ class RabbitMQService:
             self.channel.queue_declare(queue=self.convert_queue, durable=True)
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
             self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+            self.channel.queue_declare(queue=self.transcription_chunk_queue, durable=True)
             
             logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
             
@@ -214,6 +216,49 @@ class RabbitMQService:
                             self.json_storage.save_transcription(task_id, task_data)
                         except Exception as save_error:
                             logger.error(f"ไม่สามารถบันทึก failed task: {save_error}")
+                    raise
+    
+    def send_chunk_transcription_task(self, chunk_task: Dict[str, Any]) -> str:
+        """ส่ง chunk transcription task ไปยัง queue สำหรับ parallel processing"""
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        chunk_task_id = chunk_task.get('task_id')
+        if not chunk_task_id:
+            chunk_task_id = str(uuid.uuid4())
+            chunk_task['task_id'] = chunk_task_id
+        
+        for attempt in range(max_retries):
+            try:
+                self._ensure_connection()
+                
+                # ส่งไปยัง transcription_chunk_queue
+                logger.info(f"📤 Publishing chunk task to queue: {self.transcription_chunk_queue}")
+                logger.info(f"   Chunk Task ID: {chunk_task_id}")
+                logger.info(f"   Parent Task ID: {chunk_task.get('parent_task_id')}")
+                logger.info(f"   Chunk Index: {chunk_task.get('chunk_index')}/{chunk_task.get('total_chunks')}")
+                
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=self.transcription_chunk_queue,
+                    body=json.dumps(chunk_task),
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Persistent
+                        content_type='application/json'
+                    )
+                )
+                
+                logger.info(f"✅ ส่ง chunk task ไปยัง queue สำเร็จ: {chunk_task_id}")
+                return chunk_task_id
+                
+            except Exception as e:
+                logger.error(f"❌ Attempt {attempt + 1}/{max_retries} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    self._reset_connection()
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    logger.error(f"❌ ไม่สามารถส่ง chunk task ได้หลังจาก retry {max_retries} ครั้ง: {e}")
                     raise
     
     def send_merge_task(self, input_files: list, output_format: str = "mp4",

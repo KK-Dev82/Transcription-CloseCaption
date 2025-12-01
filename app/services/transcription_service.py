@@ -358,90 +358,133 @@ class TranscriptionService:
             task.total_duration = file_info.get("duration")
             logger.info(f"📊 File info: duration={task.total_duration}s, size={file_info.get('size', 'N/A')} bytes")
             
-            # แปลงเสียงแต่ละ chunk พร้อม progress tracking
-            logger.info(f"กำลังแปลงเสียง {len(chunks)} chunks...")
-            task.status = "processing"
+            # ส่ง chunks ไปยัง queue สำหรับ parallel processing
+            logger.info(f"📤 ส่ง {len(chunks)} chunks ไปยัง transcription_chunk_queue สำหรับ parallel processing...")
+            task.status = "processing_chunks"
             task.progress = 10  # เริ่มต้น
             self.json_storage.save_transcription(task_id, task.__dict__)
             
-            chunk_results = []
             total_chunks = len(chunks)
+            
+            # ส่งแต่ละ chunk ไปยัง queue
+            for i, chunk_path in enumerate(chunks):
+                chunk_task = {
+                    "task_id": f"{task_id}_chunk_{i}",
+                    "parent_task_id": task_id,
+                    "chunk_path": chunk_path,
+                    "chunk_index": i,
+                    "total_chunks": total_chunks,
+                    "chunk_duration": chunk_duration,
+                    "model_size": model_size,
+                    "language": language,
+                    "file_path": local_file_path,
+                    "file_name": file_name,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                try:
+                    self.rabbitmq_service.send_chunk_transcription_task(chunk_task)
+                    logger.info(f"✅ ส่ง chunk {i+1}/{total_chunks} ไปยัง queue: {chunk_path}")
+                except Exception as e:
+                    logger.error(f"❌ ไม่สามารถส่ง chunk {i+1}/{total_chunks} ไปยัง queue: {e}")
+                    # Continue sending other chunks even if one fails
+            
+            # อัปเดตสถานะ - รอ workers ประมวลผล chunks
+            task.status = "waiting_for_chunks"
+            task.progress = 15
+            self.json_storage.save_transcription(task_id, task.__dict__)
+            logger.info(f"📋 ส่ง chunks ทั้งหมดแล้ว - รอ workers ประมวลผล...")
+            
+            # รอจนกว่าทุก chunks จะเสร็จ (polling)
+            # Note: Workers จะอัปเดต progress และ chunks ใน storage
+            max_wait_time = 3600  # 1 hour max
+            check_interval = 2  # Check every 2 seconds
+            elapsed_time = 0
+            
+            while elapsed_time < max_wait_time:
+                await asyncio.sleep(check_interval)
+                elapsed_time += check_interval
+                
+                # ตรวจสอบสถานะจาก storage
+                stored_data = self.json_storage.load_transcription(task_id)
+                if stored_data:
+                    stored_chunks = stored_data.get('chunks', [])
+                    current_progress = stored_data.get('progress', 0)
+                    current_status = stored_data.get('status', '')
+                    
+                    # นับ chunks ที่เสร็จแล้ว
+                    completed_chunks = sum(1 for c in stored_chunks if c is not None and c.get('text'))
+                    
+                    if completed_chunks >= total_chunks:
+                        logger.info(f"✅ ทุก chunks เสร็จแล้ว ({completed_chunks}/{total_chunks})")
+                        break
+                    
+                    # อัปเดต progress
+                    if current_progress != task.progress or current_status != task.status:
+                        task.progress = current_progress
+                        task.status = current_status
+                        logger.info(f"📊 Progress: {current_progress}% - Status: {current_status} - Chunks: {completed_chunks}/{total_chunks}")
+                else:
+                    logger.warning(f"⚠️  ไม่พบ task {task_id} ใน storage")
+            
+            if elapsed_time >= max_wait_time:
+                logger.error(f"❌ Timeout: ไม่สามารถรอ chunks เสร็จได้ภายใน {max_wait_time} วินาที")
+                task.status = "timeout"
+                task.error_message = f"Timeout waiting for chunks to complete"
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                return
+            
+            # ดึงผลลัพธ์จาก storage
+            stored_data = self.json_storage.load_transcription(task_id)
+            if not stored_data:
+                logger.error(f"❌ ไม่พบ task {task_id} ใน storage หลังจาก chunks เสร็จ")
+                task.status = "failed"
+                task.error_message = "Task data not found after chunks completed"
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                return
+            
+            # รวมผลลัพธ์จาก chunks
+            logger.info("กำลังรวมผลลัพธ์จาก chunks...")
+            stored_chunks = stored_data.get('chunks', [])
+            chunk_results = [c for c in stored_chunks if c is not None]
             
             # เก็บ partial results
             partial_text = ""
             partial_chunks = []
             
-            for i, chunk_path in enumerate(chunks):
+            # Process chunks ที่ได้จาก storage (chunks ถูกประมวลผลโดย workers แล้ว)
+            for i, chunk_data in enumerate(chunk_results):
                 try:
-                    chunk_start_time = time.time()
-                    logger.info(f"กำลังแปลง chunk {i+1}/{total_chunks}: {chunk_path}")
-                    result = self.whisper_service.transcribe_file(
-                        chunk_path, model_size, language, use_thai_processor=True
-                    )
-                    chunk_processing_time = time.time() - chunk_start_time
+                    # chunk_data มาจาก storage ที่ workers บันทึกไว้แล้ว
+                    chunk_text = chunk_data.get("text", "") or ""
+                    chunk_segments = chunk_data.get("segments", []) or []
                     
-                    # Log performance metrics
-                    if result and result.get("processing_time"):
-                        whisper_time = result.get("processing_time", 0)
-                        overhead_time = chunk_processing_time - whisper_time
-                        logger.info(f"⏱️  Chunk {i+1} timing: total={chunk_processing_time:.2f}s, whisper={whisper_time:.2f}s, overhead={overhead_time:.2f}s")
-                    
-                    # Log result details
-                    if result:
-                        result_text = result.get("text", "") or ""
-                        result_segments = result.get("segments", []) or []
-                        logger.info(f"✅ Chunk {i+1} result: text length={len(result_text)}, segments count={len(result_segments)}")
-                        if result_text:
-                            logger.debug(f"   Text preview: {result_text[:100]}...")
-                    else:
-                        logger.warning(f"⚠️  Chunk {i+1} returned empty result")
-                    
-                    chunk_results.append(result)
+                    logger.info(f"📋 Processing stored chunk {i+1}/{total_chunks}: text length={len(chunk_text)}, segments={len(chunk_segments)}")
                     
                     # สร้าง partial results สำหรับ real-time display
-                    if result and "segments" in result and result["segments"]:
-                        for segment in result["segments"]:
-                            start_time = self._normalize_time_value(segment.get("start", 0))
-                            end_time = self._normalize_time_value(segment.get("end", 0))
+                    if chunk_segments:
+                        for segment in chunk_segments:
+                            start_time = self._normalize_time_value(segment.get("start_time", segment.get("start", 0)))
+                            end_time = self._normalize_time_value(segment.get("end_time", segment.get("end", 0)))
                             chunk_obj = {
-                                "start_time": start_time + (i * chunk_duration),
-                                "end_time": end_time + (i * chunk_duration),
+                                "start_time": start_time,
+                                "end_time": end_time,
                                 "text": segment.get("text", ""),
-                                "confidence": segment.get("avg_logprob")
+                                "confidence": segment.get("confidence", segment.get("avg_logprob"))
                             }
                             partial_chunks.append(chunk_obj)
                     
                     # รวมข้อความที่แปลงได้
-                    if result and result.get("text"):
-                        text_value = result.get("text")
-                        if text_value is not None:
-                            # แปลงเป็น string ถ้าไม่ใช่
-                            if not isinstance(text_value, str):
-                                text_value = str(text_value)
-                            
-                            # ใช้ _safe_cat สำหรับการต่อข้อความที่ปลอดภัย
-                            partial_text = self._safe_cat(partial_text, text_value)
-                            partial_text = partial_text.strip()
-                    
-                    # เก็บ partial results ใน task
-                    task.partial_text = partial_text
-                    task.chunks = partial_chunks
-                    
-                    # อัปเดต progress
-                    progress = 10 + int((i + 1) / total_chunks * 80)  # 10-90%
-                    task.progress = progress
-                    task.status = f"processing_chunk_{i+1}_of_{total_chunks}"
-                    self.json_storage.save_transcription(task_id, task.__dict__)
-                    
-                    # 🌐 WebSocket: ส่ง chunk ทันทีที่ประมวลผลเสร็จ (ไม่รอ 25%)
-                    # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
-                    # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
-                    
-                    logger.info(f"เสร็จ chunk {i+1}/{total_chunks} - Progress: {progress}%")
+                    if chunk_text:
+                        partial_text = self._safe_cat(partial_text, chunk_text)
+                        partial_text = partial_text.strip()
                     
                 except Exception as e:
-                    logger.error(f"เกิดข้อผิดพลาดในการแปลง chunk {i}: {e}")
-                    chunk_results.append({"error": str(e)})
+                    logger.error(f"เกิดข้อผิดพลาดในการประมวลผล chunk {i} จาก storage: {e}")
+            
+            # เก็บ partial results ใน task
+            task.partial_text = partial_text
+            task.chunks = partial_chunks
             
             # รวมผลลัพธ์
             logger.info("กำลังรวมผลลัพธ์...")
