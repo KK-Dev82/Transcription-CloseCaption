@@ -598,6 +598,59 @@ class VideoService:
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการบันทึกผลลัพธ์: {str(e)}")
 
+    def extract_audio(self, video_path: str, output_path: str = None) -> str:
+        """
+        Extract audio ทั้งไฟล์จาก video (ไม่ chunk)
+        
+        Args:
+            video_path: Path ไปยังไฟล์ video
+            output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
+            
+        Returns:
+            Path ไปยังไฟล์ audio ที่ extract แล้ว
+        """
+        video_path_obj = Path(video_path)
+        if not video_path_obj.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        # สร้าง output path ถ้าไม่ระบุ
+        if output_path is None:
+            output_dir = video_path_obj.parent / "temp" / f"audio_{int(time.time())}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = str(output_dir / f"{video_path_obj.stem}_audio.wav")
+        else:
+            output_path_obj = Path(output_path)
+            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"🎬 กำลัง extract audio จาก video: {video_path}")
+        logger.info(f"   Output: {output_path}")
+        
+        try:
+            # Extract audio ทั้งไฟล์ (16kHz mono WAV)
+            (
+                ffmpeg
+                .input(video_path)
+                .output(
+                    output_path,
+                    acodec='pcm_s16le',
+                    ac=1,  # Mono
+                    ar=16000  # 16kHz
+                )
+                .overwrite_output()
+                .run(quiet=True, check=True)
+            )
+            
+            logger.info(f"✅ Extract audio สำเร็จ: {output_path}")
+            return output_path
+            
+        except ffmpeg.Error as e:
+            error_message = e.stderr.decode() if e.stderr else str(e)
+            logger.error(f"❌ FFmpeg error: {error_message}")
+            raise Exception(f"ไม่สามารถ extract audio ได้: {error_message}")
+        except Exception as e:
+            logger.error(f"❌ Error extracting audio: {e}")
+            raise
+    
     def extract_audio_from_video(self, video_path: str, output_path: str = None, 
                                 audio_format: str = "wav", sample_rate: int = 16000) -> str:
         """แปลงวิดีโอเป็นไฟล์เสียง"""

@@ -136,6 +136,7 @@ class RabbitMQService:
         language: str = "th",
         model_size: str = "base",
         chunk_duration: int = 30,
+        use_chunking: bool = False,
         callback_url: Optional[str] = None,
         job_id: Optional[int] = None,
         user_id: Optional[str] = None
@@ -165,6 +166,7 @@ class RabbitMQService:
                     "language": language,
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
                     "status": "pending",
                     "created_at": time.time(),
                     "callback_url": callback_url,
