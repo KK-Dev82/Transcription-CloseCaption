@@ -919,10 +919,14 @@ class VideoWorker:
         logger.info(f"🔄 [Thread {thread_name}] Starting chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
         
         try:
-            # ใช้ asyncio.run() แทน loop.run_until_complete() เพื่อป้องกัน event loop conflict
-            # asyncio.run() จะสร้าง event loop ใหม่และปิดอัตโนมัติ
-            asyncio.run(self._execute_chunk_transcription(chunk_task))
-            logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
+            # สร้าง event loop ใหม่สำหรับ thread นี้ (ไม่ใช้ asyncio.run() เพราะอาจมี conflict)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_chunk_transcription(chunk_task))
+                logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
+            finally:
+                loop.close()
             
             # Clean up
             if delivery_tag in self.active_chunks:
