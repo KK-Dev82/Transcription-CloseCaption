@@ -259,19 +259,27 @@ class FasterWhisperProvider(WhisperProvider):
             
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
-            for segment in segments:
-                segment_dict = {
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text.strip()
-                }
-                segments_list.append(segment_dict)
-                text_parts.append(segment.text.strip())
-                segment_count += 1
-                if segment_count % 10 == 0:
-                    logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
-            
-            logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+            try:
+                # Convert segments generator to list immediately to avoid issues
+                segments_list_raw = list(segments)
+                logger.info(f"[Faster Whisper] 🔍 Converted segments generator to list: {len(segments_list_raw)} segments")
+                
+                for segment in segments_list_raw:
+                    segment_dict = {
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": segment.text.strip()
+                    }
+                    segments_list.append(segment_dict)
+                    text_parts.append(segment.text.strip())
+                    segment_count += 1
+                    if segment_count % 10 == 0:
+                        logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                
+                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+            except Exception as seg_error:
+                logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
+                raise
             
             # Combine all text
             text = " ".join(text_parts).strip()
