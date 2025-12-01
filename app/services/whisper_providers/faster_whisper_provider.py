@@ -232,15 +232,15 @@ class FasterWhisperProvider(WhisperProvider):
             # ตามคำแนะนำ: ใช้ compute_type="float16", language="th", vad_filter=True
             # ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
             logger.info(f"[Faster Whisper] 🎯 DEBUG: Calling transcribe() now...")
-            # ใช้ without_timestamps=True เพื่อหลีกเลี่ยงปัญหา segments generator timeout
-            # และ num_workers=1 เพื่อลด concurrency/deadlock issues
+            # ใช้พารามิเตอร์ชุด "สั้นและเสถียร" ตามคำแนะนำ
+            # without_timestamps=True → คืน list แทน generator → ลดโอกาสค้างตอน iterate
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,  # ระบุภาษา ลด overhead
-                beam_size=beam_size,
-                temperature=temperature,
-                condition_on_previous_text=condition_on_previous_text,
-                vad_filter=vad_filter,  # Voice Activity Detection - ตัดเงียบ → เร็วขึ้น
+                beam_size=1,  # ใช้ 1 สำหรับเร็วเสถียร
+                temperature=0.0,  # ใช้ 0.0 สำหรับเร็วเสถียร
+                condition_on_previous_text=False,  # ปิดเพื่อลด overhead
+                vad_filter=vad_filter,  # เปิดได้สำหรับ real-world; ถ้าดีบั๊กปัญหาให้ปิดชั่วคราว
                 vad_parameters=dict(
                     min_silence_duration_ms=500,  # ตามคำแนะนำ
                     threshold=0.5
@@ -248,7 +248,7 @@ class FasterWhisperProvider(WhisperProvider):
                 word_timestamps=False,  # ไม่ใช้ word-level timestamps (ลด overhead)
                 initial_prompt=None,  # ไม่ใช้ initial prompt
                 no_speech_threshold=0.6,
-                without_timestamps=True,  # ใช้ True เพื่อหลีกเลี่ยง generator timeout
+                without_timestamps=True,  # ให้คืน list แทน generator → ลดโอกาสค้าง
             )
             
             processing_time = time.time() - start_time
@@ -266,7 +266,6 @@ class FasterWhisperProvider(WhisperProvider):
             segment_count = 0
             try:
                 # เมื่อใช้ without_timestamps=True, segments จะเป็น list แทน generator
-                # แต่ถ้ายังเป็น generator ให้ iterate ตามปกติ
                 logger.info(f"[Faster Whisper] 🔍 Starting to process segments...")
                 
                 # ตรวจสอบว่า segments เป็น list หรือ generator
@@ -274,8 +273,53 @@ class FasterWhisperProvider(WhisperProvider):
                     logger.info(f"[Faster Whisper] ✅ Segments is list (without_timestamps=True), count: {len(segments)}")
                     segments_iter = segments
                 else:
-                    logger.info(f"[Faster Whisper] 🔍 Segments is generator, iterating...")
-                    segments_iter = segments
+                    logger.info(f"[Faster Whisper] 🔍 Segments is generator, using timeout protection...")
+                    # ใช้ timeout protection สำหรับ generator (กันงานค้างเคสพิเศษ)
+                    import threading
+                    import queue
+                    segments_queue = queue.Queue()
+                    error_queue = queue.Queue()
+                    done_flag = threading.Event()
+                    
+                    def collect_segments():
+                        try:
+                            for seg in segments:
+                                if done_flag.is_set():
+                                    break
+                                segments_queue.put(seg)
+                            segments_queue.put(None)  # Sentinel
+                        except Exception as e:
+                            error_queue.put(e)
+                    
+                    thread = threading.Thread(target=collect_segments, daemon=True)
+                    thread.start()
+                    
+                    # Collect with timeout
+                    timeout = 30.0
+                    start_time = time.time()
+                    segments_list_raw = []
+                    while True:
+                        if time.time() - start_time > timeout:
+                            done_flag.set()
+                            raise TimeoutError(f"Segments collection timeout after {timeout}s")
+                        
+                        try:
+                            seg = segments_queue.get(timeout=1.0)
+                            if seg is None:
+                                break
+                            segments_list_raw.append(seg)
+                        except queue.Empty:
+                            if not thread.is_alive():
+                                try:
+                                    error = error_queue.get_nowait()
+                                    raise error
+                                except queue.Empty:
+                                    break
+                            continue
+                    
+                    done_flag.set()
+                    segments_iter = segments_list_raw
+                    logger.info(f"[Faster Whisper] ✅ Collected {len(segments_iter)} segments from generator")
                 
                 # Process segments
                 for segment in segments_iter:
