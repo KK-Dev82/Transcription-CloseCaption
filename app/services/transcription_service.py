@@ -359,23 +359,36 @@ class TranscriptionService:
                 
                 try:
                     # เรียกใช้ whisper service โดยตรง (ไม่ผ่าน queue)
-                    result = await self.whisper_service.transcribe_file(
+                    # ⚠️ transcribe_file ไม่ใช่ async function แต่ใช้ asyncio.run() ภายใน
+                    logger.info(f"🔍 Calling whisper_service.transcribe_file()...")
+                    result = self.whisper_service.transcribe_file(
                         audio_path,
                         language=language,
                         model_size=model_size
                     )
+                    logger.info(f"✅ whisper_service.transcribe_file() returned")
                     
                     # เก็บผลลัพธ์
-                    task.full_text = result.text
-                    task.language = result.language
-                    task.chunks = result.segments if result.segments else []
-                    task.status = "completed"
-                    task.progress = 100
-                    
-                    logger.info(f"✅ Transcription สำเร็จ: text length={len(result.text)}, segments={len(result.segments)}")
+                    if result:
+                        task.full_text = result.get('text', '') if isinstance(result, dict) else result.text
+                        task.language = result.get('language', language) if isinstance(result, dict) else result.language
+                        task.chunks = result.get('segments', []) if isinstance(result, dict) else (result.segments if result.segments else [])
+                        task.status = "completed"
+                        task.progress = 100
+                        
+                        text_length = len(task.full_text) if task.full_text else 0
+                        chunks_count = len(task.chunks) if task.chunks else 0
+                        logger.info(f"✅ Transcription สำเร็จ: text length={text_length}, segments={chunks_count}")
+                    else:
+                        logger.error(f"❌ Transcription returned None or empty result")
+                        task.status = "failed"
+                        task.error_message = "Transcription returned empty result"
+                        task.progress = 0
                     
                     # บันทึกผลลัพธ์
+                    logger.info(f"💾 Saving transcription result to storage...")
                     self.json_storage.save_transcription(task_id, task.__dict__)
+                    logger.info(f"✅ Transcription saved to storage")
                     
                     # Cleanup temporary audio file (ถ้า extract จาก video)
                     if audio_path != local_file_path and Path(audio_path).exists():
