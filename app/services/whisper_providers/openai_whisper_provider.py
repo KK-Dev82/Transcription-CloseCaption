@@ -254,19 +254,45 @@ class OpenAIWhisperProvider(WhisperProvider):
         # ตรวจสอบว่าใช้ thread-local model หรือไม่
         is_thread_local = use_thread_local and hasattr(_thread_local_models, 'models') and cache_key in getattr(_thread_local_models, 'models', {})
         
+        # Optimization parameters จาก environment variables
+        # ⚡ Greedy decoding (beam_size=1) เพื่อความเร็ว
+        beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))
+        # ⚡ Temperature=0 เพื่อความเสถียรและเร็ว
+        temperature = float(os.getenv('WHISPER_TEMPERATURE', '0'))
+        # ⚡ Condition on previous text=False สำหรับ chunks (ไม่ต้องใช้ context จาก chunk ก่อนหน้า)
+        condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'
+        # ⚡ Batch size สำหรับ GPU (8-32 สำหรับ RTX 4080S)
+        batch_size = int(os.getenv('WHISPER_BATCH_SIZE', '16'))
+        # ⚡ FP16 สำหรับ CUDA
+        fp16 = self.device == 'cuda'
+        
         start_time = time.time()
         try:
             if is_thread_local:
                 # ใช้ thread-local model → ไม่ต้องใช้ lock (แต่ละ thread มี model instance ของตัวเอง)
                 logger.debug(f"[OpenAI Whisper] Using thread-local model (no lock needed) for parallel processing")
-                fp16 = self.device == 'cuda'
                 
                 result = whisper_model.transcribe(
                     str(audio_path_obj),
                     language=lang_code,
                     task="transcribe",
                     verbose=False,  # ไม่แสดง progress bar
-                    fp16=fp16  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
+                    fp16=fp16,  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
+                    beam_size=beam_size,  # Greedy decoding (beam_size=1) เพื่อความเร็ว
+                    temperature=temperature,  # Temperature=0 เพื่อความเสถียร
+                    condition_on_previous_text=condition_on_previous_text,  # ไม่ใช้ context จาก chunk ก่อนหน้า
+                    initial_prompt=None,  # ไม่ใช้ initial prompt
+                    word_timestamps=False,  # ไม่ใช้ word-level timestamps (ประหยัดเวลา)
+                    no_speech_threshold=0.6,  # Default threshold
+                    logprob_threshold=-1.0,  # Default threshold
+                    compression_ratio_threshold=2.4,  # Default threshold
+                    best_of=1,  # ไม่ใช้ best_of (ใช้ greedy decoding)
+                    patience=1.0,  # Default patience
+                    length_penalty=1.0,  # Default length penalty
+                    suppress_tokens="-1",  # Suppress special tokens
+                    without_timestamps=False,  # ยังคงใช้ timestamps (สำหรับ segments)
+                    max_initial_timestamp=1.0,  # Default max initial timestamp
+                    # batch_size ไม่ได้รองรับใน openai-whisper (ใช้ internal batching)
                 )
             else:
                 # ใช้ shared model → ต้องใช้ lock (ป้องกัน race condition)
@@ -279,21 +305,32 @@ class OpenAIWhisperProvider(WhisperProvider):
                 
                 # ใช้ lock เมื่อใช้ model (ป้องกัน race condition)
                 with usage_lock:
-                    # ใช้ fp16 เพื่อเพิ่มประสิทธิภาพบน GPU (ถ้าใช้ CUDA)
-                    fp16 = self.device == 'cuda'
-                    
                     result = whisper_model.transcribe(
                         str(audio_path_obj),
                         language=lang_code,
                         task="transcribe",
                         verbose=False,  # ไม่แสดง progress bar
-                        fp16=fp16  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
+                        fp16=fp16,  # ใช้ fp16 บน CUDA เพื่อเพิ่มประสิทธิภาพ
+                        beam_size=beam_size,  # Greedy decoding (beam_size=1) เพื่อความเร็ว
+                        temperature=temperature,  # Temperature=0 เพื่อความเสถียร
+                        condition_on_previous_text=condition_on_previous_text,  # ไม่ใช้ context จาก chunk ก่อนหน้า
+                        initial_prompt=None,  # ไม่ใช้ initial prompt
+                        word_timestamps=False,  # ไม่ใช้ word-level timestamps (ประหยัดเวลา)
+                        no_speech_threshold=0.6,  # Default threshold
+                        logprob_threshold=-1.0,  # Default threshold
+                        compression_ratio_threshold=2.4,  # Default threshold
+                        best_of=1,  # ไม่ใช้ best_of (ใช้ greedy decoding)
+                        patience=1.0,  # Default patience
+                        length_penalty=1.0,  # Default length penalty
+                        suppress_tokens="-1",  # Suppress special tokens
+                        without_timestamps=False,  # ยังคงใช้ timestamps (สำหรับ segments)
+                        max_initial_timestamp=1.0,  # Default max initial timestamp
                     )
             processing_time = time.time() - start_time
             
-            # Log GPU utilization hint
+            # Log optimization parameters
             if self.device == 'cuda':
-                logger.debug(f"[OpenAI Whisper] 💡 Using fp16={fp16} for CUDA acceleration")
+                logger.debug(f"[OpenAI Whisper] 💡 Optimization: fp16={fp16}, beam_size={beam_size}, temperature={temperature}, condition_on_previous_text={condition_on_previous_text}")
             
             # Extract text and segments
             text = result.get("text", "").strip()
