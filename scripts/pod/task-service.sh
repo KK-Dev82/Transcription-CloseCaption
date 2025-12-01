@@ -380,6 +380,66 @@ get_task_status() {
     fi
 }
 
+# Function to purge RabbitMQ queue
+purge_queue() {
+    local queue_name="${1:-transcription_chunk_queue}"
+    
+    print_header "🗑️  Purging RabbitMQ Queue"
+    echo ""
+    
+    # Load environment variables
+    if [ -f ".env.runpod" ]; then
+        set -a
+        source .env.runpod
+        set +a
+    fi
+    
+    RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
+    RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+    RABBITMQ_USER=${RABBITMQ_USER:-senate}
+    RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+    RABBITMQ_MGMT_PORT=${RABBITMQ_MGMT_PORT:-15672}
+    
+    print_status "Queue: $queue_name"
+    print_status "RabbitMQ: $RABBITMQ_HOST:$RABBITMQ_MGMT_PORT"
+    echo ""
+    
+    # Check queue status first
+    QUEUE_INFO=$(curl -s -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" "http://${RABBITMQ_HOST}:${RABBITMQ_MGMT_PORT}/api/queues/%2F/${queue_name}" 2>/dev/null)
+    
+    if [ -z "$QUEUE_INFO" ] || echo "$QUEUE_INFO" | grep -q "Not Found\|404" 2>/dev/null; then
+        print_error "❌ Queue '$queue_name' not found"
+        exit 1
+    fi
+    
+    MESSAGES=$(echo "$QUEUE_INFO" | jq -r '.messages // 0' 2>/dev/null || echo "0")
+    
+    if [ "$MESSAGES" -eq 0 ]; then
+        print_success "✅ Queue is already empty"
+        exit 0
+    fi
+    
+    print_warning "⚠️  Queue has $MESSAGES messages"
+    echo ""
+    read -p "Are you sure you want to purge all messages? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Cancelled"
+        exit 0
+    fi
+    
+    # Purge queue
+    RESPONSE=$(curl -s -X DELETE -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" "http://${RABBITMQ_HOST}:${RABBITMQ_MGMT_PORT}/api/queues/%2F/${queue_name}/contents" 2>/dev/null)
+    
+    if [ $? -eq 0 ]; then
+        print_success "✅ Purged $MESSAGES messages from queue '$queue_name'"
+    else
+        print_error "❌ Failed to purge queue"
+        exit 1
+    fi
+}
+
 # Main command router
 case "$ACTION" in
     list)
@@ -400,6 +460,9 @@ case "$ACTION" in
     status)
         get_task_status "$TASK_ID"
         ;;
+    purge-queue)
+        purge_queue "$TASK_ID"  # TASK_ID is used as queue_name here
+        ;;
     *)
         echo "📋 Task Service - Manage Transcription Tasks"
         echo ""
@@ -413,6 +476,7 @@ case "$ACTION" in
         echo "  clear-all               Delete all completed/failed/cancelled tasks"
         echo "  cleanup [hours]         Cleanup old tasks (default: 24 hours)"
         echo "  status <task-id>        View task status"
+        echo "  purge-queue [queue]     Purge RabbitMQ queue (default: transcription_chunk_queue)"
         echo ""
         echo "Examples:"
         echo "  bash scripts/pod/task-service.sh list"
@@ -421,6 +485,7 @@ case "$ACTION" in
         echo "  bash scripts/pod/task-service.sh clear-all"
         echo "  bash scripts/pod/task-service.sh cleanup 48"
         echo "  bash scripts/pod/task-service.sh status 34a7d75c-2cc3-4138-a548-9955010cf2e2"
+        echo "  bash scripts/pod/task-service.sh purge-queue transcription_chunk_queue"
         exit 1
         ;;
 esac
