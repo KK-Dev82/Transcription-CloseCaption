@@ -260,11 +260,9 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Convert segments generator to list immediately to avoid issues
-                segments_list_raw = list(segments)
-                logger.info(f"[Faster Whisper] 🔍 Converted segments generator to list: {len(segments_list_raw)} segments")
-                
-                for segment in segments_list_raw:
+                # Process segments directly from generator (don't convert to list first to avoid hanging)
+                logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
+                for segment in segments:
                     segment_dict = {
                         "start": segment.start,
                         "end": segment.end,
