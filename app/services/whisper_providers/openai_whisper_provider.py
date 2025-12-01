@@ -13,6 +13,7 @@ Features:
 import os
 import time
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 import torch
@@ -28,6 +29,11 @@ try:
 except ImportError:
     WHISPER_AVAILABLE = False
     logger.warning("openai-whisper not installed. Please install: pip install openai-whisper")
+
+# Global model cache with thread-safe loading
+_model_cache = {}
+_model_locks = {}
+_cache_lock = threading.Lock()
 
 
 class OpenAIWhisperProvider(WhisperProvider):
@@ -83,7 +89,7 @@ class OpenAIWhisperProvider(WhisperProvider):
         logger.info(f"[OpenAI Whisper] Initialized with device: {self.device}, default model: {self.default_model}")
     
     def _load_model(self, model_size: str = None):
-        """Load Whisper model (lazy loading)"""
+        """Load Whisper model (lazy loading with thread-safe singleton pattern)"""
         model_name = model_size or self.default_model
         
         if model_name not in self.SUPPORTED_MODELS:
@@ -94,24 +100,54 @@ class OpenAIWhisperProvider(WhisperProvider):
         if self._model is not None and self._model_name == model_name:
             return self._model
         
-        logger.info(f"[OpenAI Whisper] Loading model: {model_name} on {self.device}")
-        start_time = time.time()
+        # ใช้ global cache เพื่อให้ทุก threads ใช้ model เดียวกัน
+        cache_key = f"{model_name}_{self.device}"
         
-        try:
-            # Load model with download_root if specified
-            if self.download_root:
-                self._model = whisper.load_model(model_name, device=self.device, download_root=self.download_root)
-            else:
-                self._model = whisper.load_model(model_name, device=self.device)
+        # ตรวจสอบว่า model ถูก load ใน cache หรือยัง
+        with _cache_lock:
+            if cache_key in _model_cache:
+                logger.info(f"[OpenAI Whisper] Using cached model: {model_name} on {self.device}")
+                self._model = _model_cache[cache_key]
+                self._model_name = model_name
+                return self._model
             
-            self._model_name = model_name
-            load_time = time.time() - start_time
-            logger.info(f"[OpenAI Whisper] Model loaded in {load_time:.2f}s")
+            # สร้าง lock สำหรับ model นี้ (ถ้ายังไม่มี)
+            if cache_key not in _model_locks:
+                _model_locks[cache_key] = threading.Lock()
+        
+        # ใช้ lock เพื่อให้ load model ทีละตัว (ป้องกัน CUDA OOM)
+        with _model_locks[cache_key]:
+            # ตรวจสอบอีกครั้งหลังจากได้ lock (double-check pattern)
+            with _cache_lock:
+                if cache_key in _model_cache:
+                    logger.info(f"[OpenAI Whisper] Model was loaded by another thread: {model_name}")
+                    self._model = _model_cache[cache_key]
+                    self._model_name = model_name
+                    return self._model
             
-            return self._model
-        except Exception as e:
-            logger.error(f"[OpenAI Whisper] Failed to load model {model_name}: {e}")
-            raise
+            logger.info(f"[OpenAI Whisper] Loading model: {model_name} on {self.device} (thread-safe)")
+            start_time = time.time()
+            
+            try:
+                # Load model with download_root if specified
+                if self.download_root:
+                    model = whisper.load_model(model_name, device=self.device, download_root=self.download_root)
+                else:
+                    model = whisper.load_model(model_name, device=self.device)
+                
+                # เก็บใน cache
+                with _cache_lock:
+                    _model_cache[cache_key] = model
+                
+                self._model = model
+                self._model_name = model_name
+                load_time = time.time() - start_time
+                logger.info(f"[OpenAI Whisper] Model loaded in {load_time:.2f}s and cached")
+                
+                return self._model
+            except Exception as e:
+                logger.error(f"[OpenAI Whisper] Failed to load model {model_name}: {e}")
+                raise
     
     async def transcribe(
         self, 
