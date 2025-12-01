@@ -260,40 +260,43 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Process segments directly - faster-whisper segments is a generator that yields immediately
+                # Process segments - faster-whisper returns a generator
+                # Try to get first segment to test if generator works
                 logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
+                logger.info(f"[Faster Whisper] 🔍 Testing segments generator...")
                 
-                # Use a simple iteration with timeout check
-                max_iterations = 10000  # Safety limit
-                iteration_count = 0
-                start_iter_time = time.time()
-                max_iter_time = 60.0  # 60 seconds max
-                
-                for segment in segments:
-                    # Check timeout
-                    if time.time() - start_iter_time > max_iter_time:
-                        logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments")
-                        raise TimeoutError(f"Segments processing timeout after {max_iter_time}s")
-                    
-                    # Safety limit
-                    if iteration_count >= max_iterations:
-                        logger.warning(f"[Faster Whisper] ⚠️ Reached max iterations limit ({max_iterations})")
-                        break
-                    
+                # Get first segment to test
+                first_segment = next(segments, None)
+                if first_segment is None:
+                    logger.warning(f"[Faster Whisper] ⚠️ No segments found in generator")
+                else:
+                    logger.info(f"[Faster Whisper] ✅ First segment found: {first_segment.text[:50] if first_segment.text else 'empty'}")
+                    # Process first segment
                     segment_dict = {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "text": segment.text.strip()
+                        "start": first_segment.start,
+                        "end": first_segment.end,
+                        "text": first_segment.text.strip()
                     }
                     segments_list.append(segment_dict)
-                    text_parts.append(segment.text.strip())
-                    segment_count += 1
-                    iteration_count += 1
+                    text_parts.append(first_segment.text.strip())
+                    segment_count = 1
                     
-                    if segment_count % 10 == 0:
-                        logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                    # Process remaining segments
+                    for segment in segments:
+                        segment_dict = {
+                            "start": segment.start,
+                            "end": segment.end,
+                            "text": segment.text.strip()
+                        }
+                        segments_list.append(segment_dict)
+                        text_parts.append(segment.text.strip())
+                        segment_count += 1
+                        if segment_count % 10 == 0:
+                            logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
                 
                 logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+            except StopIteration:
+                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total (generator exhausted)")
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
                 raise
