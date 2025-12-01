@@ -86,8 +86,9 @@ echo ""
 
 # Check Main API
 print_status "Checking Main API..."
-if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
-    MAIN_API_PID=$(pgrep -f "python.*uvicorn.*app.main")
+# Check for both uvicorn and python -m app.main patterns
+if pgrep -f "python.*uvicorn.*app.main" > /dev/null || pgrep -f "python.*-m.*app.main" > /dev/null; then
+    MAIN_API_PID=$(pgrep -f "python.*uvicorn.*app.main" || pgrep -f "python.*-m.*app.main" | head -1)
     print_success "✅ Main API is running (PID: $MAIN_API_PID)"
     if curl -f http://localhost:8001/health > /dev/null 2>&1; then
         print_success "   Main API is responding"
