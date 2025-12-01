@@ -140,10 +140,15 @@ class WhisperService:
         try:
             # Use provider to transcribe
             logger.info(f"📝 Transcribing with provider: {self.provider.provider_name}")
+            logger.info(f"🔍 DEBUG: transcribe_file() called with audio_path={audio_path}, language={language}, model_size={model_size}")
+            logger.info(f"🔍 DEBUG: Provider name: {self.provider.provider_name}")
+            logger.info(f"🔍 DEBUG: Provider type: {type(self.provider)}")
             
             # ⚠️ ใช้ _run_async_transcribe เสมอ (ใช้ asyncio.run()) เพื่อป้องกัน event loop conflict
             # ไม่ต้องตรวจสอบ event loop เพราะ _run_async_transcribe จะจัดการเอง
+            logger.info(f"🔍 DEBUG: Calling _run_async_transcribe()...")
             result: TranscriptionResult = self._run_async_transcribe(audio_path, language, model_size)
+            logger.info(f"🔍 DEBUG: _run_async_transcribe() completed, result type: {type(result)}")
             
             # Convert to dict format (backward compatible)
             transcription_result = {

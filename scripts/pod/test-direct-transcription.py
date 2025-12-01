@@ -73,14 +73,18 @@ async def test_direct_transcription(video_path: str, language: str = "th", model
         
         # Step 2: Direct Transcription with faster-whisper
         print("🎯 Step 2: Direct Transcription with faster-whisper...")
+        print(f"🔍 DEBUG: About to call whisper_service.transcribe_file()")
+        print(f"🔍 DEBUG: audio_path={audio_path}, language={language}, model_size={model_size}")
         transcription_start = time.time()
         
         # transcribe_file is not async, but uses async internally
+        print(f"🔍 DEBUG: Calling transcribe_file() now...")
         result = whisper_service.transcribe_file(
             audio_path,
             language=language,
             model_size=model_size
         )
+        print(f"🔍 DEBUG: transcribe_file() returned, result type: {type(result)}")
         
         transcription_time = time.time() - transcription_start
         total_time = time.time() - start_time
