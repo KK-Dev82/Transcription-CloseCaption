@@ -261,42 +261,80 @@ class FasterWhisperProvider(WhisperProvider):
             segment_count = 0
             try:
                 # Process segments - faster-whisper returns a generator
-                # Try to get first segment to test if generator works
+                # Use threading with timeout to avoid hanging
                 logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
-                logger.info(f"[Faster Whisper] 🔍 Testing segments generator...")
+                import threading
+                import queue
+                import time as time_module
                 
-                # Get first segment to test
-                first_segment = next(segments, None)
-                if first_segment is None:
-                    logger.warning(f"[Faster Whisper] ⚠️ No segments found in generator")
-                else:
-                    logger.info(f"[Faster Whisper] ✅ First segment found: {first_segment.text[:50] if first_segment.text else 'empty'}")
-                    # Process first segment
-                    segment_dict = {
-                        "start": first_segment.start,
-                        "end": first_segment.end,
-                        "text": first_segment.text.strip()
-                    }
-                    segments_list.append(segment_dict)
-                    text_parts.append(first_segment.text.strip())
-                    segment_count = 1
+                result_queue = queue.Queue(maxsize=1000)
+                error_queue = queue.Queue()
+                done_flag = threading.Event()
+                
+                def process_segments_thread():
+                    try:
+                        logger.info(f"[Faster Whisper] 🔍 Thread: Starting to iterate segments...")
+                        for segment in segments:
+                            if done_flag.is_set():
+                                break
+                            segment_dict = {
+                                "start": segment.start,
+                                "end": segment.end,
+                                "text": segment.text.strip()
+                            }
+                            result_queue.put(('segment', segment_dict, segment.text.strip()))
+                        result_queue.put(('done', None, None))
+                        logger.info(f"[Faster Whisper] ✅ Thread: Finished iterating segments")
+                    except Exception as e:
+                        logger.error(f"[Faster Whisper] ❌ Thread error: {e}", exc_info=True)
+                        error_queue.put(e)
+                
+                thread = threading.Thread(target=process_segments_thread, daemon=True)
+                thread.start()
+                logger.info(f"[Faster Whisper] 🔍 Thread started, waiting for segments...")
+                
+                # Process results with timeout
+                timeout = 10.0  # 10 seconds timeout
+                start_time = time_module.time()
+                last_log_time = start_time
+                
+                while True:
+                    elapsed = time_module.time() - start_time
+                    if elapsed > timeout:
+                        logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments ({timeout}s)")
+                        done_flag.set()
+                        raise TimeoutError(f"Segments processing timeout after {timeout}s")
                     
-                    # Process remaining segments
-                    for segment in segments:
-                        segment_dict = {
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text.strip()
-                        }
-                        segments_list.append(segment_dict)
-                        text_parts.append(segment.text.strip())
-                        segment_count += 1
-                        if segment_count % 10 == 0:
-                            logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                    # Log progress every 2 seconds
+                    if time_module.time() - last_log_time >= 2.0:
+                        logger.info(f"[Faster Whisper] 🔍 Still processing... ({segment_count} segments so far, {elapsed:.1f}s elapsed)")
+                        last_log_time = time_module.time()
+                    
+                    try:
+                        item_type, segment_dict, text = result_queue.get(timeout=0.5)
+                        if item_type == 'done':
+                            break
+                        elif item_type == 'segment':
+                            segments_list.append(segment_dict)
+                            text_parts.append(text)
+                            segment_count += 1
+                            if segment_count % 10 == 0:
+                                logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                    except queue.Empty:
+                        # Check if thread is still alive
+                        if not thread.is_alive():
+                            # Check for errors
+                            try:
+                                error = error_queue.get_nowait()
+                                raise error
+                            except queue.Empty:
+                                # Thread died without error, might be done
+                                logger.warning(f"[Faster Whisper] ⚠️ Thread died unexpectedly")
+                                break
+                        continue
                 
+                done_flag.set()
                 logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
-            except StopIteration:
-                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total (generator exhausted)")
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
                 raise
