@@ -58,9 +58,11 @@ else
 ENVIRONMENT=runpod
 STORAGE_TYPE=json
 JSON_STORAGE_DIR=$PROJECT_ROOT/storage
-RABBITMQ_HOST=178.128.105.100
-RABBITMQ_PORT=5672
-RABBITMQ_USER=senate
+# RabbitMQ - สำหรับ Local Testing ใช้ host.docker.internal (ถ้าไม่มี .env.runpod)
+# สำหรับ Production ใช้ 178.128.105.100 (จาก .env.runpod)
+RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
+RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+RABBITMQ_USER=${RABBITMQ_USER:-senate}
 RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
 REDIS_URL=redis://localhost:6379
 WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
