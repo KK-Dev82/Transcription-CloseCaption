@@ -260,21 +260,36 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Process segments directly from generator (don't convert to list first to avoid hanging)
+                # Process segments directly from generator with timeout protection
                 logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
-                for segment in segments:
-                    segment_dict = {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "text": segment.text.strip()
-                    }
-                    segments_list.append(segment_dict)
-                    text_parts.append(segment.text.strip())
-                    segment_count += 1
-                    if segment_count % 10 == 0:
-                        logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                import signal
                 
-                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("Segments iteration timeout")
+                
+                # Set timeout to 30 seconds for segments processing
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(30)
+                
+                try:
+                    for segment in segments:
+                        segment_dict = {
+                            "start": segment.start,
+                            "end": segment.end,
+                            "text": segment.text.strip()
+                        }
+                        segments_list.append(segment_dict)
+                        text_parts.append(segment.text.strip())
+                        segment_count += 1
+                        if segment_count % 10 == 0:
+                            logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                    
+                    signal.alarm(0)  # Cancel timeout
+                    logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+                except TimeoutError:
+                    logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments")
+                    signal.alarm(0)
+                    raise
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
                 raise
