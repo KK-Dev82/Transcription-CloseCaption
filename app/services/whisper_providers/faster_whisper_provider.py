@@ -273,8 +273,11 @@ class FasterWhisperProvider(WhisperProvider):
                     logger.info(f"[Faster Whisper] ✅ Segments is list (without_timestamps=True), count: {len(segments)}")
                     segments_iter = segments
                 else:
-                    logger.info(f"[Faster Whisper] 🔍 Segments is generator, using timeout protection...")
+                    logger.warning(f"[Faster Whisper] ⚠️ Segments is still generator even with without_timestamps=True")
+                    logger.info(f"[Faster Whisper] 🔍 Using timeout protection for generator...")
                     # ใช้ timeout protection สำหรับ generator (กันงานค้างเคสพิเศษ)
+                    # แต่เนื่องจาก without_timestamps=True ควร return list แล้ว
+                    # ถ้ายังเป็น generator อาจเป็นปัญหาจากเวอร์ชันหรือการตั้งค่า
                     import threading
                     import queue
                     segments_queue = queue.Queue()
@@ -283,28 +286,43 @@ class FasterWhisperProvider(WhisperProvider):
                     
                     def collect_segments():
                         try:
+                            count = 0
                             for seg in segments:
                                 if done_flag.is_set():
                                     break
                                 segments_queue.put(seg)
+                                count += 1
+                                if count % 5 == 0:
+                                    logger.debug(f"[Faster Whisper] Collected {count} segments in thread...")
                             segments_queue.put(None)  # Sentinel
+                            logger.debug(f"[Faster Whisper] Thread finished, collected {count} segments")
                         except Exception as e:
+                            logger.error(f"[Faster Whisper] Thread error: {e}", exc_info=True)
                             error_queue.put(e)
                     
                     thread = threading.Thread(target=collect_segments, daemon=True)
                     thread.start()
                     
-                    # Collect with timeout
-                    timeout = 30.0
+                    # Collect with timeout (ลดเป็น 15s เพราะ without_timestamps=True ควรเร็ว)
+                    timeout = 15.0
                     start_time = time.time()
                     segments_list_raw = []
+                    last_log_time = start_time
+                    
                     while True:
-                        if time.time() - start_time > timeout:
+                        elapsed = time.time() - start_time
+                        if elapsed > timeout:
                             done_flag.set()
+                            logger.error(f"[Faster Whisper] ❌ Segments collection timeout after {timeout}s ({len(segments_list_raw)} collected)")
                             raise TimeoutError(f"Segments collection timeout after {timeout}s")
                         
+                        # Log progress every 3 seconds
+                        if time.time() - last_log_time >= 3.0:
+                            logger.info(f"[Faster Whisper] 🔍 Still collecting... ({len(segments_list_raw)} so far, {elapsed:.1f}s elapsed)")
+                            last_log_time = time.time()
+                        
                         try:
-                            seg = segments_queue.get(timeout=1.0)
+                            seg = segments_queue.get(timeout=0.5)
                             if seg is None:
                                 break
                             segments_list_raw.append(seg)
@@ -314,6 +332,7 @@ class FasterWhisperProvider(WhisperProvider):
                                     error = error_queue.get_nowait()
                                     raise error
                                 except queue.Empty:
+                                    # Thread died without error, might be done
                                     break
                             continue
                     
