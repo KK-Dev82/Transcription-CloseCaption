@@ -58,11 +58,12 @@ class VideoWorker:
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
         
         # Thread pool สำหรับ parallel chunk processing
-        # ⚠️ ลด max_workers เป็น 3-5 เพื่อป้องกัน CUDA OOM (แต่ละ thread ใช้ GPU memory)
-        # RTX 4080 Super 16GB → สามารถประมวลผลได้ 3-5 chunks พร้อมกัน (ขึ้นอยู่กับ model size)
-        # medium model ~2.4GB → 3-4 chunks พร้อมกัน
-        # large model ~3GB → 2-3 chunks พร้อมกัน
-        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '3'))
+        # ⚠️ เพิ่ม max_workers เป็น 5-10 เพื่อให้ GPU ทำงานเต็มที่ (แต่ model lock จะจัดการให้ transcription เป็น sequential)
+        # RTX 4080 Super 16GB → สามารถประมวลผลได้ 5-10 chunks พร้อมกัน (ขึ้นอยู่กับ model size)
+        # medium model ~2.4GB → 5-8 chunks พร้อมกัน (model lock จะจัดการให้เป็น sequential)
+        # large model ~3GB → 3-5 chunks พร้อมกัน
+        # Model lock จะป้องกัน CUDA OOM แต่ workers จะไม่ idle รอ
+        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '5'))
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="chunk_worker")
         logger.info(f"🔧 ThreadPoolExecutor initialized with {max_workers} workers")
         self.active_chunks = {}  # Track active chunk tasks: {delivery_tag: future}
@@ -164,9 +165,12 @@ class VideoWorker:
         """ตั้งค่า consumers สำหรับแต่ละ queue"""
         # ตั้งค่า QoS สำหรับ transcription_chunk_queue ก่อน consume
         # ⚠️ ต้องเรียก basic_qos ก่อน basic_consume สำหรับ queue นี้
-        # prefetch_count=3-5 หมายความว่า worker จะรับ message ได้ 3-5 ตัวพร้อมกัน (ลดลงเพื่อป้องกัน CUDA OOM)
+        # เพิ่ม prefetch_count เป็น 20 เพื่อให้ workers รับ chunks ได้มากขึ้น (ลด idle time)
+        # Model lock จะจัดการให้ transcription เป็น sequential แต่ workers จะไม่ idle รอ
         max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '3'))
-        prefetch_count = max_workers  # ตั้ง prefetch_count ให้เท่ากับ max_workers
+        # prefetch_count ควรสูงกว่า max_workers เพื่อให้ workers มีงานรออยู่เสมอ
+        # RTX 4080 Super 16GB → prefetch_count=20, max_workers=5-10 (ขึ้นอยู่กับ model size)
+        prefetch_count = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', '20'))
         self.channel.basic_qos(prefetch_count=prefetch_count, prefetch_size=0, global_qos=False)
         logger.info(f"✅ Set QoS: prefetch_count={prefetch_count} for transcription_chunk_queue (max_workers={max_workers})")
         

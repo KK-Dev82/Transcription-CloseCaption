@@ -410,8 +410,10 @@ class TranscriptionService:
             # รอจนกว่าทุก chunks จะเสร็จ (polling)
             # Note: Workers จะอัปเดต progress และ chunks ใน storage
             max_wait_time = 3600  # 1 hour max
-            check_interval = 2  # Check every 2 seconds
+            check_interval = 1  # Check every 1 second (เพิ่มความถี่เพื่อให้ progress update บ่อยขึ้น)
             elapsed_time = 0
+            last_logged_progress = -1
+            last_logged_status = ""
             
             while elapsed_time < max_wait_time:
                 await asyncio.sleep(check_interval)
@@ -453,12 +455,16 @@ class TranscriptionService:
                                 break
                         continue
                     
-                    # อัปเดต progress
+                    # อัปเดต progress (อัปเดตทุกครั้งที่ progress หรือ status เปลี่ยน)
                     if current_progress != task.progress or current_status != task.status:
                         task.progress = current_progress
                         task.status = current_status
                         self.json_storage.save_transcription(task_id, task.__dict__)
-                        logger.info(f"📊 Progress: {current_progress}% - Status: {current_status} - Chunks: {completed_chunks}/{total_chunks}")
+                        # Log เฉพาะเมื่อ progress หรือ status เปลี่ยน (ลด log spam)
+                        if current_progress != last_logged_progress or current_status != last_logged_status:
+                            logger.info(f"📊 Progress: {current_progress}% - Status: {current_status} - Chunks: {completed_chunks}/{total_chunks}")
+                            last_logged_progress = current_progress
+                            last_logged_status = current_status
                 else:
                     if elapsed_time % 10 == 0:  # Log every 10 seconds
                         logger.warning(f"⚠️  ไม่พบ task {task_id} ใน storage (waiting...)")
