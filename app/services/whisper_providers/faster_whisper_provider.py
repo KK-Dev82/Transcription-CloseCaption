@@ -170,6 +170,11 @@ class FasterWhisperProvider(WhisperProvider):
         """
         Transcribe audio using faster-whisper
         
+        Note: ถ้า GPU mode timeout จะ fallback ไป CPU mode
+        """
+        """
+        Transcribe audio using faster-whisper
+        
         Args:
             audio_path: Path ไปยังไฟล์ audio
             language: ภาษา ("th", "en", "auto")
@@ -362,6 +367,14 @@ class FasterWhisperProvider(WhisperProvider):
                         logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
                 
                 logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
+            except TimeoutError as timeout_error:
+                # ถ้า GPU timeout ให้ fallback ไป CPU mode
+                if self.device == "cuda":
+                    logger.warning(f"[Faster Whisper] ⚠️ GPU mode timeout, falling back to CPU mode...")
+                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+                else:
+                    logger.error(f"[Faster Whisper] ❌ Error processing segments: {timeout_error}", exc_info=True)
+                    raise
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
                 raise
@@ -401,7 +414,96 @@ class FasterWhisperProvider(WhisperProvider):
                     raise RuntimeError(f"cuDNN library issue: {error_msg}. Please ensure CUDA runtime matches CTranslate2 wheel version.")
             
             logger.error(f"[Faster Whisper] ❌ Transcription failed: {e}", exc_info=True)
+            # ถ้า GPU mode fail และยังไม่ได้ fallback ให้ลอง CPU
+            if self.device == "cuda" and "timeout" in str(e).lower():
+                logger.warning(f"[Faster Whisper] ⚠️ GPU mode failed, falling back to CPU mode...")
+                try:
+                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+                except Exception as cpu_error:
+                    logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
             raise
+    
+    async def _transcribe_cpu_fallback(
+        self,
+        audio_path: str,
+        language: str = "th",
+        model_size: str = None
+    ) -> TranscriptionResult:
+        """
+        Fallback to CPU mode when GPU mode times out
+        """
+        logger.info(f"[Faster Whisper] 🔄 Falling back to CPU mode...")
+        
+        # Load CPU model
+        model_name = model_size or self.default_model
+        cpu_model = WhisperModel(
+            model_name,
+            device="cpu",
+            compute_type="int8",
+            num_workers=1,
+            cpu_threads=4
+        )
+        
+        # Transcribe with CPU
+        start_time = time.time()
+        segments, info = cpu_model.transcribe(
+            str(audio_path),
+            language=language if language != "auto" else None,
+            vad_filter=False,
+            without_timestamps=True,
+            beam_size=1,
+            temperature=0.0,
+        )
+        
+        processing_time = time.time() - start_time
+        
+        # Process segments (CPU mode should return list with without_timestamps=True)
+        segments_list = []
+        text_parts = []
+        
+        if isinstance(segments, list):
+            for segment in segments:
+                if isinstance(segment, dict):
+                    segment_dict = {
+                        "start": segment.get("start", 0.0),
+                        "end": segment.get("end", 0.0),
+                        "text": segment.get("text", "").strip()
+                    }
+                else:
+                    segment_dict = {
+                        "start": getattr(segment, "start", 0.0),
+                        "end": getattr(segment, "end", 0.0),
+                        "text": getattr(segment, "text", "").strip()
+                    }
+                segments_list.append(segment_dict)
+                text_parts.append(segment_dict["text"])
+        else:
+            # ถ้ายังเป็น generator ให้ iterate
+            for segment in segments:
+                segment_dict = {
+                    "start": getattr(segment, "start", 0.0),
+                    "end": getattr(segment, "end", 0.0),
+                    "text": getattr(segment, "text", "").strip()
+                }
+                segments_list.append(segment_dict)
+                text_parts.append(segment_dict["text"])
+        
+        text = " ".join(text_parts).strip()
+        detected_language = info.language if hasattr(info, 'language') else language
+        
+        logger.info(f"[Faster Whisper] ✅ CPU fallback completed in {processing_time:.2f}s")
+        logger.info(f"[Faster Whisper] 📝 Text length: {len(text)} characters")
+        logger.info(f"[Faster Whisper] 📦 Segments: {len(segments_list)}")
+        
+        return TranscriptionResult(
+            text=text,
+            segments=segments_list,
+            language=detected_language,
+            provider=self.provider_name,
+            model=model_name,
+            duration=info.duration if hasattr(info, 'duration') else None,
+            processing_time=processing_time
+        )
     
     def health_check(self) -> bool:
         """
