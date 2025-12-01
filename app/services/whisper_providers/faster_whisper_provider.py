@@ -175,10 +175,17 @@ class FasterWhisperProvider(WhisperProvider):
         Returns:
             TranscriptionResult
         """
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: Starting transcribe()")
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: audio_path={audio_path}, language={language}, model_size={model_size}")
+        
         audio_path_obj = Path(audio_path)
         
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: Checking if file exists: {audio_path_obj}")
         if not audio_path_obj.exists():
+            logger.error(f"[Faster Whisper] ❌ DEBUG: File not found: {audio_path}")
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        
+        logger.info(f"[Faster Whisper] ✅ DEBUG: File exists, size: {audio_path_obj.stat().st_size} bytes")
         
         # Use default model if not specified
         model = model_size or self.default_model
@@ -187,11 +194,14 @@ class FasterWhisperProvider(WhisperProvider):
             model = "medium"
         
         # Load model
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: Loading model: {model}")
         whisper_model = self._load_model(model)
+        logger.info(f"[Faster Whisper] ✅ DEBUG: Model loaded successfully")
         
         # Prepare language code
         # faster-whisper ใช้ "th" สำหรับภาษาไทย, "en" สำหรับอังกฤษ, None สำหรับ auto-detect
         lang_code = None if language == "auto" else language
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: Language code: {lang_code}")
         
         # Optimization parameters
         beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))
@@ -208,6 +218,9 @@ class FasterWhisperProvider(WhisperProvider):
         
         start_time = time.time()
         try:
+            logger.info(f"[Faster Whisper] 🔍 DEBUG: About to call whisper_model.transcribe()")
+            logger.info(f"[Faster Whisper] 🔍 DEBUG: audio_path={str(audio_path_obj)}, language={lang_code}, device={self.device}, compute_type={self.compute_type}")
+            
             # Transcribe with faster-whisper
             # Note: faster-whisper 1.0.3 รองรับเฉพาะ parameters หลักๆ
             # Parameters ที่ไม่รองรับ: batch_size, logprob_threshold, compression_ratio_threshold, 
@@ -215,6 +228,7 @@ class FasterWhisperProvider(WhisperProvider):
             # 
             # ตามคำแนะนำ: ใช้ compute_type="float16", language="th", vad_filter=True
             # ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
+            logger.info(f"[Faster Whisper] 🎯 DEBUG: Calling transcribe() now...")
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,  # ระบุภาษา ลด overhead
@@ -234,7 +248,10 @@ class FasterWhisperProvider(WhisperProvider):
             
             processing_time = time.time() - start_time
             
+            logger.info(f"[Faster Whisper] ✅ DEBUG: transcribe() completed successfully")
             logger.info(f"[Faster Whisper] ⏱️  Transcription processing time: {processing_time:.2f}s")
+            logger.info(f"[Faster Whisper] 🔍 DEBUG: info.duration={info.duration if hasattr(info, 'duration') else 'N/A'}")
+            logger.info(f"[Faster Whisper] 🔍 DEBUG: info.language={info.language if hasattr(info, 'language') else 'N/A'}")
             
             # Convert segments to list and extract text
             segments_list = []
