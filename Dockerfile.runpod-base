@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y \
 # Install Azure CLI (สำหรับ pull images จาก ACR)
 RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
-# Install PyTorch with CUDA support (for openai-whisper)
+# Install PyTorch with CUDA support
 # CUDA 12.1 → PyTorch with CUDA 11.8 (backward compatible)
 # Note: PyTorch 2.1.1 supports CUDA 11.8 (compatible with CUDA 12.1)
 # For CUDA 12.1, use cu118 wheel (backward compatible)
@@ -50,6 +50,13 @@ RUN pip3 install --no-cache-dir \
     torch==2.1.1 \
     torchaudio==2.1.1 \
     --index-url https://download.pytorch.org/whl/cu118
+
+# Install faster-whisper with compatible versions (CUDA 11.8)
+# ตามคำแนะนำ: ctranslate2==4.5.0, faster-whisper==1.0.2, numpy==1.26.4
+RUN pip3 install --no-cache-dir \
+    numpy==1.26.4 \
+    "ctranslate2==4.5.0" \
+    "faster-whisper==1.0.2"
 
 # Install Python dependencies (พื้นฐาน)
 RUN pip3 install --no-cache-dir \
@@ -62,7 +69,8 @@ RUN pip3 install --no-cache-dir \
     redis \
     pika \
     python-dotenv \
-    tzdata
+    tzdata \
+    ffmpeg-python
 
 # Create working directory
 WORKDIR /workspace
@@ -78,9 +86,13 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_VISIBLE_DEVICES=0
-# Note: openai-whisper ใช้ PyTorch CUDA โดยอัตโนมัติ (ไม่ต้องตั้ง WHISPER_CUBLAS)
-ENV WHISPER_PROVIDER=openai-whisper
-ENV WHISPER_MODEL=large-v3
+# ป้องกัน freeze ของ CTranslate2/CUDA
+ENV CT2_USE_CUDA_GRAPH=0
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+# Default provider: faster-whisper (สามารถ override ได้)
+ENV WHISPER_PROVIDER=faster-whisper
+ENV WHISPER_MODEL=medium
 ENV WHISPER_DEVICE=auto
 
 # Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
