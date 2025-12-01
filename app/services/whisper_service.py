@@ -52,7 +52,10 @@ class WhisperService:
     def provider(self):
         """Lazy load provider"""
         if self._provider is None:
+            logger.info(f"🔍 DEBUG: Initializing provider, provider_name={self._provider_name}")
+            logger.info(f"🔍 DEBUG: Calling WhisperProviderFactory.get_with_fallback()...")
             self._provider = WhisperProviderFactory.get_with_fallback()
+            logger.info(f"🔍 DEBUG: Provider loaded: {self._provider.provider_name}, type: {type(self._provider)}")
             logger.info(f"🏭 Loaded provider: {self._provider.provider_name}")
         return self._provider
     
