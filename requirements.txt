@@ -10,6 +10,7 @@ ffmpeg-python==0.2.0
 
 # Whisper และ dependencies
 openai-whisper==20231117
+faster-whisper==1.0.3  # ⚡ Faster Whisper (CTranslate2) - เร็วกว่า 2-4x
 torch==2.1.1
 torchaudio==2.1.1
 
