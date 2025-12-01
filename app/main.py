@@ -5,6 +5,22 @@ import logging
 import json
 from typing import List, Dict
 import asyncio
+import os
+from pathlib import Path
+
+# Load .env.runpod if exists
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent / ".env.runpod"
+    if env_file.exists():
+        load_dotenv(env_file)
+        logger = logging.getLogger(__name__)
+        logger.info(f"✅ Loaded environment from: {env_file}")
+except ImportError:
+    pass
+except Exception as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"⚠️  Failed to load .env.runpod: {e}")
 
 from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring
 # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
