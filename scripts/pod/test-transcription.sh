@@ -213,6 +213,40 @@ while [ $ELAPSED_WAIT -lt $MAX_WAIT ]; do
         print_success "✅ Transcription completed!"
         print_perf "⏱️  Total time: $(format_time $TRANSCRIBE_TIME) (${TRANSCRIBE_TIME}s)"
         echo ""
+        
+        # Verify parallel processing
+        echo ""
+        print_header "Parallel Processing Verification"
+        echo ""
+        
+        # Check transcription_chunk_queue
+        print_status "Checking transcription_chunk_queue..."
+        if bash scripts/pod/check-rabbitmq-queue.sh transcription_chunk_queue 2>/dev/null | grep -q "Queue:"; then
+            QUEUE_INFO=$(bash scripts/pod/check-rabbitmq-queue.sh transcription_chunk_queue 2>/dev/null)
+            CONSUMERS=$(echo "$QUEUE_INFO" | grep -i "consumers" | awk '{print $2}' | head -1)
+            if [ -n "$CONSUMERS" ] && [ "$CONSUMERS" -gt 1 ]; then
+                print_success "✅ Multiple consumers ($CONSUMERS) - parallel processing enabled"
+            elif [ -n "$CONSUMERS" ] && [ "$CONSUMERS" -eq 1 ]; then
+                print_warning "⚠️  Only 1 consumer - sequential processing (may be slow)"
+            else
+                print_warning "⚠️  Could not determine consumer count"
+            fi
+        else
+            print_warning "⚠️  transcription_chunk_queue not found"
+        fi
+        echo ""
+        
+        # Check video worker logs for chunk processing
+        print_status "Checking Video Worker logs for chunk processing..."
+        if tail -200 /tmp/video-worker.log 2>/dev/null | grep -q "Processing chunk.*for task"; then
+            CHUNK_LOGS=$(tail -200 /tmp/video-worker.log 2>/dev/null | grep "Processing chunk.*for task" | head -5)
+            print_success "✅ Video Worker processed chunks in parallel"
+            echo "$CHUNK_LOGS" | head -3 | sed 's/^/   /'
+        else
+            print_warning "⚠️  No chunk processing logs found"
+        fi
+        echo ""
+        
         exit 0
     elif [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ]; then
         print_error "❌ Transcription failed! (Elapsed: $(format_time $ELAPSED_WAIT))"

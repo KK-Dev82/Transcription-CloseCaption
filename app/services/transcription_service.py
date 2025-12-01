@@ -362,7 +362,13 @@ class TranscriptionService:
             logger.info(f"📤 ส่ง {len(chunks)} chunks ไปยัง transcription_chunk_queue สำหรับ parallel processing...")
             task.status = "processing_chunks"
             task.progress = 10  # เริ่มต้น
-            self.json_storage.save_transcription(task_id, task.__dict__)
+            
+            # Initialize chunks array with None values for workers to fill in
+            task.chunks = [None] * len(chunks)
+            task_data = task.__dict__
+            task_data['chunks'] = [None] * len(chunks)  # Ensure chunks array is initialized
+            
+            self.json_storage.save_transcription(task_id, task_data)
             
             total_chunks = len(chunks)
             
@@ -412,8 +418,15 @@ class TranscriptionService:
                     current_progress = stored_data.get('progress', 0)
                     current_status = stored_data.get('status', '')
                     
-                    # นับ chunks ที่เสร็จแล้ว
-                    completed_chunks = sum(1 for c in stored_chunks if c is not None and c.get('text'))
+                    # Ensure chunks array has correct size
+                    if not stored_chunks or len(stored_chunks) < total_chunks:
+                        # Chunks array not initialized yet, continue waiting
+                        if elapsed_time % 10 == 0:  # Log every 10 seconds
+                            logger.info(f"⏳ Waiting for chunks to be initialized... ({elapsed_time}s elapsed)")
+                        continue
+                    
+                    # นับ chunks ที่เสร็จแล้ว (ต้องมี text และไม่เป็น None)
+                    completed_chunks = sum(1 for c in stored_chunks if c is not None and isinstance(c, dict) and c.get('text') and c.get('text').strip())
                     
                     if completed_chunks >= total_chunks:
                         logger.info(f"✅ ทุก chunks เสร็จแล้ว ({completed_chunks}/{total_chunks})")
@@ -423,9 +436,11 @@ class TranscriptionService:
                     if current_progress != task.progress or current_status != task.status:
                         task.progress = current_progress
                         task.status = current_status
+                        self.json_storage.save_transcription(task_id, task.__dict__)
                         logger.info(f"📊 Progress: {current_progress}% - Status: {current_status} - Chunks: {completed_chunks}/{total_chunks}")
                 else:
-                    logger.warning(f"⚠️  ไม่พบ task {task_id} ใน storage")
+                    if elapsed_time % 10 == 0:  # Log every 10 seconds
+                        logger.warning(f"⚠️  ไม่พบ task {task_id} ใน storage (waiting...)")
             
             if elapsed_time >= max_wait_time:
                 logger.error(f"❌ Timeout: ไม่สามารถรอ chunks เสร็จได้ภายใน {max_wait_time} วินาที")
@@ -446,7 +461,18 @@ class TranscriptionService:
             # รวมผลลัพธ์จาก chunks
             logger.info("กำลังรวมผลลัพธ์จาก chunks...")
             stored_chunks = stored_data.get('chunks', [])
-            chunk_results = [c for c in stored_chunks if c is not None]
+            
+            # Filter out None chunks and ensure they are dicts
+            chunk_results = [c for c in stored_chunks if c is not None and isinstance(c, dict)]
+            
+            if not chunk_results:
+                logger.error(f"❌ ไม่พบ chunk results ที่ถูกต้อง (found {len(stored_chunks)} chunks, {len(chunk_results)} valid)")
+                task.status = "failed"
+                task.error_message = "No valid chunk results found"
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                return
+            
+            logger.info(f"📊 Found {len(chunk_results)} valid chunks out of {len(stored_chunks)} total")
             
             # เก็บ partial results
             partial_text = ""
@@ -456,6 +482,9 @@ class TranscriptionService:
             for i, chunk_data in enumerate(chunk_results):
                 try:
                     # chunk_data มาจาก storage ที่ workers บันทึกไว้แล้ว
+                    if not isinstance(chunk_data, dict):
+                        logger.warning(f"⚠️  Chunk {i+1} is not a dict: {type(chunk_data)}")
+                        continue
                     chunk_text = chunk_data.get("text", "") or ""
                     chunk_segments = chunk_data.get("segments", []) or []
                     
@@ -497,9 +526,25 @@ class TranscriptionService:
             task.status = "merging_results"
             self.json_storage.save_transcription(task_id, task.__dict__)
             
+            # Ensure chunk_results is not None or empty before merging
+            if not chunk_results:
+                logger.error(f"❌ No valid chunk results to merge")
+                task.status = "failed"
+                task.error_message = "No valid chunk results to merge"
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                return
+            
+            logger.info(f"🔄 Merging {len(chunk_results)} chunks...")
             merged_result = self.whisper_service.merge_transcriptions(
                 chunk_results, chunk_duration
             )
+            
+            if not merged_result:
+                logger.error(f"❌ merge_transcriptions returned None or empty result")
+                task.status = "failed"
+                task.error_message = "Failed to merge chunk results"
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                return
             
             merged_text = merged_result.get("text", "") or ""
             merged_segments = merged_result.get("segments", []) or []
