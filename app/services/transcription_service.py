@@ -425,12 +425,27 @@ class TranscriptionService:
                             logger.info(f"⏳ Waiting for chunks to be initialized... ({elapsed_time}s elapsed)")
                         continue
                     
+                    # ตรวจสอบว่า status เป็น merging_results หรือ completed แล้วหรือยัง
+                    if current_status in ["merging_results", "completed"]:
+                        logger.info(f"✅ Task reached {current_status} status - chunks processing complete")
+                        break
+                    
                     # นับ chunks ที่เสร็จแล้ว (ต้องมี text และไม่เป็น None)
                     completed_chunks = sum(1 for c in stored_chunks if c is not None and isinstance(c, dict) and c.get('text') and c.get('text').strip())
                     
+                    # ถ้า chunks เสร็จหมดแล้ว แต่ status ยังไม่เป็น merging_results ให้รอต่อ
                     if completed_chunks >= total_chunks:
-                        logger.info(f"✅ ทุก chunks เสร็จแล้ว ({completed_chunks}/{total_chunks})")
-                        break
+                        logger.info(f"✅ ทุก chunks เสร็จแล้ว ({completed_chunks}/{total_chunks}) - waiting for status update...")
+                        # รออีกสักครู่เพื่อให้ worker อัปเดต status เป็น merging_results
+                        await asyncio.sleep(2)
+                        # ตรวจสอบอีกครั้ง
+                        stored_data = self.json_storage.load_transcription(task_id)
+                        if stored_data:
+                            current_status = stored_data.get('status', '')
+                            if current_status in ["merging_results", "completed"]:
+                                logger.info(f"✅ Status updated to {current_status}")
+                                break
+                        continue
                     
                     # อัปเดต progress
                     if current_progress != task.progress or current_status != task.status:
@@ -857,7 +872,14 @@ class TranscriptionService:
             logger.info(f"   Task status from storage: {current_status}")
             
             # ตรวจสอบว่าสามารถยกเลิกได้หรือไม่
-            if current_status in ["pending", "processing", "processing_chunks", "waiting_for_chunks"]:
+            # รองรับ status: pending, processing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
+            cancellable_statuses = ["pending", "processing", "processing_chunks", "waiting_for_chunks", "merging_results"]
+            is_cancellable = (
+                current_status in cancellable_statuses or 
+                current_status.startswith("processing_chunk_")
+            )
+            
+            if is_cancellable:
                 # อัปเดตสถานะเป็น cancelled
                 stored_data['status'] = 'cancelled'
                 stored_data['completed_at'] = datetime.now().isoformat()
@@ -881,7 +903,14 @@ class TranscriptionService:
         # ตรวจสอบจาก memory cache
         if task_id in self.tasks:
             task = self.tasks[task_id]
-            if task.status in ["pending", "processing", "processing_chunks", "waiting_for_chunks"]:
+            # รองรับ status: pending, processing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
+            cancellable_statuses = ["pending", "processing", "processing_chunks", "waiting_for_chunks", "merging_results"]
+            is_cancellable = (
+                task.status in cancellable_statuses or 
+                task.status.startswith("processing_chunk_")
+            )
+            
+            if is_cancellable:
                 task.status = "cancelled"
                 task.completed_at = datetime.now()
                 
