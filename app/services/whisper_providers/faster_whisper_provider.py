@@ -203,20 +203,20 @@ class FasterWhisperProvider(WhisperProvider):
         logger.info(f"[Faster Whisper] 📦 Model: {model}")
         logger.info(f"[Faster Whisper] 🌍 Language: {lang_code or 'auto-detect'}")
         logger.info(f"[Faster Whisper] 🖥️  Device: {self.device}, Compute Type: {self.compute_type}")
-        logger.info(f"[Faster Whisper] ⚡ Batch Size: {self.batch_size}")
+        # Note: batch_size ไม่ได้ใช้ใน transcribe() แต่ CTranslate2 จะจัดการเอง
         logger.info(f"[Faster Whisper] 🔧 Optimization: beam_size={beam_size}, temperature={temperature}, condition_on_previous_text={condition_on_previous_text}, vad_filter={vad_filter}")
         
         start_time = time.time()
         try:
             # Transcribe with faster-whisper
-            # ⚡ รองรับ batch_size สำหรับ GPU!
+            # Note: faster-whisper 1.0.3 ไม่รองรับ batch_size parameter ใน transcribe()
+            # batch_size จะถูกจัดการโดย CTranslate2 internally
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,
                 beam_size=beam_size,
                 temperature=temperature,
                 condition_on_previous_text=condition_on_previous_text,
-                batch_size=self.batch_size,  # ⚡ Batch processing!
                 vad_filter=vad_filter,  # Voice Activity Detection
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
