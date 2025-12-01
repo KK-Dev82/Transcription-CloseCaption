@@ -212,18 +212,21 @@ class FasterWhisperProvider(WhisperProvider):
             # Note: faster-whisper 1.0.3 รองรับเฉพาะ parameters หลักๆ
             # Parameters ที่ไม่รองรับ: batch_size, logprob_threshold, compression_ratio_threshold, 
             # best_of, patience, length_penalty, suppress_tokens, max_initial_timestamp
+            # 
+            # ตามคำแนะนำ: ใช้ compute_type="float16", language="th", vad_filter=True
+            # ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
-                language=lang_code,
+                language=lang_code,  # ระบุภาษา ลด overhead
                 beam_size=beam_size,
                 temperature=temperature,
                 condition_on_previous_text=condition_on_previous_text,
-                vad_filter=vad_filter,  # Voice Activity Detection
+                vad_filter=vad_filter,  # Voice Activity Detection - ตัดเงียบ → เร็วขึ้น
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,
+                    min_silence_duration_ms=500,  # ตามคำแนะนำ
                     threshold=0.5
                 ) if vad_filter else None,
-                word_timestamps=False,  # ไม่ใช้ word-level timestamps
+                word_timestamps=False,  # ไม่ใช้ word-level timestamps (ลด overhead)
                 initial_prompt=None,  # ไม่ใช้ initial prompt
                 no_speech_threshold=0.6,
                 without_timestamps=False,  # ยังคงใช้ timestamps (สำหรับ segments)
@@ -266,6 +269,18 @@ class FasterWhisperProvider(WhisperProvider):
             )
             
         except Exception as e:
+            error_msg = str(e)
+            # Handle cuDNN warnings/errors gracefully
+            # ตามคำแนะนำ: ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
+            # แต่ถ้ามี warning เกี่ยวกับ cuDNN อาจจะยังทำงานได้
+            if "cudnn" in error_msg.lower() or "Invalid handle" in error_msg:
+                logger.warning(f"[Faster Whisper] ⚠️  cuDNN warning detected (may still work): {error_msg}")
+                # Try to continue - sometimes CTranslate2 can work despite cuDNN warnings
+                # If it's a real error, it will fail on the next operation
+                if "Cannot load symbol" in error_msg:
+                    logger.error(f"[Faster Whisper] ❌ cuDNN symbol loading failed - this is a critical error")
+                    raise RuntimeError(f"cuDNN library issue: {error_msg}. Please ensure CUDA runtime matches CTranslate2 wheel version.")
+            
             logger.error(f"[Faster Whisper] ❌ Transcription failed: {e}", exc_info=True)
             raise
     
