@@ -260,36 +260,61 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Process segments directly from generator with timeout protection
+                # Process segments with threading timeout to avoid hanging
                 logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
-                import signal
+                import threading
+                import queue
                 
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("Segments iteration timeout")
+                result_queue = queue.Queue()
+                error_queue = queue.Queue()
                 
-                # Set timeout to 30 seconds for segments processing
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(30)
+                def process_segments():
+                    try:
+                        for segment in segments:
+                            segment_dict = {
+                                "start": segment.start,
+                                "end": segment.end,
+                                "text": segment.text.strip()
+                            }
+                            result_queue.put(('segment', segment_dict, segment.text.strip()))
+                        result_queue.put(('done', None, None))
+                    except Exception as e:
+                        error_queue.put(e)
                 
-                try:
-                    for segment in segments:
-                        segment_dict = {
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text.strip()
-                        }
-                        segments_list.append(segment_dict)
-                        text_parts.append(segment.text.strip())
-                        segment_count += 1
-                        if segment_count % 10 == 0:
-                            logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                thread = threading.Thread(target=process_segments, daemon=True)
+                thread.start()
+                
+                # Process results with timeout
+                timeout = 30.0
+                start_time = time.time()
+                while True:
+                    if time.time() - start_time > timeout:
+                        logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments")
+                        raise TimeoutError(f"Segments processing timeout after {timeout}s")
                     
-                    signal.alarm(0)  # Cancel timeout
-                    logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
-                except TimeoutError:
-                    logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments")
-                    signal.alarm(0)
-                    raise
+                    try:
+                        item_type, segment_dict, text = result_queue.get(timeout=1.0)
+                        if item_type == 'done':
+                            break
+                        elif item_type == 'segment':
+                            segments_list.append(segment_dict)
+                            text_parts.append(text)
+                            segment_count += 1
+                            if segment_count % 10 == 0:
+                                logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
+                    except queue.Empty:
+                        # Check if thread is still alive
+                        if not thread.is_alive():
+                            # Check for errors
+                            try:
+                                error = error_queue.get_nowait()
+                                raise error
+                            except queue.Empty:
+                                # Thread died without error, might be done
+                                break
+                        continue
+                
+                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
                 raise
