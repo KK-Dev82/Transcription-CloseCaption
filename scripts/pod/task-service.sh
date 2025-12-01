@@ -70,9 +70,20 @@ list_tasks() {
     fi
     
     if command -v jq &> /dev/null; then
-        TASK_COUNT=$(echo "$RESPONSE" | jq 'length' 2>/dev/null || echo "0")
+        # Check if response is an object with 'history' key (from /history/transcriptions)
+        if echo "$RESPONSE" | jq -e '.history' > /dev/null 2>&1; then
+            TASKS_JSON=$(echo "$RESPONSE" | jq '.history' 2>/dev/null)
+        # Check if response is an object with 'transcriptions' key
+        elif echo "$RESPONSE" | jq -e '.transcriptions' > /dev/null 2>&1; then
+            TASKS_JSON=$(echo "$RESPONSE" | jq '.transcriptions' 2>/dev/null)
+        # Otherwise assume it's an array directly
+        else
+            TASKS_JSON="$RESPONSE"
+        fi
         
-        if [ "$TASK_COUNT" -eq 0 ]; then
+        TASK_COUNT=$(echo "$TASKS_JSON" | jq 'length' 2>/dev/null || echo "0")
+        
+        if [ "$TASK_COUNT" -eq 0 ] || [ -z "$TASK_COUNT" ] || [ "$TASK_COUNT" = "null" ]; then
             print_warning "⚠️  No tasks found"
             exit 0
         fi
@@ -83,12 +94,12 @@ list_tasks() {
         print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         
-        echo "$RESPONSE" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
-            if [ -n "$task_id" ]; then
+        echo "$TASKS_JSON" | jq -r '.[] | "\(.task_id // .id // "")|\(.status // "unknown")|\(.file_name // .filename // .file_path // "N/A")|\(.progress // 0)|\(.created_at // "N/A")"' 2>/dev/null | while IFS='|' read -r task_id status filename progress created_at; do
+            if [ -n "$task_id" ] && [ "$task_id" != "null" ]; then
                 # Color code by status
                 if [ "$status" = "completed" ]; then
                     STATUS_COLOR="${GREEN}"
-                elif [ "$status" = "processing" ] || [ "$status" = "pending" ]; then
+                elif [ "$status" = "processing" ] || [ "$status" = "pending" ] || [ "$status" = "waiting_for_chunks" ] || [ "$status" = "processing_chunks" ]; then
                     STATUS_COLOR="${YELLOW}"
                 elif [ "$status" = "failed" ]; then
                     STATUS_COLOR="${RED}"
@@ -131,22 +142,61 @@ stop_task() {
     print_status "Cancelling task..."
     
     # Try DELETE /transcribe/{task_id}
-    RESPONSE=$(curl -s -X DELETE "$API_URL/transcribe/$task_id" 2>/dev/null || echo "")
+    HTTP_CODE=$(curl -s -o /tmp/task_cancel_response.json -w "%{http_code}" -X DELETE "$API_URL/transcribe/$task_id" 2>/dev/null || echo "000")
+    RESPONSE=$(cat /tmp/task_cancel_response.json 2>/dev/null || echo "")
+    rm -f /tmp/task_cancel_response.json 2>/dev/null || true
     
-    # Check response
-    if echo "$RESPONSE" | grep -q "ยกเลิก\|success\|message" 2>/dev/null; then
-        print_success "✅ Task cancelled successfully"
-        if command -v jq &> /dev/null; then
-            echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+    # Check HTTP status code
+    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "204" ]; then
+        # Success - check response content
+        if echo "$RESPONSE" | grep -q "ยกเลิก\|success\|message" 2>/dev/null || [ -z "$RESPONSE" ]; then
+            print_success "✅ Task cancelled successfully"
+            if [ -n "$RESPONSE" ] && command -v jq &> /dev/null; then
+                echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+            fi
         else
-            echo "$RESPONSE"
+            # Check if response contains error
+            if echo "$RESPONSE" | jq -e '.detail' > /dev/null 2>&1; then
+                ERROR_MSG=$(echo "$RESPONSE" | jq -r '.detail' 2>/dev/null)
+                if echo "$ERROR_MSG" | grep -q "ไม่สามารถยกเลิก\|ไม่พบ\|not found" 2>/dev/null; then
+                    print_error "❌ $ERROR_MSG"
+                    exit 1
+                fi
+            fi
+            print_success "✅ Task cancelled successfully"
+            if command -v jq &> /dev/null; then
+                echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+            else
+                echo "$RESPONSE"
+            fi
         fi
-    elif echo "$RESPONSE" | grep -q "404\|Not Found\|ไม่พบ" 2>/dev/null; then
+    elif [ "$HTTP_CODE" = "404" ]; then
         print_error "❌ Task not found: $task_id"
+        if [ -n "$RESPONSE" ]; then
+            if command -v jq &> /dev/null && echo "$RESPONSE" | jq -e '.detail' > /dev/null 2>&1; then
+                ERROR_MSG=$(echo "$RESPONSE" | jq -r '.detail' 2>/dev/null)
+                echo "   $ERROR_MSG"
+            else
+                echo "$RESPONSE"
+            fi
+        fi
+        exit 1
+    elif [ "$HTTP_CODE" = "000" ] || [ -z "$HTTP_CODE" ]; then
+        print_error "❌ Failed to connect to API"
         exit 1
     else
-        print_warning "⚠️  Unexpected response:"
-        echo "$RESPONSE"
+        # Check response for error message
+        if [ -n "$RESPONSE" ]; then
+            if command -v jq &> /dev/null && echo "$RESPONSE" | jq -e '.detail' > /dev/null 2>&1; then
+                ERROR_MSG=$(echo "$RESPONSE" | jq -r '.detail' 2>/dev/null)
+                print_error "❌ $ERROR_MSG"
+            else
+                print_error "❌ Failed to cancel task (HTTP $HTTP_CODE)"
+                echo "$RESPONSE"
+            fi
+        else
+            print_error "❌ Failed to cancel task (HTTP $HTTP_CODE)"
+        fi
         exit 1
     fi
 }
