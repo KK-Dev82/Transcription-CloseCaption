@@ -120,6 +120,9 @@ class JSONStorage:
             chunks_dir = task_dir / "chunks"
             chunks_dir.mkdir(exist_ok=True)
             
+            # Filter out None chunks (chunks that haven't been processed yet)
+            valid_chunks = [c for c in chunks if c is not None]
+            
             # บันทึกไฟล์ full_text.json พร้อม timestamps
             full_json_path = task_dir / "full_text.json"
             with open(full_json_path, 'w', encoding='utf-8') as f:
@@ -127,20 +130,24 @@ class JSONStorage:
                     "task_id": task_id,
                     "language": data.get("language"),
                     "total_duration": data.get("total_duration"),
-                    "segments": chunks,
+                    "segments": valid_chunks,
                     "full_text": data.get("full_text")
                 }, f, ensure_ascii=False, indent=2)
             
-            # บันทึกแต่ละ chunk แยกไฟล์
+            # บันทึกแต่ละ chunk แยกไฟล์ (skip None chunks)
+            chunk_file_index = 0
             for i, chunk in enumerate(chunks):
-                chunk_path = chunks_dir / f"chunk_{i+1:02d}.json"
+                if chunk is None:
+                    continue  # Skip None chunks
+                chunk_file_index += 1
+                chunk_path = chunks_dir / f"chunk_{chunk_file_index:02d}.json"
                 with open(chunk_path, 'w', encoding='utf-8') as f:
                     json.dump({
-                        "chunk_id": i + 1,
-                        "start_time": chunk.get("start_time"),
-                        "end_time": chunk.get("end_time"),
-                        "text": chunk.get("text", ""),
-                        "confidence": chunk.get("confidence")
+                        "chunk_id": chunk_file_index,
+                        "start_time": chunk.get("start_time") if chunk else None,
+                        "end_time": chunk.get("end_time") if chunk else None,
+                        "text": chunk.get("text", "") if chunk else "",
+                        "confidence": chunk.get("confidence") if chunk else None
                     }, f, ensure_ascii=False, indent=2)
         
         logger.info(f"บันทึก transcription: {task_dir}")
