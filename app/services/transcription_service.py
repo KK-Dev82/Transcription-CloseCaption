@@ -803,12 +803,60 @@ class TranscriptionService:
     
     async def cancel_task(self, task_id: str) -> bool:
         """ยกเลิก task"""
+        logger.info(f"🛑 Attempting to cancel task: {task_id}")
+        
+        # ตรวจสอบจาก storage ก่อน (เพราะ task อาจถูก load จาก storage)
+        stored_data = self.json_storage.load_transcription(task_id)
+        if stored_data:
+            current_status = stored_data.get('status', '')
+            logger.info(f"   Task status from storage: {current_status}")
+            
+            # ตรวจสอบว่าสามารถยกเลิกได้หรือไม่
+            if current_status in ["pending", "processing", "processing_chunks", "waiting_for_chunks"]:
+                # อัปเดตสถานะเป็น cancelled
+                stored_data['status'] = 'cancelled'
+                stored_data['completed_at'] = datetime.now().isoformat()
+                stored_data['updated_at'] = datetime.now().isoformat()
+                self.json_storage.save_transcription(task_id, stored_data)
+                
+                # อัปเดตใน memory cache ด้วย
+                if task_id in self.tasks:
+                    self.tasks[task_id].status = "cancelled"
+                    self.tasks[task_id].completed_at = datetime.now()
+                
+                logger.info(f"✅ Task {task_id} cancelled successfully")
+                return True
+            elif current_status == "cancelled":
+                logger.info(f"⚠️  Task {task_id} is already cancelled")
+                return True  # ถ้ายกเลิกแล้วก็ถือว่าสำเร็จ
+            else:
+                logger.warning(f"⚠️  Cannot cancel task {task_id} with status: {current_status}")
+                return False
+        
+        # ตรวจสอบจาก memory cache
         if task_id in self.tasks:
             task = self.tasks[task_id]
-            if task.status == "pending" or task.status == "processing":
+            if task.status in ["pending", "processing", "processing_chunks", "waiting_for_chunks"]:
                 task.status = "cancelled"
                 task.completed_at = datetime.now()
+                
+                # บันทึกลง storage ด้วย
+                task_data = task.__dict__
+                task_data['status'] = 'cancelled'
+                task_data['completed_at'] = datetime.now().isoformat()
+                task_data['updated_at'] = datetime.now().isoformat()
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                logger.info(f"✅ Task {task_id} cancelled successfully")
                 return True
+            elif task.status == "cancelled":
+                logger.info(f"⚠️  Task {task_id} is already cancelled")
+                return True
+            else:
+                logger.warning(f"⚠️  Cannot cancel task {task_id} with status: {task.status}")
+                return False
+        
+        logger.warning(f"⚠️  Task {task_id} not found")
         return False
     
     def cleanup_tasks(
