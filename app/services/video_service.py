@@ -637,7 +637,7 @@ class VideoService:
                     ar=16000  # 16kHz
                 )
                 .overwrite_output()
-                .run(quiet=True, check=True)
+                .run(quiet=True)
             )
             
             logger.info(f"✅ Extract audio สำเร็จ: {output_path}")
