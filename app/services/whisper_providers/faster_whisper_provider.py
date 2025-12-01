@@ -260,80 +260,23 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Process segments - faster-whisper returns a generator
-                # Use threading with timeout to avoid hanging
+                # Process segments directly in main thread
+                # faster-whisper segments generator should work in the same thread as transcribe()
                 logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
-                import threading
-                import queue
-                import time as time_module
                 
-                result_queue = queue.Queue(maxsize=1000)
-                error_queue = queue.Queue()
-                done_flag = threading.Event()
+                # Simple direct iteration - segments generator should yield immediately after transcribe()
+                for segment in segments:
+                    segment_dict = {
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": segment.text.strip()
+                    }
+                    segments_list.append(segment_dict)
+                    text_parts.append(segment.text.strip())
+                    segment_count += 1
+                    if segment_count % 10 == 0:
+                        logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
                 
-                def process_segments_thread():
-                    try:
-                        logger.info(f"[Faster Whisper] 🔍 Thread: Starting to iterate segments...")
-                        for segment in segments:
-                            if done_flag.is_set():
-                                break
-                            segment_dict = {
-                                "start": segment.start,
-                                "end": segment.end,
-                                "text": segment.text.strip()
-                            }
-                            result_queue.put(('segment', segment_dict, segment.text.strip()))
-                        result_queue.put(('done', None, None))
-                        logger.info(f"[Faster Whisper] ✅ Thread: Finished iterating segments")
-                    except Exception as e:
-                        logger.error(f"[Faster Whisper] ❌ Thread error: {e}", exc_info=True)
-                        error_queue.put(e)
-                
-                thread = threading.Thread(target=process_segments_thread, daemon=True)
-                thread.start()
-                logger.info(f"[Faster Whisper] 🔍 Thread started, waiting for segments...")
-                
-                # Process results with timeout
-                timeout = 10.0  # 10 seconds timeout
-                start_time = time_module.time()
-                last_log_time = start_time
-                
-                while True:
-                    elapsed = time_module.time() - start_time
-                    if elapsed > timeout:
-                        logger.error(f"[Faster Whisper] ❌ Timeout processing segments after {segment_count} segments ({timeout}s)")
-                        done_flag.set()
-                        raise TimeoutError(f"Segments processing timeout after {timeout}s")
-                    
-                    # Log progress every 2 seconds
-                    if time_module.time() - last_log_time >= 2.0:
-                        logger.info(f"[Faster Whisper] 🔍 Still processing... ({segment_count} segments so far, {elapsed:.1f}s elapsed)")
-                        last_log_time = time_module.time()
-                    
-                    try:
-                        item_type, segment_dict, text = result_queue.get(timeout=0.5)
-                        if item_type == 'done':
-                            break
-                        elif item_type == 'segment':
-                            segments_list.append(segment_dict)
-                            text_parts.append(text)
-                            segment_count += 1
-                            if segment_count % 10 == 0:
-                                logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
-                    except queue.Empty:
-                        # Check if thread is still alive
-                        if not thread.is_alive():
-                            # Check for errors
-                            try:
-                                error = error_queue.get_nowait()
-                                raise error
-                            except queue.Empty:
-                                # Thread died without error, might be done
-                                logger.warning(f"[Faster Whisper] ⚠️ Thread died unexpectedly")
-                                break
-                        continue
-                
-                done_flag.set()
                 logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
             except Exception as seg_error:
                 logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
