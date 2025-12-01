@@ -17,6 +17,8 @@ from pathlib import Path
 import aiohttp
 import aiofiles
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 # เพิ่ม app directory เข้าไปใน Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -54,6 +56,11 @@ class VideoWorker:
         # Transcription exchange
         self.transcription_exchange = 'transcription.exchange'
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
+        
+        # Thread pool สำหรับ parallel chunk processing
+        # RTX 4080 Super สามารถประมวลผลได้ 10-15 chunks พร้อมกัน
+        self.executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="chunk_worker")
+        self.active_chunks = {}  # Track active chunk tasks: {delivery_tag: future}
         
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -125,10 +132,10 @@ class VideoWorker:
                 )
                 
                 # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
-                # prefetch_count=5 หมายความว่าแต่ละ worker จะรับงานได้ 5 งานพร้อมกัน (chunks)
-                # เมื่อมี 2 workers → สามารถประมวลผลได้ 10 chunks พร้อมกัน
-                # ⚠️ ปรับตาม server resources: RTX 4080 Super, 16GB VRAM
-                self.channel.basic_qos(prefetch_count=5)
+                # prefetch_count=10 หมายความว่าแต่ละ worker จะรับงานได้ 10 งานพร้อมกัน (chunks)
+                # ใช้ ThreadPoolExecutor (max_workers=10) เพื่อประมวลผล parallel
+                # RTX 4080 Super, 16GB VRAM → สามารถประมวลผลได้ 10 chunks พร้อมกัน
+                self.channel.basic_qos(prefetch_count=10)
                 
                 logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
                 return True
@@ -823,6 +830,9 @@ class VideoWorker:
     
     def _process_chunk_transcription_task(self, ch, method, properties, body):
         """ประมวลผล chunk transcription task (สำหรับ parallel processing)"""
+        delivery_tag = method.delivery_tag
+        chunk_task = None
+        
         try:
             chunk_task = json.loads(body.decode('utf-8'))
             parent_task_id = chunk_task.get('parent_task_id')
@@ -836,31 +846,61 @@ class VideoWorker:
             logger.info(f"   Chunk path: {chunk_path}")
             logger.info(f"   Model: {model_size}, Language: {language}")
             
-            # ประมวลผล chunk transcription
-            asyncio.run(self._execute_chunk_transcription(chunk_task))
+            # ส่งไปยัง thread pool เพื่อประมวลผล parallel (ไม่ block)
+            future = self.executor.submit(self._execute_chunk_transcription_sync, chunk_task, ch, delivery_tag)
+            self.active_chunks[delivery_tag] = future
             
-            # Acknowledge message
+            # Acknowledge message ทันที (ไม่รอให้เสร็จ) เพื่อให้ worker รับ message ใหม่ได้
+            # ⚠️ หมายเหตุ: ถ้า task fail จะไม่สามารถ requeue ได้ แต่จะบันทึก error ใน storage
             try:
                 if ch and not ch.is_closed:
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                    logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} completed for task {parent_task_id}")
+                    ch.basic_ack(delivery_tag=delivery_tag)
+                    logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} acknowledged - processing in background")
                 else:
                     logger.warning(f"⚠️ Channel is closed, cannot acknowledge chunk task")
             except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
                     pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
                 logger.error(f"❌ Cannot acknowledge chunk task: {ack_error}")
+                # ถ้า acknowledge ไม่ได้ ให้ cancel future
+                if delivery_tag in self.active_chunks:
+                    self.active_chunks[delivery_tag].cancel()
+                    del self.active_chunks[delivery_tag]
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการประมวลผล chunk transcription: {e}", exc_info=True)
             # Requeue เพื่อให้ worker อื่นลองประมวลผล
             try:
                 if ch and not ch.is_closed:
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    ch.basic_nack(delivery_tag=delivery_tag, requeue=True)
                 else:
                     logger.warning(f"⚠️ Channel is closed, cannot nack chunk task")
             except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosed,
                     pika.exceptions.AMQPConnectionError, AttributeError) as ack_error:
                 logger.error(f"ไม่สามารถ nack chunk task ได้: {ack_error}")
+            # Clean up
+            if delivery_tag in self.active_chunks:
+                del self.active_chunks[delivery_tag]
+    
+    def _execute_chunk_transcription_sync(self, chunk_task: Dict[str, Any], ch, delivery_tag):
+        """Execute chunk transcription in a synchronous way (for ThreadPoolExecutor)"""
+        try:
+            # สร้าง event loop ใหม่สำหรับ thread นี้
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_chunk_transcription(chunk_task))
+            finally:
+                loop.close()
+            
+            # Clean up
+            if delivery_tag in self.active_chunks:
+                del self.active_chunks[delivery_tag]
+                
+        except Exception as e:
+            logger.error(f"❌ Error in chunk transcription thread: {e}", exc_info=True)
+            # Clean up
+            if delivery_tag in self.active_chunks:
+                del self.active_chunks[delivery_tag]
     
     async def _execute_chunk_transcription(self, chunk_task: Dict[str, Any]):
         """ดำเนินการ transcribe chunk"""
@@ -1349,6 +1389,14 @@ class VideoWorker:
                         pass  # Already closed
             except Exception as e:
                 logger.warning(f"Error closing channel: {e}")
+            try:
+                # Shutdown thread pool executor
+                if hasattr(self, 'executor') and self.executor:
+                    logger.info("Shutting down thread pool executor...")
+                    self.executor.shutdown(wait=True, timeout=30)
+                    logger.info("Thread pool executor shut down")
+            except Exception as e:
+                logger.warning(f"Error shutting down executor: {e}")
             logger.info("Video Worker ปิดตัวลง")
 
 def main():
