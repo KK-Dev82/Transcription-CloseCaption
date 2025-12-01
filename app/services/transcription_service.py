@@ -286,8 +286,14 @@ class TranscriptionService:
         downloaded_file_path: Optional[str] = None
         
         try:
+            # Resolve absolute path ถ้าเป็น relative path
+            if local_file_path:
+                local_file_path = str(Path(local_file_path).resolve())
+                logger.info(f"📂 Resolved file path: {local_file_path}")
+            
             # ตรวจสอบไฟล์ ถ้าไม่พบและมี file_url ให้ดาวน์โหลด
             if not local_file_path or not Path(local_file_path).exists():
+                logger.warning(f"⚠️ File not found: {local_file_path}")
                 if not file_url:
                     raise FileNotFoundError(f"ไฟล์ไม่พบและไม่มี file_url สำหรับงาน {task_id}")
                 
