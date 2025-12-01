@@ -8,7 +8,8 @@ class TranscriptionRequest(BaseModel):
     file_name: Optional[str] = None
     language: Optional[str] = "th"  # ภาษาไทยเป็น default
     model_size: Optional[str] = "base"  # tiny, base, small, medium, large
-    chunk_duration: Optional[int] = 30  # ความยาวของ chunk (วินาที)
+    chunk_duration: Optional[int] = 30  # ความยาวของ chunk (วินาที) - ใช้เมื่อ use_chunking=true
+    use_chunking: Optional[bool] = False  # ใช้ chunking หรือไม่ (default: false - transcribe ทั้งไฟล์เลย)
     enable_timestamps: Optional[bool] = True
     callback_url: Optional[str] = None  # URL สำหรับ callback เมื่อเสร็จ (จาก Backend)
     job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)

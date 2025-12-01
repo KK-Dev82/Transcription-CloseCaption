@@ -406,6 +406,7 @@ class VideoWorker:
                 file_path = task_data.get('file_path', 'N/A')
                 model_size = task_data.get('model_size', 'base')
                 language = task_data.get('language', 'th')
+                use_chunking = task_data.get('use_chunking', False)  # Default: false
                 
                 logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 logger.info(f"🎬 เริ่มประมวลผล transcription task: {task_id}")
@@ -1217,9 +1218,10 @@ class VideoWorker:
             language = task_data.get('language', 'th')
             model_size = task_data.get('model_size', 'base')
             chunk_duration = task_data.get('chunk_duration', 30)
+            use_chunking = task_data.get('use_chunking', False)  # Default: false
             
             logger.info(f"📂 เริ่ม transcription: {file_path}")
-            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s")
+            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s, Use Chunking: {use_chunking}")
             
             # สร้าง task object สำหรับ transcription service
             from app.models.transcription import TranscriptionResponse
@@ -1244,7 +1246,7 @@ class VideoWorker:
             logger.info(f"🔄 เรียกใช้ transcription service...")
             logger.info(f"   Task ID: {task_data['task_id']}")
             logger.info(f"   File path: {file_path}")
-            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s")
+            logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s, Use Chunking: {use_chunking}")
             
             # เรียกใช้ transcription service
             try:
@@ -1255,6 +1257,7 @@ class VideoWorker:
                     language,
                     model_size,
                     chunk_duration,
+                    use_chunking=use_chunking,
                     file_url=task_data.get('file_url'),
                     file_name=task_data.get('file_name')
                 )

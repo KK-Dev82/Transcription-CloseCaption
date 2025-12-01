@@ -158,6 +158,7 @@ class TranscriptionService:
         language: str = "th",
         model_size: str = "base",
         chunk_duration: int = 30,
+        use_chunking: bool = False,  # Default: false - transcribe ทั้งไฟล์เลย
         callback_url: str = None,
         job_id: int = None,
         user_id: str = None
@@ -173,6 +174,7 @@ class TranscriptionService:
                 language=language,
                 model_size=model_size,
                 chunk_duration=chunk_duration,
+                use_chunking=use_chunking,
                 job_id=job_id,
                 user_id=user_id,
             )
@@ -263,6 +265,7 @@ class TranscriptionService:
         language: str,
         model_size: str,
         chunk_duration: int,
+        use_chunking: bool = False,
         file_url: Optional[str] = None,
         file_name: Optional[str] = None
     ):
@@ -311,8 +314,88 @@ class TranscriptionService:
             if file_name:
                 task.file_name = file_name
             
-            # ตรวจสอบประเภทไฟล์และสร้าง audio chunks
-            logger.info("กำลังตรวจสอบประเภทไฟล์และแบ่งไฟล์เป็น audio chunks...")
+            # ดึงข้อมูลไฟล์
+            file_info = self.file_service.get_file_info(local_file_path)
+            task.total_duration = file_info.get("duration")
+            logger.info(f"📊 File info: duration={task.total_duration}s, size={file_info.get('size', 'N/A')} bytes")
+            
+            # ตรวจสอบว่าใช้ chunking หรือไม่
+            if not use_chunking:
+                # ⚡ Simplified Flow: Extract audio (ถ้าเป็น video) → Transcribe ทั้งไฟล์เลย (ไม่ chunk)
+                logger.info("⚡ Simplified Flow: ไม่ใช้ chunking - จะ transcribe ทั้งไฟล์เลย")
+                logger.info(f"   File path: {local_file_path}")
+                
+                # ตรวจสอบว่าเป็น audio file หรือ video file
+                is_audio = self.file_service.is_audio_file(local_file_path)
+                is_video = self.file_service.is_video_file(local_file_path)
+                logger.info(f"   File type: {'audio' if is_audio else 'video' if is_video else 'unknown'}")
+                
+                # Extract audio ถ้าเป็น video
+                audio_path = local_file_path
+                if is_video:
+                    logger.info("🎬 ไฟล์เป็น video - กำลัง extract audio...")
+                    try:
+                        # Extract audio ทั้งไฟล์ (ไม่ chunk)
+                        audio_path = self.video_service.extract_audio(local_file_path)
+                        logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
+                    except Exception as e:
+                        logger.error(f"❌ ไม่สามารถ extract audio ได้: {e}", exc_info=True)
+                        raise
+                elif not is_audio:
+                    logger.warning("⚠️ ไม่ทราบประเภทไฟล์ - ลองใช้ extract_audio()")
+                    try:
+                        audio_path = self.video_service.extract_audio(local_file_path)
+                        logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ extract_audio() ล้มเหลว: {e}")
+                        # ใช้ไฟล์เดิม (อาจเป็น audio อยู่แล้ว)
+                        audio_path = local_file_path
+                
+                # Transcribe ทั้งไฟล์เลย
+                logger.info("🎯 เริ่ม transcription ทั้งไฟล์ (ไม่ chunk)...")
+                task.status = "transcribing"
+                task.progress = 20
+                self.json_storage.save_transcription(task_id, task.__dict__)
+                
+                try:
+                    # เรียกใช้ whisper service โดยตรง (ไม่ผ่าน queue)
+                    result = await self.whisper_service.transcribe_file(
+                        audio_path,
+                        language=language,
+                        model_size=model_size
+                    )
+                    
+                    # เก็บผลลัพธ์
+                    task.full_text = result.text
+                    task.language = result.language
+                    task.chunks = result.segments if result.segments else []
+                    task.status = "completed"
+                    task.progress = 100
+                    
+                    logger.info(f"✅ Transcription สำเร็จ: text length={len(result.text)}, segments={len(result.segments)}")
+                    
+                    # บันทึกผลลัพธ์
+                    self.json_storage.save_transcription(task_id, task.__dict__)
+                    
+                    # Cleanup temporary audio file (ถ้า extract จาก video)
+                    if audio_path != local_file_path and Path(audio_path).exists():
+                        try:
+                            Path(audio_path).unlink()
+                            logger.info(f"🧹 ลบ temporary audio file: {audio_path}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ ไม่สามารถลบ temporary audio file: {e}")
+                    
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"❌ Transcription failed: {e}", exc_info=True)
+                    task.status = "failed"
+                    task.error_message = str(e)
+                    self.json_storage.save_transcription(task_id, task.__dict__)
+                    raise
+            
+            # ⚡ Chunking Flow (use_chunking=true): Extract → Chunk → Queue → Transcribe
+            logger.info("📦 Chunking Flow: จะแบ่งไฟล์เป็น chunks และส่งไปยัง queue")
             logger.info(f"   File path: {local_file_path}")
             logger.info(f"   Chunk duration: {chunk_duration}s")
             
@@ -358,11 +441,6 @@ class TranscriptionService:
             except Exception as e:
                 logger.error(f"❌ เกิดข้อผิดพลาดในการสร้าง audio chunks: {e}", exc_info=True)
                 raise
-            
-            # ดึงข้อมูลไฟล์
-            file_info = self.file_service.get_file_info(local_file_path)
-            task.total_duration = file_info.get("duration")
-            logger.info(f"📊 File info: duration={task.total_duration}s, size={file_info.get('size', 'N/A')} bytes")
             
             # ส่ง chunks ไปยัง queue สำหรับ parallel processing
             logger.info(f"📤 ส่ง {len(chunks)} chunks ไปยัง transcription_chunk_queue สำหรับ parallel processing...")

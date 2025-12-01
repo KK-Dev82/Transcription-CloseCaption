@@ -22,6 +22,7 @@ from .base_provider import WhisperProvider
 from .builtin_provider import BuiltinProvider
 from .groq_provider import GroqProvider
 from .openai_whisper_provider import OpenAIWhisperProvider
+from .faster_whisper_provider import FasterWhisperProvider
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class ProviderType(Enum):
     BUILTIN = "builtin"
     GROQ = "groq"
     OPENAI_WHISPER = "openai-whisper"
+    FASTER_WHISPER = "faster-whisper"
     # Future providers
     # FIREWORKS = "fireworks"
     # OPENAI = "openai"
@@ -55,8 +57,8 @@ class WhisperProviderFactory:
     _providers: Dict[str, WhisperProvider] = {}
     
     # Fallback order (primary -> fallback)
-    # Note: openai-whisper ควรเป็น primary สำหรับ Local Direct Mode
-    _fallback_order = [ProviderType.OPENAI_WHISPER, ProviderType.GROQ, ProviderType.BUILTIN]
+    # Note: faster-whisper ควรเป็น primary สำหรับ GPU (เร็วกว่า)
+    _fallback_order = [ProviderType.FASTER_WHISPER, ProviderType.OPENAI_WHISPER, ProviderType.GROQ, ProviderType.BUILTIN]
     
     @classmethod
     def get_provider(cls, provider_type: str = None) -> WhisperProvider:
@@ -100,6 +102,8 @@ class WhisperProviderFactory:
             return GroqProvider(config)
         elif provider_type == ProviderType.OPENAI_WHISPER.value:
             return OpenAIWhisperProvider(config)
+        elif provider_type == ProviderType.FASTER_WHISPER.value:
+            return FasterWhisperProvider(config)
         else:
             logger.warning(f"[Factory] ⚠️ Unknown provider '{provider_type}', using builtin")
             return BuiltinProvider(config)
@@ -124,6 +128,14 @@ class WhisperProviderFactory:
             return {
                 'model': os.getenv('WHISPER_MODEL', 'base'),
                 'device': os.getenv('WHISPER_DEVICE', 'auto'),
+                'download_root': os.getenv('WHISPER_DOWNLOAD_ROOT', None)
+            }
+        elif provider_type == ProviderType.FASTER_WHISPER.value:
+            return {
+                'model': os.getenv('WHISPER_MODEL', 'medium'),
+                'device': os.getenv('WHISPER_DEVICE', 'auto'),
+                'compute_type': os.getenv('WHISPER_COMPUTE_TYPE', None),
+                'batch_size': int(os.getenv('WHISPER_BATCH_SIZE', '16')),
                 'download_root': os.getenv('WHISPER_DOWNLOAD_ROOT', None)
             }
         return {}

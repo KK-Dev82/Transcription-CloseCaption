@@ -34,6 +34,7 @@ async def start_transcription(request: TranscriptionRequest):
             language=request.language,
             model_size=request.model_size,
             chunk_duration=request.chunk_duration,
+            use_chunking=request.use_chunking,
             callback_url=request.callback_url,
             job_id=request.job_id,
             user_id=request.user_id
