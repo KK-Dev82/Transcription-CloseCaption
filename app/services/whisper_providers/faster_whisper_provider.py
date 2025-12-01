@@ -135,9 +135,12 @@ class FasterWhisperProvider(WhisperProvider):
             
             try:
                 # Load model with download_root if specified
+                # เพิ่ม num_workers=1 และ cpu_threads=4 เพื่อลด concurrency/deadlock issues
                 model_kwargs = {
                     "device": self.device,
                     "compute_type": self.compute_type,
+                    "num_workers": 1,  # ลด concurrency เพื่อหลีกเลี่ยง deadlock
+                    "cpu_threads": 4,  # จำกัด CPU threads
                 }
                 if self.download_root:
                     model_kwargs["download_root"] = self.download_root
@@ -229,6 +232,8 @@ class FasterWhisperProvider(WhisperProvider):
             # ตามคำแนะนำ: ใช้ compute_type="float16", language="th", vad_filter=True
             # ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
             logger.info(f"[Faster Whisper] 🎯 DEBUG: Calling transcribe() now...")
+            # ใช้ without_timestamps=True เพื่อหลีกเลี่ยงปัญหา segments generator timeout
+            # และ num_workers=1 เพื่อลด concurrency/deadlock issues
             segments, info = whisper_model.transcribe(
                 str(audio_path_obj),
                 language=lang_code,  # ระบุภาษา ลด overhead
@@ -243,7 +248,7 @@ class FasterWhisperProvider(WhisperProvider):
                 word_timestamps=False,  # ไม่ใช้ word-level timestamps (ลด overhead)
                 initial_prompt=None,  # ไม่ใช้ initial prompt
                 no_speech_threshold=0.6,
-                without_timestamps=False,  # ยังคงใช้ timestamps (สำหรับ segments)
+                without_timestamps=True,  # ใช้ True เพื่อหลีกเลี่ยง generator timeout
             )
             
             processing_time = time.time() - start_time
@@ -260,19 +265,35 @@ class FasterWhisperProvider(WhisperProvider):
             logger.info(f"[Faster Whisper] 📝 Processing segments...")
             segment_count = 0
             try:
-                # Process segments directly in main thread
-                # faster-whisper segments generator should work in the same thread as transcribe()
-                logger.info(f"[Faster Whisper] 🔍 Starting to iterate segments...")
+                # เมื่อใช้ without_timestamps=True, segments จะเป็น list แทน generator
+                # แต่ถ้ายังเป็น generator ให้ iterate ตามปกติ
+                logger.info(f"[Faster Whisper] 🔍 Starting to process segments...")
                 
-                # Simple direct iteration - segments generator should yield immediately after transcribe()
-                for segment in segments:
-                    segment_dict = {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "text": segment.text.strip()
-                    }
+                # ตรวจสอบว่า segments เป็น list หรือ generator
+                if isinstance(segments, list):
+                    logger.info(f"[Faster Whisper] ✅ Segments is list (without_timestamps=True), count: {len(segments)}")
+                    segments_iter = segments
+                else:
+                    logger.info(f"[Faster Whisper] 🔍 Segments is generator, iterating...")
+                    segments_iter = segments
+                
+                # Process segments
+                for segment in segments_iter:
+                    # เมื่อ without_timestamps=True, segment อาจเป็น dict หรือ object
+                    if isinstance(segment, dict):
+                        segment_dict = {
+                            "start": segment.get("start", 0.0),
+                            "end": segment.get("end", 0.0),
+                            "text": segment.get("text", "").strip()
+                        }
+                    else:
+                        segment_dict = {
+                            "start": getattr(segment, "start", 0.0),
+                            "end": getattr(segment, "end", 0.0),
+                            "text": getattr(segment, "text", "").strip()
+                        }
                     segments_list.append(segment_dict)
-                    text_parts.append(segment.text.strip())
+                    text_parts.append(segment_dict["text"])
                     segment_count += 1
                     if segment_count % 10 == 0:
                         logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
