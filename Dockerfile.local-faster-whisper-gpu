@@ -1,0 +1,109 @@
+# Dockerfile สำหรับ Local Development with Faster-Whisper (GPU Mode)
+# ใช้ CUDA base image สำหรับ GPU support
+#
+# Usage:
+#   docker build -f Dockerfile.local-faster-whisper-gpu -t kk-transcription:local-faster-whisper-gpu .
+
+ARG CUDA_VERSION=12.1.0
+
+# Builder stage
+FROM python:3.11-slim as builder
+
+# ตั้งค่า environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ติดตั้ง build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    git \
+    wget \
+    curl \
+    ffmpeg \
+    libmagic1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# สร้าง working directory
+WORKDIR /app
+
+# ติดตั้ง PyTorch with CUDA support
+RUN pip install --no-cache-dir \
+    torch==2.1.1 \
+    torchaudio==2.1.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# ติดตั้ง faster-whisper และ dependencies
+RUN pip install --no-cache-dir \
+    faster-whisper==1.0.3
+
+# คัดลอก requirements และติดตั้ง Python dependencies
+COPY docs/requirements-core.txt .
+RUN pip install --no-cache-dir --user -r requirements-core.txt
+
+# Production stage - ใช้ CUDA base image
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu22.04
+
+# ตั้งค่า environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.local/bin:$PATH"
+ENV CUDA_VISIBLE_DEVICES=0
+
+# ติดตั้ง Python และ runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    libmagic1 \
+    libsndfile1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# สร้าง working directory
+WORKDIR /app
+
+# คัดลอก Python packages จาก builder stage
+COPY --from=builder /root/.local /root/.local
+
+# ลบ cache และ files ที่ไม่จำเป็น
+RUN find /root/.local -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
+    && find /root/.local -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# คัดลอก source code
+COPY . .
+
+# สร้างโฟลเดอร์ที่จำเป็น
+RUN mkdir -p uploads temp storage models test-files
+
+# คัดลอก entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+# ตั้งค่า permissions
+RUN chmod +x main.py
+
+# Set default environment variables for faster-whisper (GPU mode)
+ENV WHISPER_PROVIDER=faster-whisper
+ENV WHISPER_MODEL=medium
+ENV WHISPER_DEVICE=cuda
+ENV WHISPER_COMPUTE_TYPE=float16
+
+# Expose port
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# ใช้ entrypoint script
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# รัน application
+CMD ["sh", "-c", "if [ \"$ENVIRONMENT\" = \"development\" ]; then uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --log-level info; else uvicorn app.main:app --host 0.0.0.0 --port 8001 --log-level info; fi"]
+

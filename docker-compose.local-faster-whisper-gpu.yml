@@ -1,0 +1,163 @@
+# Docker Compose สำหรับ Local Development with Faster-Whisper (GPU Mode)
+# สำหรับใช้กับ NVIDIA GPU
+#
+# Usage:
+#   docker compose -f docker-compose.local-faster-whisper-gpu.yml up -d
+#
+# Prerequisites:
+#   - NVIDIA GPU
+#   - nvidia-container-toolkit ติดตั้งแล้ว
+#   - Docker Desktop with GPU support (หรือ Docker Engine + nvidia-docker2)
+
+version: '3.8'
+
+services:
+  # Main API Service with Faster-Whisper (GPU Mode)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.local-faster-whisper-gpu
+    image: kk-transcription:local-faster-whisper-gpu
+    container_name: transcription-api-local-faster-whisper-gpu
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./storage:/app/storage
+      - ./temp:/app/temp
+      - ./models:/app/models
+      - ./test-files:/app/test-files
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER:-senate}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+      # Faster-Whisper Configuration (GPU Mode)
+      - WHISPER_PROVIDER=faster-whisper
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+      - WHISPER_BEAM_SIZE=${WHISPER_BEAM_SIZE:-1}
+      - WHISPER_TEMPERATURE=${WHISPER_TEMPERATURE:-0}
+      - WHISPER_CONDITION_ON_PREVIOUS_TEXT=${WHISPER_CONDITION_ON_PREVIOUS_TEXT:-false}
+      - WHISPER_VAD_FILTER=${WHISPER_VAD_FILTER:-true}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - app-network
+      - senate-backend_kk-network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # GPU support
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+          cpus: '4.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Video Processing Worker with Faster-Whisper (GPU Mode)
+  video-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.local-faster-whisper-gpu
+    image: kk-transcription:local-faster-whisper-gpu
+    container_name: video-worker-1-local-faster-whisper-gpu
+    command: python -m app.workers.video_worker
+    volumes:
+      - ./uploads:/app/uploads
+      - ./storage:/app/storage
+      - ./temp:/app/temp
+      - ./models:/app/models
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=local
+      - STORAGE_TYPE=json
+      - JSON_STORAGE_DIR=/app/storage
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER:-senate}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+      # Faster-Whisper Configuration (GPU Mode)
+      - WHISPER_PROVIDER=faster-whisper
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+      - WHISPER_BEAM_SIZE=${WHISPER_BEAM_SIZE:-1}
+      - WHISPER_TEMPERATURE=${WHISPER_TEMPERATURE:-0}
+      - WHISPER_CONDITION_ON_PREVIOUS_TEXT=${WHISPER_CONDITION_ON_PREVIOUS_TEXT:-false}
+      - WHISPER_VAD_FILTER=${WHISPER_VAD_FILTER:-true}
+      - WHISPER_USE_THREAD_LOCAL=${WHISPER_USE_THREAD_LOCAL:-false}
+      - TRANSCRIPTION_MAX_WORKERS=${TRANSCRIPTION_MAX_WORKERS:-1}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - app-network
+      - senate-backend_kk-network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # GPU support
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 8G
+          cpus: '4.0'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Redis สำหรับ caching และ queue
+  redis:
+    image: redis:7-alpine
+    container_name: transcription-redis-local-faster-whisper-gpu
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data_local_faster_whisper_gpu:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '0.5'
+
+volumes:
+  redis_data_local_faster_whisper_gpu:
+
+networks:
+  app-network:
+    driver: bridge
+  senate-backend_kk-network:
+    external: true
+
