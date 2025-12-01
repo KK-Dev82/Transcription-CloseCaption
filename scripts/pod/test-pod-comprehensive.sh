@@ -47,54 +47,82 @@ if torch.cuda.is_available():
 pip3 list | grep -E 'faster-whisper|torch|ctranslate2' | head -5
 echo ""
 
-# Test 2: Direct faster-whisper test
+# Test 2: Direct faster-whisper test (with timeout)
 print_test "Test 2: Direct faster-whisper (medium model)"
 echo "----------------------------------------"
-python3 << 'PYTHON_SCRIPT'
+timeout 60 python3 << 'PYTHON_SCRIPT'
 import sys
 import time
+import signal
 from faster_whisper import WhisperModel
 import torch
 
-print("Loading medium model...")
-start = time.time()
-model = WhisperModel('medium', device='cuda', compute_type='float16')
-load_time = time.time() - start
-print(f"✓ Model loaded in {load_time:.2f}s")
+def timeout_handler(signum, frame):
+    raise TimeoutError("Test timeout after 60 seconds")
 
-print("Starting transcription...")
-transcribe_start = time.time()
-segments, info = model.transcribe('uploads/v05-1_direct_audio.wav', language='th')
-transcribe_time = time.time() - transcribe_start
-print(f"✓ Transcribe completed in {transcribe_time:.2f}s")
-print(f"  Duration: {info.duration:.2f}s")
-print(f"  Language: {info.language}")
+signal.signal(signal.SIGALRM, timeout_handler)
+signal.alarm(60)
 
-print("Iterating segments...")
-iter_start = time.time()
-segments_list = []
-count = 0
-for segment in segments:
-    segments_list.append({
-        'start': segment.start,
-        'end': segment.end,
-        'text': segment.text.strip()
-    })
-    count += 1
-    if count <= 3:
-        print(f"  Segment {count}: [{segment.start:.2f}s-{segment.end:.2f}s] {segment.text[:60]}")
-    if count >= 10:
-        break
+try:
+    print("Loading medium model...")
+    start = time.time()
+    model = WhisperModel('medium', device='cuda', compute_type='float16')
+    load_time = time.time() - start
+    print(f"✓ Model loaded in {load_time:.2f}s")
 
-iter_time = time.time() - iter_start
-print(f"✓ Iterated {count} segments in {iter_time:.2f}s")
+    print("Starting transcription...")
+    transcribe_start = time.time()
+    segments, info = model.transcribe('uploads/v05-1_direct_audio.wav', language='th')
+    transcribe_time = time.time() - transcribe_start
+    print(f"✓ Transcribe completed in {transcribe_time:.2f}s")
+    print(f"  Duration: {info.duration:.2f}s")
+    print(f"  Language: {info.language}")
 
-full_text = ' '.join([s['text'] for s in segments_list])
-print(f"✓ Full text length: {len(full_text)} characters")
-print(f"✓ First 200 chars: {full_text[:200]}")
+    print("Iterating segments (max 10s)...")
+    iter_start = time.time()
+    segments_list = []
+    count = 0
+    max_iter_time = 10.0
+    
+    for segment in segments:
+        if time.time() - iter_start > max_iter_time:
+            print(f"⚠️ Iteration timeout after {max_iter_time}s, processed {count} segments")
+            break
+            
+        segments_list.append({
+            'start': segment.start,
+            'end': segment.end,
+            'text': segment.text.strip()
+        })
+        count += 1
+        if count <= 3:
+            print(f"  Segment {count}: [{segment.start:.2f}s-{segment.end:.2f}s] {segment.text[:60]}")
+        if count >= 20:
+            break
 
-print(f"\n✅ Direct test completed successfully!")
-print(f"   Total time: {time.time() - start:.2f}s")
+    iter_time = time.time() - iter_start
+    print(f"✓ Iterated {count} segments in {iter_time:.2f}s")
+
+    if segments_list:
+        full_text = ' '.join([s['text'] for s in segments_list])
+        print(f"✓ Full text length: {len(full_text)} characters")
+        print(f"✓ First 200 chars: {full_text[:200]}")
+    else:
+        print("⚠️ No segments found")
+
+    signal.alarm(0)
+    print(f"\n✅ Direct test completed successfully!")
+    print(f"   Total time: {time.time() - start:.2f}s")
+except TimeoutError as e:
+    print(f"❌ {e}")
+    signal.alarm(0)
+    sys.exit(1)
+except Exception as e:
+    print(f"❌ Error: {e}")
+    import traceback
+    traceback.print_exc()
+    signal.alarm(0)
+    sys.exit(1)
 PYTHON_SCRIPT
 
 if [ $? -eq 0 ]; then
