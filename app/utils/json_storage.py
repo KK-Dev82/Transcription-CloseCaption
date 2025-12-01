@@ -51,7 +51,7 @@ class JSONStorage:
         processing_time = transcription_data.get("processing_time") or transcription_data.get("result_time")
         if not processing_time and transcription_data.get("completed_at") and existing_data.get("created_at"):
             try:
-                from datetime import datetime
+                # datetime ถูก import แล้วที่บรรทัด 5 - ไม่ต้อง import ซ้ำ
                 created = datetime.fromisoformat(existing_data.get("created_at").replace('Z', '+00:00') if 'Z' in existing_data.get("created_at") else existing_data.get("created_at"))
                 completed = datetime.fromisoformat(transcription_data.get("completed_at").replace('Z', '+00:00') if 'Z' in transcription_data.get("completed_at") else transcription_data.get("completed_at"))
                 processing_time = (completed - created).total_seconds()
