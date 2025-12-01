@@ -14,7 +14,38 @@ Local Direct Mode เป็นการทดสอบ transcription service บ
 3. **Debug ง่าย**: เข้า container และดู logs ได้โดยตรง
 4. **ไม่กระทบ Production**: แยกจาก containers เดิม
 
-## ขั้นตอนการ Setup
+## 🚀 Quick Start (3 ขั้นตอน)
+
+### Step 1: Setup (ครั้งแรกเท่านั้น)
+
+```bash
+bash scripts/local/setup-local-direct.sh
+```
+
+Script นี้จะ:
+- Stop containers เดิม
+- Build base image (`Dockerfile.local-base`)
+- Start container (`transcription-local-base`)
+- Setup dependencies และ environment
+
+### Step 2: Start Services
+
+```bash
+bash scripts/local/start-local.sh
+```
+
+Script นี้จะ:
+- ตรวจสอบ Docker และ container
+- Start services ภายใน container (Main API, Whisper API, Video Worker, Redis)
+- แสดงคำสั่งที่มีประโยชน์
+
+### Step 3: Test Transcription
+
+```bash
+bash scripts/local/test-local.sh uploads/test.mp4 base 30
+```
+
+## 📋 Manual Steps (ถ้าต้องการทำเอง)
 
 ### 1. Stop Transcription Containers เดิม
 
@@ -33,13 +64,14 @@ docker stop transcription-api-local transcription-whisper-local transcription-wh
 bash scripts/local/setup-local-direct.sh
 ```
 
-Script นี้จะ:
-- Stop containers เดิม
-- Build base image (`Dockerfile.local-base`)
-- Start container (`transcription-local-base`)
-- Setup dependencies และ environment
+### 3. Start Services
 
-### 3. เข้า Container และ Start Services
+```bash
+# ใช้ script (แนะนำ)
+bash scripts/local/start-local.sh
+```
+
+หรือเข้า container และ start manually:
 
 ```bash
 # เข้า container

@@ -72,7 +72,7 @@ bash scripts/local/stop-transcription-containers.sh
 ---
 
 ### `setup-local-direct.sh`
-**Setup Local Direct Mode Testing**
+**Setup Local Direct Mode Testing (First Time)**
 - Stop containers เดิม
 - Build base image (ไม่ใช้ CUDA)
 - Start container สำหรับ Direct Mode
@@ -84,6 +84,82 @@ bash scripts/local/setup-local-direct.sh
 ```
 
 **หมายเหตุ:** ใช้แนวทางเดียวกับ RunPod - ดูรายละเอียดใน `LOCAL_DIRECT_MODE.md`
+
+---
+
+### `start-local.sh` ⭐ **แนะนำสำหรับการทดสอบ**
+**Start Local Docker Services**
+- ตรวจสอบ Docker และ container
+- Start services (Main API, Whisper API, Video Worker, Redis)
+- แสดงคำสั่งที่มีประโยชน์
+
+**Usage:**
+```bash
+bash scripts/local/start-local.sh
+```
+
+**หมายเหตุ:** ใช้หลังจาก `setup-local-direct.sh` (ครั้งแรก) หรือเมื่อต้องการ start services ใหม่
+
+---
+
+### `stop-local.sh`
+**Stop Local Docker Services**
+- Stop services ภายใน container
+- ตัวเลือก: Stop container ด้วย (optional)
+
+**Usage:**
+```bash
+bash scripts/local/stop-local.sh
+```
+
+---
+
+### `restart-local.sh`
+**Restart Local Docker Services**
+- Stop และ start services ใหม่
+
+**Usage:**
+```bash
+bash scripts/local/restart-local.sh
+```
+
+---
+
+### `logs-local.sh` ⭐ **แนะนำสำหรับการ debug**
+**View Logs ของ Local Docker Services**
+- ดู logs ของ services ต่างๆ
+- รองรับ: api, whisper, worker, redis, หรือ all
+
+**Usage:**
+```bash
+# View all logs (default: 50 lines)
+bash scripts/local/logs-local.sh
+
+# View specific service
+bash scripts/local/logs-local.sh worker
+
+# View with custom lines
+bash scripts/local/logs-local.sh worker 100
+
+# Real-time logs (inside container)
+docker exec -it transcription-local-base bash -c 'tail -f /tmp/video-worker.log'
+```
+
+---
+
+### `test-local.sh` ⭐ **แนะนำสำหรับการทดสอบ**
+**Test Transcription บน Local Docker**
+- ทดสอบ transcription ด้วย video file
+- รองรับ parallel processing
+
+**Usage:**
+```bash
+# Basic test
+bash scripts/local/test-local.sh uploads/test.mp4 base
+
+# With custom model and chunk duration
+bash scripts/local/test-local.sh uploads/test.mp4 medium 30
+```
 
 ---
 

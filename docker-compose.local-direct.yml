@@ -29,14 +29,19 @@ services:
       - ENVIRONMENT=local
       - STORAGE_TYPE=json
       - JSON_STORAGE_DIR=/workspace/transcription-service/storage
-      - RABBITMQ_HOST=host.docker.internal
-      - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=senate
-      - RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
+      # RabbitMQ - สำหรับ Local Testing ใช้ host.docker.internal
+      # แต่ถ้า .env.runpod มีค่า จะถูก override
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-host.docker.internal}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER:-senate}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
       - REDIS_URL=redis://localhost:6379
       - WHISPER_PROVIDER=openai-whisper
       - WHISPER_MODEL=base
       - WHISPER_DEVICE=auto
+      # Parallel processing settings
+      - TRANSCRIPTION_MAX_WORKERS=5
+      - TRANSCRIPTION_PREFETCH_COUNT=20
       - TZ=Asia/Bangkok
       - TZDIR=/usr/share/zoneinfo
     networks:
