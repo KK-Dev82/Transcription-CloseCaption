@@ -188,13 +188,20 @@ else
     export WHISPER_PROVIDER=${WHISPER_PROVIDER:-faster-whisper}
     export WHISPER_MODEL=${WHISPER_MODEL:-medium}
     export WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
-    # Set LD_LIBRARY_PATH for CTranslate2 libraries (if needed)
-    # ตามคำแนะนำ: ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
-    # แต่ถ้า CTranslate2 wheel ต้องการ library จาก package directory ให้ตั้งค่า LD_LIBRARY_PATH
+    # Set LD_LIBRARY_PATH for CTranslate2 libraries และ cuDNN
     CTRANSLATE2_LIBS="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+    CUDNN_DIR="/workspace/cudnn/lib"
+    
+    # เพิ่ม CTranslate2 libraries
     if [ -d "$CTRANSLATE2_LIBS" ]; then
         export LD_LIBRARY_PATH="${CTRANSLATE2_LIBS}:${LD_LIBRARY_PATH:-}"
         print_status "✅ Set LD_LIBRARY_PATH for CTranslate2 libraries: $CTRANSLATE2_LIBS"
+    fi
+    
+    # เพิ่ม cuDNN libraries (persistent)
+    if [ -d "$CUDNN_DIR" ]; then
+        export LD_LIBRARY_PATH="${CUDNN_DIR}:${LD_LIBRARY_PATH:-}"
+        print_status "✅ Added cuDNN libraries to LD_LIBRARY_PATH: $CUDNN_DIR"
     fi
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
