@@ -25,7 +25,7 @@ echo ""
 # Check 1: Process Status
 echo "1️⃣  Process Status"
 echo "─────────────────"
-PID=$(pgrep -f "uvicorn.*app.main:app.*8001" | head -1)
+PID=$(pgrep -f "uvicorn.*app.main:app.*8010" | head -1)
 if [ ! -z "$PID" ]; then
     echo -e "${GREEN}✅ Service is RUNNING${NC}"
     echo "   PID: $PID"
@@ -36,7 +36,7 @@ if [ ! -z "$PID" ]; then
         if [ "$STORED_PID" = "$PID" ]; then
             echo -e "   ${GREEN}✓${NC} PID file matches: $PID_FILE"
         else
-            echo -e "   ${YELLOW}⚠${NC} PID file mismatch: $PID_FILE (stored: $STORED_PID)"
+            echo -e "   ${YELLOW}⚠${NC} PID file mismatch: $PID_FILE (stored: $STORED_PID, running: $PID)"
         fi
     fi
     
@@ -52,7 +52,18 @@ if [ ! -z "$PID" ]; then
 else
     echo -e "${RED}❌ Service is NOT running${NC}"
     if [ -f "$PID_FILE" ]; then
-        echo -e "   ${YELLOW}⚠${NC} PID file exists but process not found: $PID_FILE"
+        STORED_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+        if [ ! -z "$STORED_PID" ] && ps -p "$STORED_PID" > /dev/null 2>&1; then
+            # PID exists but doesn't match pattern (might be different port)
+            PROCESS_CMD=$(ps -p "$STORED_PID" -o cmd --no-headers 2>/dev/null | head -1 || echo "")
+            echo -e "   ${YELLOW}⚠${NC} PID file exists (PID: $STORED_PID) but doesn't match expected pattern"
+            echo "   Process: ${PROCESS_CMD:0:80}..."
+        else
+            echo -e "   ${YELLOW}⚠${NC} PID file exists but process not found: $PID_FILE"
+            if [ ! -z "$STORED_PID" ]; then
+                echo "   Stored PID: $STORED_PID (process may have crashed)"
+            fi
+        fi
     fi
 fi
 echo ""
@@ -61,25 +72,25 @@ echo ""
 echo "2️⃣  Port Status"
 echo "──────────────"
 if command -v netstat > /dev/null; then
-    PORT_STATUS=$(netstat -tlnp 2>/dev/null | grep ":8001" || echo "")
+    PORT_STATUS=$(netstat -tlnp 2>/dev/null | grep ":8010" || echo "")
 elif command -v ss > /dev/null; then
-    PORT_STATUS=$(ss -tlnp 2>/dev/null | grep ":8001" || echo "")
+    PORT_STATUS=$(ss -tlnp 2>/dev/null | grep ":8010" || echo "")
 else
     PORT_STATUS=""
 fi
 
 if [ ! -z "$PORT_STATUS" ]; then
-    echo -e "${GREEN}✅ Port 8001 is LISTENING${NC}"
+    echo -e "${GREEN}✅ Port 8010 is LISTENING${NC}"
     echo "$PORT_STATUS" | head -1 | sed 's/^/   /'
 else
-    echo -e "${RED}❌ Port 8001 is NOT listening${NC}"
+    echo -e "${RED}❌ Port 8010 is NOT listening${NC}"
 fi
 echo ""
 
 # Check 3: Health Check
 echo "3️⃣  Health Check"
 echo "───────────────"
-HEALTH_RESPONSE=$(curl -s -m 5 http://localhost:8001/health 2>&1 || echo "ERROR")
+HEALTH_RESPONSE=$(curl -s -m 5 http://localhost:8010/health 2>&1 || echo "ERROR")
 if echo "$HEALTH_RESPONSE" | grep -q "healthy\|status"; then
     echo -e "${GREEN}✅ Health check PASSED${NC}"
     echo "   Response: $(echo "$HEALTH_RESPONSE" | head -1 | cut -c1-100)"
@@ -98,7 +109,7 @@ echo ""
 # Check 4: API Endpoint
 echo "4️⃣  API Endpoint"
 echo "───────────────"
-API_RESPONSE=$(curl -s -m 5 http://localhost:8001/ 2>&1 || echo "ERROR")
+API_RESPONSE=$(curl -s -m 5 http://localhost:8010/ 2>&1 || echo "ERROR")
 if echo "$API_RESPONSE" | grep -q "Transcription\|message"; then
     echo -e "${GREEN}✅ API is responding${NC}"
     MESSAGE=$(echo "$API_RESPONSE" | grep -o '\"message\":\"[^\"]*\"' | head -1 || echo "")
@@ -159,7 +170,7 @@ echo ""
 echo "7️⃣  External Access"
 echo "───────────────────"
 EXTERNAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || curl -s ifconfig.me 2>/dev/null || echo "80.15.7.37")
-EXTERNAL_URL="http://${EXTERNAL_IP}:8001"
+EXTERNAL_URL="http://${EXTERNAL_IP}:8010"
 
 EXTERNAL_RESPONSE=$(curl -s -m 5 "$EXTERNAL_URL/health" 2>&1 || echo "ERROR")
 EXTERNAL_CODE=$(echo "$EXTERNAL_RESPONSE" | tail -1)
