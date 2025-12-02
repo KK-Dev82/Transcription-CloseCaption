@@ -24,9 +24,9 @@ fi
 cd "$PROJECT_DIR"
 
 # Check if service is already running
-if pgrep -f "uvicorn.*app.main:app.*8001" > /dev/null; then
+if pgrep -f "uvicorn.*app.main:app.*8010" > /dev/null; then
     echo "⚠️  Transcription Service is already running"
-    PID=$(pgrep -f "uvicorn.*app.main:app.*8001" | head -1)
+    PID=$(pgrep -f "uvicorn.*app.main:app.*8010" | head -1)
     echo "   PID: $PID"
     echo ""
     read -p "Do you want to stop and restart? (y/n): " -n 1 -r
@@ -70,6 +70,24 @@ if ! pgrep -x "redis-server" > /dev/null; then
     echo ""
 fi
 
+# Install/check timezone data (required for pythainlp)
+echo "📋 Checking timezone data..."
+if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
+    echo "📦 Installing tzdata..."
+    apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 || {
+        echo "⚠️  Failed to install tzdata (may continue anyway)"
+    }
+fi
+if [ -d "/usr/share/zoneinfo" ]; then
+    export TZDIR=/usr/share/zoneinfo
+    echo "✅ Timezone data available"
+else
+    echo "⚠️  Timezone data not found"
+fi
+export TZ=Asia/Bangkok
+echo "   TZ=$TZ"
+echo ""
+
 # Load environment variables
 if [ -f ".env.runpod" ]; then
     echo "📋 Loading .env.runpod..."
@@ -111,7 +129,7 @@ PID_FILE="/tmp/transcription-service.pid"
 # Start service with nohup (ทำงานต่อได้แม้ออกจาก terminal)
 echo "🚀 Starting Transcription Service (with nohup)..."
 echo "   Host: 0.0.0.0"
-echo "   Port: 8001"
+echo "   Port: 8010"
 echo "   Log: $LOG_FILE"
 echo "   PID: $PID_FILE"
 echo ""
@@ -119,9 +137,12 @@ echo "   ⚠️  Service will continue running after you exit terminal"
 echo ""
 
 # Start with nohup - redirect all output to log file
-nohup python3 -m uvicorn app.main:app \
+# Set timezone environment variables for pythainlp
+nohup env TZ="${TZ:-Asia/Bangkok}" \
+         TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
+         python3 -m uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port 8001 \
+    --port 8010 \
     --workers 1 \
     > "$LOG_FILE" 2>&1 &
 
@@ -140,19 +161,19 @@ if ps -p $SERVICE_PID > /dev/null; then
     
     # Wait a bit and test
     sleep 2
-    if curl -s -f http://localhost:8001/health > /dev/null 2>&1; then
+    if curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
         echo "✅ Service is responding"
         echo ""
         echo "📊 Service Information:"
-        echo "   URL: http://0.0.0.0:8001"
-        echo "   Health: http://localhost:8001/health"
-        echo "   Docs: http://localhost:8001/docs"
+        echo "   URL: http://0.0.0.0:8010"
+        echo "   Health: http://localhost:8010/health"
+        echo "   Docs: http://localhost:8010/docs"
         echo "   Log: tail -f $LOG_FILE"
         echo "   PID: cat $PID_FILE"
         echo ""
         echo "🌐 External Access:"
-        echo "   URL: http://80.15.7.37:8001"
-        echo "   Health: http://80.15.7.37:8001/health"
+        echo "   URL: http://80.15.7.37:8010"
+        echo "   Health: http://80.15.7.37:8010/health"
         echo ""
         echo "💡 Useful Commands:"
         echo "   Stop: kill \$(cat $PID_FILE)"
@@ -160,7 +181,7 @@ if ps -p $SERVICE_PID > /dev/null; then
         echo "   Status: ps aux | grep uvicorn"
     else
         echo "⚠️  Service started but not responding yet (check log: $LOG_FILE)"
-        echo "   Wait a few seconds and check: curl http://localhost:8001/health"
+        echo "   Wait a few seconds and check: curl http://localhost:8010/health"
     fi
 else
     echo "❌ Failed to start service"
