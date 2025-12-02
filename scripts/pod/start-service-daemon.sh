@@ -138,8 +138,15 @@ echo ""
 
 # Start with nohup - redirect all output to log file
 # Set timezone environment variables for pythainlp
+# เพิ่ม PYTHONPATH และ PATH สำหรับ packages ใน /workspace/.local
+export PYTHONUSERBASE="/workspace/.local"
+export PATH="/workspace/.local/bin:$PATH"
+export PYTHONPATH="/workspace/.local/lib/python3.10/site-packages:$PYTHONPATH"
 nohup env TZ="${TZ:-Asia/Bangkok}" \
          TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
+         PYTHONUSERBASE="/workspace/.local" \
+         PATH="/workspace/.local/bin:$PATH" \
+         PYTHONPATH="/workspace/.local/lib/python3.10/site-packages:$PYTHONPATH" \
          python3 -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8010 \
