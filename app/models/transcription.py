@@ -47,4 +47,5 @@ class TranscriptionResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
     progress: Optional[int] = 0  # Progress percentage (0-100)
-    updated_at: Optional[datetime] = None 
+    updated_at: Optional[datetime] = None
+    time_used: Optional[float] = None  # เวลาที่ใช้ในการประมวลผล (วินาที) 

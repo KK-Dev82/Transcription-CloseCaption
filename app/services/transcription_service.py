@@ -122,6 +122,16 @@ class TranscriptionService:
                 logger.debug(f"⚠️  Task {task_id} is completed but progress={progress_value}, setting to 100")
                 progress_value = 100
             
+            # ดึง time_used จาก processing_time หรือ result_time
+            time_used = self._coerce_optional_float(data.get("processing_time")) or self._coerce_optional_float(data.get("result_time"))
+            
+            # ถ้าไม่มี processing_time แต่มี created_at และ completed_at ให้คำนวณ
+            if not time_used and created_at and completed_at:
+                try:
+                    time_used = (completed_at - created_at).total_seconds()
+                except Exception:
+                    time_used = None
+            
             response = TranscriptionResponse(
                 task_id=task_id,
                 status=str(data.get("status", getattr(existing, "status", "pending"))),
@@ -137,7 +147,8 @@ class TranscriptionService:
                 completed_at=completed_at,
                 error_message=data.get("error_message"),
                 progress=progress_value,
-                updated_at=updated_at
+                updated_at=updated_at,
+                time_used=time_used
             )
             
             # เติมข้อมูลที่เก็บไว้เพิ่มเติม

@@ -714,12 +714,18 @@
                         const chunks = data.chunks || [];
                         
                         console.log(`[Completed] Full Text Length: ${fullText.length}, Chunks Count: ${chunks.length}`);
+                        console.log(`[Task ID] ${uploadTaskId}`);
                         
                         if (!fullText && (!chunks || chunks.length === 0)) {
                             console.warn('[Warning] Transcription completed but no text or chunks found!');
-                            showError('การแปลงเสียงเสร็จสิ้นแล้ว แต่ไม่พบข้อความ กรุณาตรวจสอบ Logs หรือลองใหม่');
+                            const errorMsg = data.error_message || 'ไม่ทราบสาเหตุ';
+                            showError(`การแปลงเสียงเสร็จสิ้นแล้ว แต่ไม่พบข้อความ<br><br>` +
+                                     `📋 Task ID: <code>${uploadTaskId}</code><br>` +
+                                     `⚠️ Error: ${errorMsg}<br><br>` +
+                                     `💡 ตรวจสอบ Logs ด้วยคำสั่ง:<br>` +
+                                     `<code>ssh pytorch-pod "cd /workspace/transcription-service && bash scripts/pod/diagnose-transcription.sh ${uploadTaskId}"</code>`);
                         } else {
-                            showResult(fullText, chunks);
+                            showResult(fullText, chunks, uploadTaskId);
                         }
                         
                         uploadBtn.disabled = false;
@@ -772,7 +778,7 @@
         }
 
         // Show result
-        function showResult(text, chunks) {
+        function showResult(text, chunks, taskId = null) {
             resultSection.classList.add('show');
             
             // ตรวจสอบว่ามีข้อความหรือไม่
@@ -780,10 +786,26 @@
             const hasChunks = chunks && chunks.length > 0 && chunks.some(chunk => chunk.text && chunk.text.trim().length > 0);
             
             if (!hasText && !hasChunks) {
-                resultText.textContent = '⚠️ ไม่พบข้อความจากการแปลงเสียง กรุณาตรวจสอบ Logs บน Server';
+                let errorHtml = '⚠️ ไม่พบข้อความจากการแปลงเสียง กรุณาตรวจสอบ Logs บน Server';
+                if (taskId) {
+                    errorHtml += `<br><br><strong>Task ID:</strong> <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">${taskId}</code>`;
+                    errorHtml += `<br><br>ตรวจสอบ Logs ด้วย:<br>`;
+                    errorHtml += `<code style="background: #f0f0f0; padding: 4px 8px; border-radius: 3px; display: block; margin-top: 5px;">`;
+                    errorHtml += `ssh pytorch-pod "cd /workspace/transcription-service && bash scripts/pod/diagnose-transcription.sh ${taskId}"`;
+                    errorHtml += `</code>`;
+                }
+                resultText.innerHTML = errorHtml;
                 resultText.style.color = '#c62828';
                 chunksSection.innerHTML = '';
                 return;
+            }
+            
+            // แสดง Task ID ถ้ามี
+            if (taskId) {
+                const taskInfo = document.createElement('div');
+                taskInfo.style.cssText = 'background: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 0.9em;';
+                taskInfo.innerHTML = `<strong>Task ID:</strong> <code style="background: white; padding: 2px 6px; border-radius: 3px;">${taskId}</code>`;
+                resultSection.insertBefore(taskInfo, resultText);
             }
             
             resultText.style.color = '#333';
