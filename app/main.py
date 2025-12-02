@@ -146,6 +146,7 @@ app.include_router(files.router)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/media-uploads", StaticFiles(directory="uploads"), name="media-uploads")  # For staging compatibility
 app.mount("/test-files", StaticFiles(directory="test-files"), name="test-files")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Mount test frontend
 from fastapi.responses import FileResponse

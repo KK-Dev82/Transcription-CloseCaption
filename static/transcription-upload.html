@@ -687,7 +687,11 @@
                 clearInterval(pollingInterval);
             }
 
+            let pollCount = 0;
+            const maxPolls = 3600; // 2 hours max (2 seconds * 3600 = 7200 seconds)
+
             pollingInterval = setInterval(async () => {
+                pollCount++;
                 try {
                     const response = await fetch(`${CONFIG.POD_URL}/transcribe/${uploadTaskId}`);
                     if (!response.ok) {
@@ -696,20 +700,45 @@
 
                     const data = await response.json();
                     
+                    // Log response สำหรับ debugging
+                    console.log(`[Poll #${pollCount}] Status: ${data.status}, Progress: ${data.progress || 0}%, Full Text Length: ${(data.full_text || '').length}, Chunks: ${(data.chunks || []).length}`);
+                    
                     updateProgress(data.progress || 0, data.status || 'processing');
                     
                     if (data.status === 'completed') {
                         clearInterval(pollingInterval);
                         showProgress('แปลงเสียงสำเร็จ!', 100);
-                        showResult(data.full_text || '', data.chunks || []);
+                        
+                        // ตรวจสอบว่ามีข้อความหรือไม่
+                        const fullText = data.full_text || '';
+                        const chunks = data.chunks || [];
+                        
+                        console.log(`[Completed] Full Text Length: ${fullText.length}, Chunks Count: ${chunks.length}`);
+                        
+                        if (!fullText && (!chunks || chunks.length === 0)) {
+                            console.warn('[Warning] Transcription completed but no text or chunks found!');
+                            showError('การแปลงเสียงเสร็จสิ้นแล้ว แต่ไม่พบข้อความ กรุณาตรวจสอบ Logs หรือลองใหม่');
+                        } else {
+                            showResult(fullText, chunks);
+                        }
+                        
                         uploadBtn.disabled = false;
                     } else if (data.status === 'failed') {
                         clearInterval(pollingInterval);
-                        showError(`การแปลงเสียงล้มเหลว: ${data.error_message || 'Unknown error'}`);
+                        const errorMsg = data.error_message || 'Unknown error';
+                        console.error(`[Failed] Error: ${errorMsg}`);
+                        showError(`การแปลงเสียงล้มเหลว: ${errorMsg}`);
+                        uploadBtn.disabled = false;
+                    } else if (pollCount >= maxPolls) {
+                        // Timeout after max polls
+                        clearInterval(pollingInterval);
+                        console.error(`[Timeout] Reached maximum polling attempts (${maxPolls})`);
+                        showError(`การแปลงเสียงใช้เวลานานเกินไป (${Math.round(maxPolls * 2 / 60)} นาที) กรุณาตรวจสอบ Logs`);
                         uploadBtn.disabled = false;
                     }
                 } catch (error) {
-                    console.error('Polling error:', error);
+                    console.error(`[Polling Error #${pollCount}]:`, error);
+                    // อย่าหยุด polling เมื่อเกิด error เพราะอาจเป็น network issue ชั่วคราว
                 }
             }, 2000); // Poll every 2 seconds
         }
@@ -745,17 +774,39 @@
         // Show result
         function showResult(text, chunks) {
             resultSection.classList.add('show');
+            
+            // ตรวจสอบว่ามีข้อความหรือไม่
+            const hasText = text && text.trim().length > 0;
+            const hasChunks = chunks && chunks.length > 0 && chunks.some(chunk => chunk.text && chunk.text.trim().length > 0);
+            
+            if (!hasText && !hasChunks) {
+                resultText.textContent = '⚠️ ไม่พบข้อความจากการแปลงเสียง กรุณาตรวจสอบ Logs บน Server';
+                resultText.style.color = '#c62828';
+                chunksSection.innerHTML = '';
+                return;
+            }
+            
+            resultText.style.color = '#333';
             resultText.textContent = text || 'ไม่มีข้อความ';
             
-            if (chunks && chunks.length > 0) {
+            if (hasChunks) {
                 chunksSection.innerHTML = '<h3 style="margin-top: 20px; color: #667eea;">📋 ข้อความแยกตามช่วงเวลา</h3>';
                 chunks.forEach((chunk, index) => {
+                    if (!chunk.text || !chunk.text.trim()) {
+                        return; // ข้าม chunks ที่ไม่มีข้อความ
+                    }
+                    
                     const chunkDiv = document.createElement('div');
                     chunkDiv.className = 'chunk-item';
+                    
+                    // ตรวจสอบว่ามี start_time และ end_time หรือไม่
+                    const startTime = chunk.start_time !== undefined ? chunk.start_time : (chunk.start || 0);
+                    const endTime = chunk.end_time !== undefined ? chunk.end_time : (chunk.end || 0);
+                    
                     chunkDiv.innerHTML = `
                         <div class="chunk-header">
                             <span>Chunk #${index + 1}</span>
-                            <span>${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}</span>
+                            <span>${formatTime(startTime)} - ${formatTime(endTime)}</span>
                         </div>
                         <div class="chunk-text">${chunk.text || ''}</div>
                     `;
