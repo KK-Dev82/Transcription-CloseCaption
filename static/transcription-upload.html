@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription Upload - ส่งไฟล์แปลงเสียงเป็นข้อความ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .upload-section {
+            margin-bottom: 30px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            background: #f8f9ff;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .upload-hint {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .file-info {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .file-info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .file-info-item:last-child {
+            border-bottom: none;
+        }
+
+        .file-info-label {
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .file-info-value {
+            color: #333;
+        }
+
+        .settings-section {
+            margin: 30px 0;
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 10px;
+        }
+
+        .settings-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        .form-group select,
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .mode-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .mode-button {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .mode-button:hover {
+            border-color: #667eea;
+        }
+
+        .mode-button.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #e0e0e0;
+        }
+
+        .progress-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .progress-section.show {
+            display: block;
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .status-text {
+            text-align: center;
+            color: #667eea;
+            font-weight: 500;
+            margin-bottom: 10px;
+        }
+
+        .result-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .result-section.show {
+            display: block;
+        }
+
+        .result-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .result-text {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.6;
+            font-size: 1.1em;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .chunks-section {
+            margin-top: 20px;
+        }
+
+        .chunk-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .chunk-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            color: #999;
+        }
+
+        .chunk-text {
+            font-size: 1.1em;
+            line-height: 1.6;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .info-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ Transcription Service...</h1>
+            <p>แปลงเสียงและวิดีโอเป็นข้อความ</p>
+        </div>
+
+        <div class="content">
+            <!-- Mode Selector -->
+            <div class="mode-selector">
+                <div class="mode-button active" data-mode="pod">
+                    📡 Pod Direct
+                </div>
+                <div class="mode-button" data-mode="backend">
+                    🔄 Backend API
+                </div>
+            </div>
+
+            <!-- Upload Section -->
+            <div class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">คลิกหรือลากไฟล์มาวางที่นี่</div>
+                    <div class="upload-hint">
+                        รองรับ: MP4, AVI, MOV, MP3, WAV, FLAC (สูงสุด 2GB)
+                    </div>
+                    <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv,.wmv,.flv,.webm,.mp3,.wav,.flac,.aac,.ogg,.m4a">
+                </div>
+
+                <div class="file-info" id="fileInfo">
+                    <div class="file-info-item">
+                        <span class="file-info-label">ชื่อไฟล์:</span>
+                        <span class="file-info-value" id="fileName">-</span>
+                    </div>
+                    <div class="file-info-item">
+                        <span class="file-info-label">ขนาด:</span>
+                        <span class="file-info-value" id="fileSize">-</span>
+                    </div>
+                    <div class="file-info-item">
+                        <span class="file-info-label">ประเภท:</span>
+                        <span class="file-info-value" id="fileType">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Section -->
+            <div class="settings-section">
+                <h3>⚙️ การตั้งค่า</h3>
+                
+                <div class="form-group">
+                    <label for="language">ภาษา:</label>
+                    <select id="language">
+                        <option value="th" selected>ไทย (Thai)</option>
+                        <option value="en">อังกฤษ (English)</option>
+                        <option value="auto">อัตโนมัติ (Auto)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="modelSize">ขนาดโมเดล:</label>
+                    <select id="modelSize">
+                        <option value="tiny">Tiny (เร็วที่สุด)</option>
+                        <option value="base" selected>Base (แนะนำ)</option>
+                        <option value="small">Small (แม่นยำกว่า)</option>
+                        <option value="medium">Medium (แม่นยำมาก)</option>
+                        <option value="large">Large (แม่นยำที่สุด แต่ช้า)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Button Group -->
+            <div class="button-group">
+                <button class="btn-secondary" id="resetBtn">รีเซ็ต</button>
+                <button class="btn-primary" id="uploadBtn" disabled>อัพโหลดและแปลงเสียง</button>
+            </div>
+
+            <!-- Progress Section -->
+            <div class="progress-section" id="progressSection">
+                <div class="status-text" id="statusText">กำลังเตรียมการ...</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progressBar">0%</div>
+                </div>
+            </div>
+
+            <!-- Error Message -->
+            <div class="error-message" id="errorMessage"></div>
+
+            <!-- Result Section -->
+            <div class="result-section" id="resultSection">
+                <h3>📝 ผลลัพธ์การแปลงเสียง</h3>
+                <div class="result-text" id="resultText"></div>
+                
+                <div class="chunks-section" id="chunksSection"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const CONFIG = {
+            POD_URL: 'http://80.15.7.37:41314',
+            BACKEND_URL: window.location.origin, // หรือกำหนด URL เฉพาะ เช่น 'http://localhost:5173'
+            MODE: 'pod' // 'pod' หรือ 'backend'
+        };
+
+        // State
+        let selectedFile = null;
+        let currentMode = 'pod';
+        let uploadTaskId = null;
+        let pollingInterval = null;
+
+        // DOM Elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const fileType = document.getElementById('fileType');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const progressSection = document.getElementById('progressSection');
+        const progressBar = document.getElementById('progressBar');
+        const statusText = document.getElementById('statusText');
+        const errorMessage = document.getElementById('errorMessage');
+        const resultSection = document.getElementById('resultSection');
+        const resultText = document.getElementById('resultText');
+        const chunksSection = document.getElementById('chunksSection');
+        const modeButtons = document.querySelectorAll('.mode-button');
+
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Upload area click
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // Drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        // Handle file selection
+        function handleFileSelect(file) {
+            selectedFile = file;
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            fileType.textContent = file.type || 'unknown';
+            
+            fileInfo.classList.add('show');
+            uploadBtn.disabled = false;
+            
+            hideError();
+        }
+
+        // Mode selector
+        modeButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                modeButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentMode = btn.dataset.mode;
+            });
+        });
+
+        // Upload button
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            
+            uploadBtn.disabled = true;
+            showProgress('กำลังอัพโหลดไฟล์...', 0);
+            hideError();
+            hideResult();
+
+            try {
+                if (currentMode === 'pod') {
+                    await uploadToPod();
+                } else {
+                    await uploadToBackend();
+                }
+            } catch (error) {
+                showError(`เกิดข้อผิดพลาด: ${error.message}`);
+                uploadBtn.disabled = false;
+                hideProgress();
+            }
+        });
+
+        // Upload to Pod
+        async function uploadToPod() {
+            try {
+                // Step 1: Upload file to Pod
+                showProgress('กำลังอัพโหลดไฟล์ไปยัง Pod...', 10);
+                
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                const uploadResponse = await fetch(`${CONFIG.POD_URL}/upload/`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.statusText}`);
+                }
+
+                const uploadData = await uploadResponse.json();
+                showProgress('อัพโหลดสำเร็จ กำลังเริ่มการแปลงเสียง...', 30);
+
+                // Step 2: Start transcription
+                const transcriptionResponse = await fetch(`${CONFIG.POD_URL}/transcribe/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        file_path: uploadData.file_path,
+                        file_name: uploadData.filename,
+                        language: document.getElementById('language').value,
+                        model_size: document.getElementById('modelSize').value,
+                        chunk_duration: 30
+                    })
+                });
+
+                if (!transcriptionResponse.ok) {
+                    throw new Error(`Transcription start failed: ${transcriptionResponse.statusText}`);
+                }
+
+                const transcriptionData = await transcriptionResponse.json();
+                uploadTaskId = transcriptionData.task_id;
+
+                showProgress('กำลังแปลงเสียง...', 40);
+                
+                // Step 3: Poll for results
+                startPollingPod();
+
+            } catch (error) {
+                if (error.message.includes('Connection refused') || error.message.includes('Failed to fetch')) {
+                    showError(`ไม่สามารถเชื่อมต่อกับ Pod ได้ (${CONFIG.POD_URL}). ลองเปลี่ยนเป็น Backend API mode.`);
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        // Upload to Backend
+        async function uploadToBackend() {
+            try {
+                // Step 1: Upload file via stream endpoint
+                showProgress('กำลังอัพโหลดไฟล์ไปยัง Backend...', 10);
+
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                const uploadResponse = await fetch(`${CONFIG.BACKEND_URL}/api/transcription/upload/stream?autoStart=true`, {
+                    method: 'POST',
+                    headers: {
+                        'X-File-Name': encodeURIComponent(selectedFile.name),
+                        'X-File-Type': selectedFile.type || 'video/mp4',
+                        'X-File-Size': selectedFile.size.toString()
+                    },
+                    body: selectedFile
+                });
+
+                if (!uploadResponse.ok) {
+                    const errorText = await uploadResponse.text();
+                    throw new Error(`Upload failed: ${uploadResponse.statusText} - ${errorText}`);
+                }
+
+                const uploadData = await uploadResponse.json();
+                showProgress('อัพโหลดสำเร็จ ระบบกำลังเริ่มการแปลงเสียง...', 50);
+
+                // Backend จะจัดการ transcription ให้เอง (autoStart=true)
+                // เราต้องหา job ID จาก response หรือ polling transcription jobs
+                
+                showProgress('กำลังรอผลลัพธ์จาก Backend...', 60);
+                
+                // TODO: Implement polling for Backend transcription status
+                // สำหรับตอนนี้ให้แสดงข้อความว่าสำเร็จแล้ว
+                setTimeout(() => {
+                    showProgress('กำลังตรวจสอบสถานะ...', 80);
+                    // In real implementation, you would poll the backend API for job status
+                    showResult('การแปลงเสียงเริ่มต้นแล้ว กรุณาตรวจสอบในระบบหลัก', []);
+                }, 2000);
+
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        // Poll Pod for transcription status
+        function startPollingPod() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${CONFIG.POD_URL}/transcribe/${uploadTaskId}`);
+                    if (!response.ok) {
+                        throw new Error(`Status check failed: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    updateProgress(data.progress || 0, data.status || 'processing');
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(pollingInterval);
+                        showProgress('แปลงเสียงสำเร็จ!', 100);
+                        showResult(data.full_text || '', data.chunks || []);
+                        uploadBtn.disabled = false;
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollingInterval);
+                        showError(`การแปลงเสียงล้มเหลว: ${data.error_message || 'Unknown error'}`);
+                        uploadBtn.disabled = false;
+                    }
+                } catch (error) {
+                    console.error('Polling error:', error);
+                }
+            }, 2000); // Poll every 2 seconds
+        }
+
+        // Update progress
+        function updateProgress(percent, status) {
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = Math.round(percent) + '%';
+            
+            const statusMessages = {
+                'queued': 'รอคิว...',
+                'processing': 'กำลังแปลงเสียง...',
+                'completed': 'แปลงเสียงสำเร็จ!',
+                'failed': 'แปลงเสียงล้มเหลว'
+            };
+            
+            statusText.textContent = statusMessages[status] || status;
+        }
+
+        // Show progress
+        function showProgress(message, percent) {
+            progressSection.classList.add('show');
+            statusText.textContent = message;
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = Math.round(percent) + '%';
+        }
+
+        // Hide progress
+        function hideProgress() {
+            progressSection.classList.remove('show');
+        }
+
+        // Show result
+        function showResult(text, chunks) {
+            resultSection.classList.add('show');
+            resultText.textContent = text || 'ไม่มีข้อความ';
+            
+            if (chunks && chunks.length > 0) {
+                chunksSection.innerHTML = '<h3 style="margin-top: 20px; color: #667eea;">📋 ข้อความแยกตามช่วงเวลา</h3>';
+                chunks.forEach((chunk, index) => {
+                    const chunkDiv = document.createElement('div');
+                    chunkDiv.className = 'chunk-item';
+                    chunkDiv.innerHTML = `
+                        <div class="chunk-header">
+                            <span>Chunk #${index + 1}</span>
+                            <span>${formatTime(chunk.start_time)} - ${formatTime(chunk.end_time)}</span>
+                        </div>
+                        <div class="chunk-text">${chunk.text || ''}</div>
+                    `;
+                    chunksSection.appendChild(chunkDiv);
+                });
+            } else {
+                chunksSection.innerHTML = '';
+            }
+        }
+
+        // Hide result
+        function hideResult() {
+            resultSection.classList.remove('show');
+            resultText.textContent = '';
+            chunksSection.innerHTML = '';
+        }
+
+        // Format time
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            }
+            return `${minutes}:${String(secs).padStart(2, '0')}`;
+        }
+
+        // Show error
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+        }
+
+        // Hide error
+        function hideError() {
+            errorMessage.classList.remove('show');
+        }
+
+        // Reset button
+        resetBtn.addEventListener('click', () => {
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.remove('show');
+            uploadBtn.disabled = true;
+            hideProgress();
+            hideError();
+            hideResult();
+            
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            
+            uploadTaskId = null;
+        });
+
+        // Initial setup
+        console.log('Transcription Upload Page Loaded');
+        console.log('Pod URL:', CONFIG.POD_URL);
+        console.log('Backend URL:', CONFIG.BACKEND_URL);
+    </script>
+</body>
+</html>
+
+
