@@ -1,40 +1,39 @@
 #!/bin/bash
-# Script สำหรับ Start Transcription Service บน Pod สำหรับ Backend Integration
+# Script สำหรับ Start Transcription Service แบบ Daemon (ทำงานต่อได้แม้ออกจาก Terminal)
 #
 # วิธีใช้งาน:
-#   ssh pytorch-pod "bash -s" < scripts/pod/start-service-for-backend.sh
+#   ssh pytorch-pod "bash -s" < scripts/pod/start-service-daemon.sh
 #   หรือ
-#   bash scripts/pod/start-service-for-backend.sh (บน Pod)
+#   bash scripts/pod/start-service-daemon.sh (บน Pod)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="/workspace/transcription-service"
 
-echo "🚀 Starting Transcription Service for Backend Integration"
-echo "=========================================================="
+echo "🚀 Starting Transcription Service (Daemon Mode)"
+echo "================================================"
 echo ""
 
 # Check if running on Pod
 if [ ! -d "$PROJECT_DIR" ]; then
     echo "❌ Error: Project directory not found: $PROJECT_DIR"
-    echo "   Please make sure you're running on the Pod and project is cloned"
     exit 1
 fi
 
 cd "$PROJECT_DIR"
 
 # Check if service is already running
-if pgrep -f "uvicorn.*app.main:app" > /dev/null; then
+if pgrep -f "uvicorn.*app.main:app.*8001" > /dev/null; then
     echo "⚠️  Transcription Service is already running"
-    PID=$(pgrep -f "uvicorn.*app.main:app" | head -1)
+    PID=$(pgrep -f "uvicorn.*app.main:app.*8001" | head -1)
     echo "   PID: $PID"
     echo ""
     read -p "Do you want to stop and restart? (y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo "Stopping existing service..."
-        kill $PID
+        kill $PID 2>/dev/null || true
         sleep 2
     else
         echo "Keeping existing service running"
@@ -81,9 +80,11 @@ if [ -f ".env.runpod" ]; then
     echo ""
 fi
 
-# Start service in background with nohup (ทำงานต่อได้แม้ออกจาก terminal)
+# Log file location
 LOG_FILE="/tmp/transcription-service.log"
 PID_FILE="/tmp/transcription-service.pid"
+
+# Start service with nohup (ทำงานต่อได้แม้ออกจาก terminal)
 echo "🚀 Starting Transcription Service (with nohup)..."
 echo "   Host: 0.0.0.0"
 echo "   Port: 8001"
@@ -93,6 +94,7 @@ echo ""
 echo "   ⚠️  Service will continue running after you exit terminal"
 echo ""
 
+# Start with nohup - redirect all output to log file
 nohup python3 -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8001 \
@@ -101,12 +103,15 @@ nohup python3 -m uvicorn app.main:app \
 
 SERVICE_PID=$!
 echo $SERVICE_PID > "$PID_FILE"
+
+# Wait a moment for service to start
 sleep 3
 
 # Check if service started successfully
 if ps -p $SERVICE_PID > /dev/null; then
     echo "✅ Transcription Service started successfully"
     echo "   PID: $SERVICE_PID"
+    echo "   PID File: $PID_FILE"
     echo ""
     
     # Wait a bit and test
@@ -129,9 +134,9 @@ if ps -p $SERVICE_PID > /dev/null; then
         echo "   Stop: kill \$(cat $PID_FILE)"
         echo "   Logs: tail -f $LOG_FILE"
         echo "   Status: ps aux | grep uvicorn"
-        echo ""
     else
         echo "⚠️  Service started but not responding yet (check log: $LOG_FILE)"
+        echo "   Wait a few seconds and check: curl http://localhost:8001/health"
     fi
 else
     echo "❌ Failed to start service"
@@ -145,10 +150,5 @@ echo "✅ Setup Complete"
 echo ""
 echo "⚠️  Service is running in background (nohup)"
 echo "   You can safely exit this terminal"
-echo ""
-echo "💡 Next Steps:"
-echo "   1. Test service: curl http://80.15.7.37:8001/health"
-echo "   2. Configure Backend: Update appsettings.Development.json"
-echo "   3. Start testing integration"
 echo ""
 
