@@ -725,7 +725,9 @@
                                      `💡 ตรวจสอบ Logs ด้วยคำสั่ง:<br>` +
                                      `<code>ssh pytorch-pod "cd /workspace/transcription-service && bash scripts/pod/diagnose-transcription.sh ${uploadTaskId}"</code>`);
                         } else {
-                            showResult(fullText, chunks, uploadTaskId);
+                            // ดึง time_used จาก response
+                            const timeUsed = data.time_used || null;
+                            showResult(fullText, chunks, uploadTaskId, timeUsed);
                         }
                         
                         uploadBtn.disabled = false;
@@ -778,7 +780,7 @@
         }
 
         // Show result
-        function showResult(text, chunks, taskId = null) {
+        function showResult(text, chunks, taskId = null, timeUsed = null) {
             resultSection.classList.add('show');
             
             // ตรวจสอบว่ามีข้อความหรือไม่
@@ -800,11 +802,28 @@
                 return;
             }
             
-            // แสดง Task ID ถ้ามี
-            if (taskId) {
+            // แสดง Task ID และ Time Used ถ้ามี
+            if (taskId || timeUsed) {
                 const taskInfo = document.createElement('div');
                 taskInfo.style.cssText = 'background: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 0.9em;';
-                taskInfo.innerHTML = `<strong>Task ID:</strong> <code style="background: white; padding: 2px 6px; border-radius: 3px;">${taskId}</code>`;
+                
+                let infoHtml = '';
+                if (taskId) {
+                    infoHtml += `<strong>Task ID:</strong> <code style="background: white; padding: 2px 6px; border-radius: 3px;">${taskId}</code>`;
+                }
+                if (timeUsed !== null && timeUsed !== undefined) {
+                    const timeSeconds = parseFloat(timeUsed);
+                    const minutes = Math.floor(timeSeconds / 60);
+                    const seconds = Math.floor(timeSeconds % 60);
+                    const timeDisplay = minutes > 0 
+                        ? `${minutes} นาที ${seconds} วินาที` 
+                        : `${seconds} วินาที`;
+                    
+                    if (infoHtml) infoHtml += ' &nbsp;|&nbsp; ';
+                    infoHtml += `<strong>⏱️ เวลาที่ใช้:</strong> <span style="color: #667eea; font-weight: bold;">${timeDisplay}</span> (${timeSeconds.toFixed(2)} วินาที)`;
+                }
+                
+                taskInfo.innerHTML = infoHtml;
                 resultSection.insertBefore(taskInfo, resultText);
             }
             
