@@ -311,8 +311,15 @@ class FasterWhisperProvider(WhisperProvider):
                     thread = threading.Thread(target=collect_segments, daemon=True)
                     thread.start()
                     
-                    # Collect with timeout (ลดเป็น 15s เพราะ without_timestamps=True ควรเร็ว)
-                    timeout = 15.0
+                    # Collect with dynamic timeout ตามขนาดไฟล์
+                    # สำหรับไฟล์ใหญ่ (2+ ชั่วโมง) ต้องใช้เวลานานในการ collect segments
+                    audio_duration = getattr(info, 'duration', 0) if hasattr(info, 'duration') else 0
+                    # timeout = 15s สำหรับไฟล์สั้น หรือ duration / 10 สำหรับไฟล์ยาว (อย่างน้อย 60s, สูงสุด 300s)
+                    base_timeout = 15.0
+                    dynamic_timeout = max(60.0, min(300.0, audio_duration / 10.0))
+                    timeout = max(base_timeout, dynamic_timeout)
+                    logger.info(f"[Faster Whisper] ⏱️ Using dynamic timeout: {timeout:.1f}s (audio duration: {audio_duration:.1f}s)")
+                    
                     start_time = time.time()
                     segments_list_raw = []
                     last_log_time = start_time
