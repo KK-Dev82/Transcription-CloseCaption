@@ -1,0 +1,202 @@
+#!/bin/bash
+# Script สำหรับตรวจสอบสถานะ Transcription Service บน Pod
+#
+# วิธีใช้งาน:
+#   bash scripts/pod/check-service-status.sh
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+PROJECT_DIR="/workspace/transcription-service"
+LOG_FILE="/tmp/transcription-service.log"
+PID_FILE="/tmp/transcription-service.pid"
+
+echo "📊 Transcription Service Status"
+echo "==============================="
+echo ""
+
+# Check 1: Process Status
+echo "1️⃣  Process Status"
+echo "─────────────────"
+PID=$(pgrep -f "uvicorn.*app.main:app.*8001" | head -1)
+if [ ! -z "$PID" ]; then
+    echo -e "${GREEN}✅ Service is RUNNING${NC}"
+    echo "   PID: $PID"
+    
+    # Check PID file
+    if [ -f "$PID_FILE" ]; then
+        STORED_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+        if [ "$STORED_PID" = "$PID" ]; then
+            echo -e "   ${GREEN}✓${NC} PID file matches: $PID_FILE"
+        else
+            echo -e "   ${YELLOW}⚠${NC} PID file mismatch: $PID_FILE (stored: $STORED_PID)"
+        fi
+    fi
+    
+    # Process details
+    if command -v ps > /dev/null; then
+        CPU=$(ps -p $PID -o %cpu --no-headers 2>/dev/null | xargs || echo "N/A")
+        MEM=$(ps -p $PID -o %mem --no-headers 2>/dev/null | xargs || echo "N/A")
+        TIME=$(ps -p $PID -o etime --no-headers 2>/dev/null | xargs || echo "N/A")
+        echo "   CPU: ${CPU}%"
+        echo "   Memory: ${MEM}%"
+        echo "   Uptime: ${TIME}"
+    fi
+else
+    echo -e "${RED}❌ Service is NOT running${NC}"
+    if [ -f "$PID_FILE" ]; then
+        echo -e "   ${YELLOW}⚠${NC} PID file exists but process not found: $PID_FILE"
+    fi
+fi
+echo ""
+
+# Check 2: Port Status
+echo "2️⃣  Port Status"
+echo "──────────────"
+if command -v netstat > /dev/null; then
+    PORT_STATUS=$(netstat -tlnp 2>/dev/null | grep ":8001" || echo "")
+elif command -v ss > /dev/null; then
+    PORT_STATUS=$(ss -tlnp 2>/dev/null | grep ":8001" || echo "")
+else
+    PORT_STATUS=""
+fi
+
+if [ ! -z "$PORT_STATUS" ]; then
+    echo -e "${GREEN}✅ Port 8001 is LISTENING${NC}"
+    echo "$PORT_STATUS" | head -1 | sed 's/^/   /'
+else
+    echo -e "${RED}❌ Port 8001 is NOT listening${NC}"
+fi
+echo ""
+
+# Check 3: Health Check
+echo "3️⃣  Health Check"
+echo "───────────────"
+HEALTH_RESPONSE=$(curl -s -m 5 http://localhost:8001/health 2>&1 || echo "ERROR")
+if echo "$HEALTH_RESPONSE" | grep -q "healthy\|status"; then
+    echo -e "${GREEN}✅ Health check PASSED${NC}"
+    echo "   Response: $(echo "$HEALTH_RESPONSE" | head -1 | cut -c1-100)"
+elif echo "$HEALTH_RESPONSE" | grep -q "502\|Bad Gateway"; then
+    echo -e "${RED}❌ Health check FAILED${NC}"
+    echo "   Error: 502 Bad Gateway (nginx running but service not responding)"
+elif echo "$HEALTH_RESPONSE" | grep -q "ERROR\|Connection refused"; then
+    echo -e "${RED}❌ Health check FAILED${NC}"
+    echo "   Error: Cannot connect to service"
+else
+    echo -e "${YELLOW}⚠️  Health check UNKNOWN${NC}"
+    echo "   Response: $(echo "$HEALTH_RESPONSE" | head -1 | cut -c1-100)"
+fi
+echo ""
+
+# Check 4: API Endpoint
+echo "4️⃣  API Endpoint"
+echo "───────────────"
+API_RESPONSE=$(curl -s -m 5 http://localhost:8001/ 2>&1 || echo "ERROR")
+if echo "$API_RESPONSE" | grep -q "Transcription\|message"; then
+    echo -e "${GREEN}✅ API is responding${NC}"
+    MESSAGE=$(echo "$API_RESPONSE" | grep -o '\"message\":\"[^\"]*\"' | head -1 || echo "")
+    if [ ! -z "$MESSAGE" ]; then
+        echo "   $MESSAGE"
+    fi
+else
+    echo -e "${YELLOW}⚠️  API may not be ready${NC}"
+fi
+echo ""
+
+# Check 5: Log File
+echo "5️⃣  Log File"
+echo "────────────"
+if [ -f "$LOG_FILE" ]; then
+    LOG_SIZE=$(du -h "$LOG_FILE" | cut -f1)
+    LOG_LINES=$(wc -l < "$LOG_FILE" 2>/dev/null || echo "0")
+    LAST_MODIFIED=$(stat -c %y "$LOG_FILE" 2>/dev/null | cut -d'.' -f1 || stat -f "%Sm" "$LOG_FILE" 2>/dev/null || echo "N/A")
+    
+    echo -e "${GREEN}✅ Log file exists${NC}"
+    echo "   Path: $LOG_FILE"
+    echo "   Size: $LOG_SIZE"
+    echo "   Lines: $LOG_LINES"
+    echo "   Last modified: $LAST_MODIFIED"
+    
+    # Show last few lines
+    echo ""
+    echo "   Last 5 lines:"
+    tail -5 "$LOG_FILE" | sed 's/^/   | /' || echo "   (empty)"
+else
+    echo -e "${YELLOW}⚠️  Log file not found${NC}"
+    echo "   Expected: $LOG_FILE"
+fi
+echo ""
+
+# Check 6: GPU Environment (if available)
+echo "6️⃣  GPU Environment"
+echo "──────────────────"
+if command -v nvidia-smi > /dev/null; then
+    GPU_INFO=$(nvidia-smi --query-gpu=name,driver_version,memory.used,memory.total --format=csv,noheader 2>/dev/null | head -1 || echo "")
+    if [ ! -z "$GPU_INFO" ]; then
+        echo -e "${GREEN}✅ GPU Available${NC}"
+        echo "   $GPU_INFO"
+    else
+        echo -e "${YELLOW}⚠️  GPU information unavailable${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  nvidia-smi not available${NC}"
+fi
+
+# Check GPU usage in environment
+if [ ! -z "$CUDA_VISIBLE_DEVICES" ]; then
+    echo "   CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+fi
+echo ""
+
+# Check 7: External Access
+echo "7️⃣  External Access"
+echo "───────────────────"
+EXTERNAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || curl -s ifconfig.me 2>/dev/null || echo "80.15.7.37")
+EXTERNAL_URL="http://${EXTERNAL_IP}:8001"
+
+EXTERNAL_RESPONSE=$(curl -s -m 5 "$EXTERNAL_URL/health" 2>&1 || echo "ERROR")
+EXTERNAL_CODE=$(echo "$EXTERNAL_RESPONSE" | tail -1)
+
+if echo "$EXTERNAL_RESPONSE" | grep -q "healthy\|status"; then
+    echo -e "${GREEN}✅ External access OK${NC}"
+    echo "   URL: $EXTERNAL_URL/health"
+elif echo "$EXTERNAL_RESPONSE" | grep -q "ERROR\|Connection refused\|Network is unreachable"; then
+    echo -e "${YELLOW}⚠️  External access blocked${NC}"
+    echo "   This is normal if firewall blocks external access"
+    echo "   Backend should still be able to connect from internal network"
+else
+    echo -e "${YELLOW}⚠️  External access status unknown${NC}"
+fi
+echo ""
+
+# Summary
+echo "==============================="
+echo "📋 Summary"
+echo "==============================="
+
+if [ ! -z "$PID" ]; then
+    echo -e "${GREEN}✅ Service Status: RUNNING${NC}"
+else
+    echo -e "${RED}❌ Service Status: NOT RUNNING${NC}"
+fi
+
+if [ -f "$LOG_FILE" ]; then
+    echo -e "${GREEN}✅ Log File: EXISTS${NC}"
+else
+    echo -e "${YELLOW}⚠️  Log File: NOT FOUND${NC}"
+fi
+
+echo ""
+echo "💡 Useful Commands:"
+echo "   View logs:    tail -f $LOG_FILE"
+echo "   Stop service: bash scripts/pod/stop-service.sh"
+echo "   Start service: bash scripts/pod/start-service-daemon.sh"
+echo ""
+

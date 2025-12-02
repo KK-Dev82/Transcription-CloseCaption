@@ -80,6 +80,30 @@ if [ -f ".env.runpod" ]; then
     echo ""
 fi
 
+# Check if dependencies are installed
+echo "🔍 Checking dependencies..."
+if ! python3 -c "import uvicorn" 2>/dev/null; then
+    echo "❌ Error: uvicorn is not installed"
+    echo ""
+    echo "💡 Installing dependencies..."
+    echo "   Run: bash scripts/pod/install-dependencies.sh"
+    echo ""
+    read -p "Do you want to install dependencies now? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        bash scripts/pod/install-dependencies.sh || {
+            echo "❌ Failed to install dependencies"
+            exit 1
+        }
+    else
+        echo "❌ Cannot start service without dependencies"
+        exit 1
+    fi
+else
+    echo "✅ Dependencies OK"
+    echo ""
+fi
+
 # Log file location
 LOG_FILE="/tmp/transcription-service.log"
 PID_FILE="/tmp/transcription-service.pid"
