@@ -1,26 +1,24 @@
-# Minimal Base Image สำหรับ RunPod และ HP Z2 Workstation
+# Minimal Base Image สำหรับ RunPod (ใช้ RunPod Template)
 # มีแค่ CUDA + Dependencies พื้นฐาน (ไม่ start services อัตโนมัติ)
-#
-# ใช้ได้ทั้ง:
-# - RunPod: Pull image นี้ → Clone repo → Start services แบบ Direct mode
-# - HP Z2: Pull image นี้ → Clone repo → Start services แบบ Direct mode
 #
 # ⚠️ หมายเหตุ:
 # - Image นี้เป็น minimal base - ไม่มี services start อัตโนมัติ
 # - User ต้อง clone repo และ run scripts/pod/start-services-direct.sh เอง
-# - Z2 ต้องมี NVIDIA drivers และ nvidia-container-toolkit (ไม่ใช่ CUDA Toolkit)
-
-# Build for linux/amd64 (RunPod and HP Z2)
+#
+# ✅ ข้อดีของการใช้ RunPod Template:
+# - Build เร็ว (~5-10 นาที เทียบกับ ~20-30 นาที)
+# - มี PyTorch + CUDA พร้อมแล้ว ไม่ต้องติดตั้งเพิ่ม
+# - Optimized สำหรับ RunPod environment
+# - ขนาด image เล็กกว่า (ไม่ต้องติดตั้ง CUDA toolkit เต็ม)
+#
+# Build for linux/amd64 (RunPod)
 # Note: Use --platform=linux/amd64 when building on ARM64 (MacOS M1/M2)
-# 
-# ⚠️ แก้ไขปัญหา CUDA version mismatch:
-# - เปลี่ยนจาก nvidia/cuda:12.1.0-base-ubuntu22.04
-# - เป็น pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime เพื่อให้ CUDA version ตรงกับ libraries
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
 
 # Install system dependencies
+# PyTorch และ CUDA มีอยู่แล้วใน base image
 RUN apt-get update && apt-get install -y \
-    # Build tools
+    # Build tools (บางส่วนอาจมีอยู่แล้ว)
     build-essential \
     cmake \
     git \
@@ -44,9 +42,11 @@ RUN apt-get update && apt-get install -y \
 # Initialize git-lfs (สำหรับโมเดล/ไฟล์ใหญ่ใน Git)
 RUN git lfs install
 
-# Install PyTorch with CUDA support
-# Base image มี PyTorch 2.1.0+cu118 อยู่แล้ว แต่ต้อง upgrade เป็น 2.1.1
-# หรือใช้เวอร์ชันที่มีอยู่ (2.1.0) ก็ได้
+# ตรวจสอบ PyTorch (ควรมีอยู่แล้ว - optional check)
+# RUN python3 -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')"
+
+# Upgrade PyTorch เป็น 2.1.1 (ถ้าต้องการ)
+# หรือใช้ 2.1.0 ที่มีอยู่แล้วก็ได้
 RUN pip3 install --no-cache-dir --upgrade \
     torch==2.1.1 \
     torchaudio==2.1.1 \
@@ -113,5 +113,5 @@ EXPOSE 8001 8002 6379
 # 3. Use restart script: bash scripts/pod/restart-pod-services.sh
 
 # Default: Keep container running (wait for user to start services)
-CMD ["/bin/bash", "-c", "echo '🚀 Minimal Base Image Ready'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/restart-pod-services.sh'; echo ''; tail -f /dev/null"]
+CMD ["/bin/bash", "-c", "echo '🚀 RunPod Base Image Ready'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/restart-pod-services.sh'; echo ''; tail -f /dev/null"]
 
