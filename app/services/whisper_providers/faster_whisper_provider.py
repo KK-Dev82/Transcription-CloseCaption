@@ -13,6 +13,8 @@ import os
 import time
 import logging
 import threading
+import asyncio
+import gc
 from pathlib import Path
 from typing import Dict, Optional
 import torch
@@ -171,12 +173,11 @@ class FasterWhisperProvider(WhisperProvider):
         model_size: str = None
     ) -> TranscriptionResult:
         """
-        Transcribe audio using faster-whisper
+        Transcribe audio using faster-whisper with retry logic
         
-        Note: ถ้า GPU mode timeout จะ fallback ไป CPU mode
-        """
-        """
-        Transcribe audio using faster-whisper
+        Note: 
+        - ถ้า GPU mode timeout จะ retry ก่อน fallback ไป CPU mode
+        - Max retry attempts: 3 (configurable via GPU_TRANSCRIPTION_MAX_RETRIES)
         
         Args:
             audio_path: Path ไปยังไฟล์ audio
@@ -186,7 +187,97 @@ class FasterWhisperProvider(WhisperProvider):
         Returns:
             TranscriptionResult
         """
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: Starting transcribe()")
+        # ใช้ retry wrapper สำหรับ GPU mode
+        if self.device == "cuda":
+            return await self._transcribe_with_retry(audio_path, language, model_size)
+        else:
+            # CPU mode ไม่ต้อง retry
+            return await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
+    
+    async def _transcribe_with_retry(
+        self,
+        audio_path: str,
+        language: str = "th",
+        model_size: str = None
+    ) -> TranscriptionResult:
+        """
+        Transcribe with retry logic for GPU mode
+        
+        Retry GPU mode ก่อน fallback to CPU
+        """
+        MAX_RETRY_ATTEMPTS = int(os.getenv('GPU_TRANSCRIPTION_MAX_RETRIES', '3'))
+        RETRY_DELAY = float(os.getenv('GPU_TRANSCRIPTION_RETRY_DELAY', '5.0'))
+        
+        last_error = None
+        
+        for attempt in range(MAX_RETRY_ATTEMPTS):
+            try:
+                logger.info(f"[Faster Whisper] 🔄 Attempt {attempt + 1}/{MAX_RETRY_ATTEMPTS} - GPU transcription")
+                
+                # ลอง GPU mode
+                result = await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
+                
+                if attempt > 0:
+                    logger.info(f"[Faster Whisper] ✅ GPU transcription succeeded on retry attempt {attempt + 1}")
+                
+                return result
+                
+            except (TimeoutError, Exception) as e:
+                last_error = e
+                error_msg = str(e).lower()
+                
+                # ตรวจสอบว่าเป็น timeout error หรือไม่
+                is_timeout = isinstance(e, TimeoutError) or "timeout" in error_msg
+                
+                if is_timeout and attempt < MAX_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        f"[Faster Whisper] ⚠️ GPU timeout (attempt {attempt + 1}/{MAX_RETRY_ATTEMPTS}), "
+                        f"retrying in {RETRY_DELAY}s..."
+                    )
+                    
+                    # Release GPU resources ก่อน retry
+                    try:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            logger.info(f"[Faster Whisper] 🧹 Cleared CUDA cache before retry")
+                        gc.collect()
+                    except Exception as cleanup_error:
+                        logger.warning(f"[Faster Whisper] ⚠️ Failed to cleanup GPU resources: {cleanup_error}")
+                    
+                    # Delay before retry
+                    await asyncio.sleep(RETRY_DELAY)
+                elif is_timeout:
+                    # Last attempt failed - fallback to CPU
+                    logger.error(
+                        f"[Faster Whisper] ❌ GPU timeout after {MAX_RETRY_ATTEMPTS} attempts, "
+                        f"falling back to CPU mode..."
+                    )
+                    break
+                else:
+                    # Non-timeout error - don't retry
+                    logger.error(f"[Faster Whisper] ❌ Non-timeout error: {e}")
+                    raise
+        
+        # Fallback to CPU mode after all retries failed
+        logger.warning(f"[Faster Whisper] 🔄 Falling back to CPU mode after {MAX_RETRY_ATTEMPTS} GPU retry attempts")
+        try:
+            return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+        except Exception as cpu_error:
+            logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
+            raise RuntimeError(f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries, and CPU fallback also failed: {cpu_error}") from last_error
+    
+    async def _transcribe_gpu_single_attempt(
+        self,
+        audio_path: str,
+        language: str = "th",
+        model_size: str = None
+    ) -> TranscriptionResult:
+        """
+        Single attempt GPU transcription (original transcribe logic)
+        
+        Note: Method นี้ถูก refactor ออกมาจาก transcribe() เพื่อให้ retry wrapper เรียกใช้ได้
+        """
+        logger.info(f"[Faster Whisper] 🔍 DEBUG: Starting GPU transcription attempt")
         logger.info(f"[Faster Whisper] 🔍 DEBUG: audio_path={audio_path}, language={language}, model_size={model_size}")
         
         audio_path_obj = Path(audio_path)
@@ -378,10 +469,11 @@ class FasterWhisperProvider(WhisperProvider):
                 
                 logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
             except TimeoutError as timeout_error:
-                # ถ้า GPU timeout ให้ fallback ไป CPU mode
+                # ถ้า GPU timeout ให้ retry ก่อน fallback ไป CPU mode
                 if self.device == "cuda":
-                    logger.warning(f"[Faster Whisper] ⚠️ GPU mode timeout, falling back to CPU mode...")
-                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+                    logger.warning(f"[Faster Whisper] ⚠️ GPU mode timeout during segments processing")
+                    # Retry logic จะถูกจัดการใน outer exception handler
+                    raise  # Re-raise เพื่อให้ outer handler จัดการ retry
                 else:
                     logger.error(f"[Faster Whisper] ❌ Error processing segments: {timeout_error}", exc_info=True)
                     raise
@@ -424,13 +516,9 @@ class FasterWhisperProvider(WhisperProvider):
                     raise RuntimeError(f"cuDNN library issue: {error_msg}. Please ensure CUDA runtime matches CTranslate2 wheel version.")
             
             logger.error(f"[Faster Whisper] ❌ Transcription failed: {e}", exc_info=True)
-            # ถ้า GPU mode fail และยังไม่ได้ fallback ให้ลอง CPU
-            if self.device == "cuda" and "timeout" in str(e).lower():
-                logger.warning(f"[Faster Whisper] ⚠️ GPU mode failed, falling back to CPU mode...")
-                try:
-                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
-                except Exception as cpu_error:
-                    logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
+            # Re-raise exception เพื่อให้ retry wrapper จัดการ
+            # ถ้าเรียกจาก retry wrapper แล้ว จะ retry ก่อน fallback
+            # ถ้าเรียกจาก CPU mode หรือไม่ใช่ timeout จะ raise ทันที
             raise
     
     async def _transcribe_cpu_fallback(

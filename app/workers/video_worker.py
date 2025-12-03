@@ -71,11 +71,16 @@ class VideoWorker:
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Background thread สำหรับ maintain RabbitMQ connection
+        self._maintenance_thread = None
+        self._maintenance_thread_running = False
     
     def _signal_handler(self, signum, frame):
         """จัดการ signal สำหรับ graceful shutdown"""
         logger.info(f"ได้รับ signal {signum} กำลังปิด worker...")
         self.running = False
+        self._maintenance_thread_running = False  # Stop maintenance thread
         try:
             if self.connection:
                 try:
@@ -86,6 +91,97 @@ class VideoWorker:
         except Exception as e:
             logger.warning(f"Error closing connection in signal handler: {e}")
     
+    def _maintain_connection(self):
+        """Background thread เพื่อ maintain RabbitMQ connection"""
+        import time
+        check_interval = int(os.getenv('RABBITMQ_CONNECTION_CHECK_INTERVAL', '30'))  # 30 วินาที
+        
+        logger.info(f"🔄 Starting connection maintenance thread (check interval: {check_interval}s)")
+        
+        while self._maintenance_thread_running and self.running:
+            try:
+                time.sleep(check_interval)
+                
+                if not self.running or not self._maintenance_thread_running:
+                    break
+                
+                # ตรวจสอบ connection health
+                connection_ok = False
+                try:
+                    if self.connection and not self.connection.is_closed:
+                        # Process data events เพื่อส่ง heartbeat
+                        self.connection.process_data_events(time_limit=0.1)
+                        connection_ok = True
+                except (AttributeError, pika.exceptions.ConnectionClosed, 
+                        pika.exceptions.StreamLostError, ConnectionResetError) as e:
+                    logger.warning(f"⚠️ Connection check failed: {e}")
+                    connection_ok = False
+                
+                # ถ้า connection ไม่ดี ให้ reconnect
+                if not connection_ok:
+                    logger.warning("⚠️ Connection lost detected by maintenance thread, attempting to reconnect...")
+                    
+                    # Reset connection state
+                    try:
+                        if self.channel and not self.channel.is_closed:
+                            self.channel.close()
+                    except:
+                        pass
+                    self.channel = None
+                    
+                    try:
+                        if self.connection and not self.connection.is_closed:
+                            self.connection.close()
+                    except:
+                        pass
+                    self.connection = None
+                    
+                    # Try to reconnect
+                    if self.connect_rabbitmq(max_retries=5, retry_delay=5):
+                        logger.info("✅ Reconnected to RabbitMQ successfully (via maintenance thread)")
+                        # Re-setup consumers after reconnection
+                        self.setup_consumers()
+                        logger.info("✅ Consumers re-registered (via maintenance thread)")
+                    else:
+                        logger.warning("⚠️ Failed to reconnect (maintenance thread will retry later)")
+                
+            except Exception as e:
+                logger.error(f"❌ Error in connection maintenance thread: {e}", exc_info=True)
+                # Continue loop even if error occurs
+                time.sleep(check_interval)
+        
+        logger.info("🛑 Connection maintenance thread stopped")
+    
+    def start_maintenance_thread(self):
+        """Start background thread สำหรับ maintain connection"""
+        if self._maintenance_thread_running:
+            logger.warning("⚠️ Maintenance thread already running")
+            return
+        
+        self._maintenance_thread_running = True
+        self._maintenance_thread = threading.Thread(
+            target=self._maintain_connection,
+            daemon=True,
+            name="connection-maintenance"
+        )
+        self._maintenance_thread.start()
+        logger.info("✅ Connection maintenance thread started")
+    
+    def stop_maintenance_thread(self):
+        """Stop background thread สำหรับ maintain connection"""
+        if not self._maintenance_thread_running:
+            return
+        
+        self._maintenance_thread_running = False
+        
+        if self._maintenance_thread and self._maintenance_thread.is_alive():
+            # Wait for thread to finish (max 5 seconds)
+            self._maintenance_thread.join(timeout=5.0)
+            if self._maintenance_thread.is_alive():
+                logger.warning("⚠️ Maintenance thread did not stop within timeout")
+            else:
+                logger.info("✅ Connection maintenance thread stopped")
+    
     def connect_rabbitmq(self, max_retries=5, retry_delay=5):
         """เชื่อมต่อกับ RabbitMQ พร้อม retry logic"""
         for attempt in range(max_retries):
@@ -93,15 +189,23 @@ class VideoWorker:
                 logger.info(f"Attempting to connect to RabbitMQ at {self.rabbitmq_host}:{self.rabbitmq_port} (attempt {attempt + 1}/{max_retries})...")
                 
                 credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
+                
+                # เพิ่ม heartbeat timeout เป็น 30 นาที (1800s) เพื่อรองรับ tasks ที่ใช้เวลานาน
+                # เพิ่ม blocked_connection_timeout เป็น 10 นาที (600s)
+                heartbeat_timeout = int(os.getenv('RABBITMQ_HEARTBEAT_TIMEOUT', '1800'))  # 30 นาที
+                blocked_timeout = int(os.getenv('RABBITMQ_BLOCKED_TIMEOUT', '600'))  # 10 นาที
+                
                 parameters = pika.ConnectionParameters(
                     host=self.rabbitmq_host,
                     port=self.rabbitmq_port,
                     credentials=credentials,
-                    heartbeat=600,
-                    blocked_connection_timeout=300,
+                    heartbeat=heartbeat_timeout,  # เพิ่มเป็น 30 นาที (เดิม 10 นาที)
+                    blocked_connection_timeout=blocked_timeout,  # เพิ่มเป็น 10 นาที (เดิม 5 นาที)
                     connection_attempts=3,
                     retry_delay=2
                 )
+                
+                logger.info(f"✅ RabbitMQ connection parameters: heartbeat={heartbeat_timeout}s ({heartbeat_timeout/60:.1f}min), blocked_timeout={blocked_timeout}s ({blocked_timeout/60:.1f}min)")
                 
                 self.connection = pika.BlockingConnection(parameters)
                 self.channel = self.connection.channel()
@@ -1366,6 +1470,9 @@ class VideoWorker:
         # ตั้งค่า consumers
         self.setup_consumers()
         
+        # Start background thread สำหรับ maintain connection
+        self.start_maintenance_thread()
+        
         logger.info("Video Worker พร้อมรับงาน...")
         
         try:
@@ -1458,6 +1565,13 @@ class VideoWorker:
                     logger.info("Thread pool executor shut down")
             except Exception as e:
                 logger.warning(f"Error shutting down executor: {e}")
+            
+            # Stop maintenance thread
+            try:
+                self.stop_maintenance_thread()
+            except Exception as e:
+                logger.warning(f"Error stopping maintenance thread: {e}")
+            
             logger.info("Video Worker ปิดตัวลง")
 
 def main():

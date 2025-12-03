@@ -176,6 +176,36 @@ class TranscriptionService:
     ) -> str:
         """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
+        # ตรวจสอบ Queue size ก่อนส่ง task (ป้องกัน queue overflow)
+        try:
+            MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
+            
+            queue_info = self.rabbitmq_service.get_queue_info()
+            transcription_queue_info = queue_info.get('transcription_queue', {})
+            current_queue_size = transcription_queue_info.get('message_count', 0)
+            
+            if current_queue_size >= MAX_QUEUE_SIZE:
+                error_msg = (
+                    f"Queue is full ({current_queue_size}/{MAX_QUEUE_SIZE}). "
+                    f"Please try again later."
+                )
+                logger.warning(f"⚠️ {error_msg}")
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=503,
+                    detail=error_msg
+                )
+            
+            logger.info(f"✅ Queue size check passed: {current_queue_size}/{MAX_QUEUE_SIZE} messages")
+            
+        except Exception as e:
+            # Check if it's HTTPException (503) and re-raise
+            if "HTTPException" in str(type(e)) or hasattr(e, 'status_code'):
+                raise
+            
+            # Log error but continue (don't block if queue check fails)
+            logger.warning(f"⚠️ Queue size check failed (continuing anyway): {e}")
+        
         # ส่งไปยัง RabbitMQ queue และรับ task_id
         try:
             send_kwargs = dict(
@@ -269,6 +299,24 @@ class TranscriptionService:
             
             return task_id
     
+    def _check_task_timeout(self, task_id: str, task: TranscriptionResponse) -> bool:
+        """ตรวจสอบว่า task เกิน timeout หรือไม่"""
+        TASK_TIMEOUT_SECONDS = int(os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '3600'))  # 1 ชั่วโมง default
+        
+        if not task.created_at:
+            return False  # ไม่สามารถตรวจสอบได้
+        
+        elapsed_time = (datetime.now() - task.created_at).total_seconds()
+        
+        if elapsed_time > TASK_TIMEOUT_SECONDS:
+            logger.error(
+                f"⏱️ Task {task_id} exceeded timeout: {elapsed_time:.1f}s > {TASK_TIMEOUT_SECONDS}s "
+                f"({TASK_TIMEOUT_SECONDS/60:.1f} minutes)"
+            )
+            return True
+        
+        return False
+    
     async def _process_transcription(
         self,
         task_id: str,
@@ -288,6 +336,16 @@ class TranscriptionService:
             raise ValueError(f"Task {task_id} not found")
         
         task = self.tasks[task_id]
+        
+        # ตรวจสอบ timeout ก่อนเริ่มประมวลผล
+        if self._check_task_timeout(task_id, task):
+            task.status = "failed"
+            task.error_message = f"Task timeout: exceeded {os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '3600')} seconds"
+            task.completed_at = datetime.now()
+            self.json_storage.save_transcription(task_id, task.__dict__)
+            logger.error(f"❌ Task {task_id} marked as failed due to timeout")
+            return
+        
         task.status = "processing"
         logger.info(f"📋 Task object found: status={task.status}, file_path={task.file_path}")
         
@@ -362,6 +420,15 @@ class TranscriptionService:
                         logger.warning(f"⚠️ extract_audio() ล้มเหลว: {e}")
                         # ใช้ไฟล์เดิม (อาจเป็น audio อยู่แล้ว)
                         audio_path = local_file_path
+                
+                # ตรวจสอบ timeout อีกครั้งก่อนเริ่ม transcription
+                if self._check_task_timeout(task_id, task):
+                    task.status = "failed"
+                    task.error_message = f"Task timeout: exceeded {os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '3600')} seconds"
+                    task.completed_at = datetime.now()
+                    self.json_storage.save_transcription(task_id, task.__dict__)
+                    logger.error(f"❌ Task {task_id} marked as failed due to timeout before transcription")
+                    return
                 
                 # Transcribe ทั้งไฟล์เลย
                 logger.info("🎯 [Transcription] เริ่ม transcription ทั้งไฟล์ (ไม่ chunk)...")
