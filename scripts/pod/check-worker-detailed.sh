@@ -246,19 +246,45 @@ echo "  - Messages in queue: 26"
 echo ""
 
 # Recommendations
+RECOMMENDATION=""
+RESTART_NEEDED=false
+
 if [ "$STATE" = "D" ]; then
     print_warning "⚠️ Worker อยู่ใน uninterruptible sleep - อาจ stuck ใน I/O"
     print_status "💡 แนะนำ: Restart worker (อาจ stuck ใน FFmpeg หรือ disk I/O)"
-elif [ "$OPEN_FILES" -eq 0 ] || [ "${RABBITMQ_CONNS:-0}" -eq 0 ]; then
-    print_warning "⚠️ Connection หลุด - Worker ไม่สามารถรับ messages ได้"
-    print_status "💡 แนะนำ: Restart worker เพื่อ reconnect"
-elif [ "$CPU_FALLBACK_COUNT" -gt 0 ] && [ -n "$CPU_USAGE" ] && [ "${CPU_INT:-0}" -gt 100 ]; then
-    print_warning "⚠️ Worker กำลัง process ใน CPU mode (ช้ามาก)"
-    print_status "💡 แนะนำ: รอให้เสร็จก่อน หรือ restart เพื่อใช้ GPU ใหม่"
-elif [ -n "$FFMPEG_PROCS" ]; then
-    print_warning "⚠️ พบ FFmpeg ทำงานอยู่ - อาจกำลัง extract audio"
-    print_status "💡 แนะนำ: รอให้ FFmpeg เสร็จก่อน restart"
+    RESTART_NEEDED=true
 else
+    # Check connection status
+    OPEN_FILES_CHECK="${OPEN_FILES:-N/A}"
+    RABBITMQ_CONNS_CHECK="${RABBITMQ_CONNS:-N/A}"
+    
+    if [ "$OPEN_FILES_CHECK" = "N/A" ] || [ "$OPEN_FILES_CHECK" = "0" ] || [ "$RABBITMQ_CONNS_CHECK" = "0" ]; then
+        print_warning "⚠️ Connection หลุด - Worker ไม่สามารถรับ messages ได้"
+        print_status "💡 แนะนำ: Restart worker เพื่อ reconnect"
+        RESTART_NEEDED=true
+    fi
+    
+    # Check CPU mode processing
+    if [ "$CPU_FALLBACK_COUNT" -gt 0 ]; then
+        PROCESSING_COUNT=$(tail -500 /tmp/video-worker.log 2>/dev/null | grep -i "Processing audio with duration" | tail -5 | wc -l | tr -d ' ' || echo "0")
+        
+        if [ "$PROCESSING_COUNT" -gt 0 ]; then
+            print_warning "⚠️ Worker กำลัง process $PROCESSING_COUNT task(s) ใน CPU mode (ช้ามาก)"
+            print_status "   💡 CPU mode ช้ากว่า GPU มาก (10-20 เท่า)"
+            print_status "   💡 10 นาที video ใน CPU mode อาจใช้เวลา 2-5 ชั่วโมง!"
+            print_status "   💡 แนะนำ: Restart worker เพื่อใช้ GPU ใหม่ (เร็วกว่ามาก)"
+            RESTART_NEEDED=true
+        fi
+    fi
+    
+    # Check for FFmpeg
+    if [ -n "$FFMPEG_PROCS" ]; then
+        print_warning "⚠️ พบ FFmpeg ทำงานอยู่ - อาจกำลัง extract audio"
+        print_status "💡 แนะนำ: รอให้ FFmpeg เสร็จก่อน restart (ไม่กี่วินาที)"
+    fi
+fi
+
+if [ "$RESTART_NEEDED" = false ]; then
     print_status "💡 Worker ดูเหมือนกำลังทำงาน - อาจไม่จำเป็นต้อง restart"
 fi
 
