@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>50 Concurrency Monitor - ดู Queue Process และสถิติ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls input,
+        .controls button {
+            padding: 10px 15px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .controls input {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .controls button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .controls button:hover {
+            background: #5568d3;
+        }
+
+        .controls button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .stats-summary {
+            padding: 20px 30px;
+            background: #e3f2fd;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .content {
+            padding: 30px;
+            max-height: calc(100vh - 400px);
+            overflow-y: auto;
+        }
+
+        .task-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+
+        .task-card {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 15px;
+            transition: all 0.3s;
+        }
+
+        .task-card.pending {
+            border-color: #ffc107;
+            background: #fff3cd;
+        }
+
+        .task-card.processing {
+            border-color: #0d6efd;
+            background: #cfe2ff;
+        }
+
+        .task-card.completed {
+            border-color: #198754;
+            background: #d1e7dd;
+        }
+
+        .task-card.failed {
+            border-color: #dc3545;
+            background: #f8d7da;
+        }
+
+        .task-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .task-id {
+            font-weight: bold;
+            font-size: 0.9em;
+            color: #333;
+        }
+
+        .task-status {
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .task-status.pending {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .task-status.processing {
+            background: #0d6efd;
+            color: white;
+        }
+
+        .task-status.completed {
+            background: #198754;
+            color: white;
+        }
+
+        .task-status.failed {
+            background: #dc3545;
+            color: white;
+        }
+
+        .task-progress {
+            margin: 10px 0;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .task-stats {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #dee2e6;
+            font-size: 0.85em;
+        }
+
+        .task-stats-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            color: #666;
+        }
+
+        .task-stats-row .label {
+            font-weight: bold;
+        }
+
+        .task-stats-row .value {
+            color: #333;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-left: auto;
+        }
+
+        .auto-refresh input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .task-card.processing {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 50 Concurrency Monitor</h1>
+            <p>ดู Queue Process และสถิติการแปลงเสียง</p>
+        </div>
+
+        <div class="controls">
+            <input type="text" id="taskIdsInput" placeholder="ใส่ Task IDs คั่นด้วย comma หรือ JSON file path (เช่น: task1,task2,task3 หรือ report.json)">
+            <button onclick="loadTasks()">โหลด Tasks</button>
+            <button onclick="startMonitoring()" id="startBtn">เริ่ม Monitor</button>
+            <button onclick="stopMonitoring()" id="stopBtn" disabled>หยุด Monitor</button>
+            <div class="auto-refresh">
+                <label>
+                    <input type="checkbox" id="autoRefresh" checked>
+                    Auto Refresh (5s)
+                </label>
+            </div>
+        </div>
+
+        <div class="stats-summary" id="statsSummary" style="display: none;">
+            <div class="stat-card">
+                <h3>ทั้งหมด</h3>
+                <div class="value" id="statTotal">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>เสร็จสิ้น</h3>
+                <div class="value" id="statCompleted" style="color: #198754;">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>กำลังประมวลผล</h3>
+                <div class="value" id="statProcessing" style="color: #0d6efd;">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>รอ</h3>
+                <div class="value" id="statPending" style="color: #ffc107;">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>ล้มเหลว</h3>
+                <div class="value" id="statFailed" style="color: #dc3545;">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>เวลารวมเฉลี่ย</h3>
+                <div class="value" id="statAvgTime">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>เวลาประมวลผลเฉลี่ย</h3>
+                <div class="value" id="statAvgProcessing">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>เวลารอ Queue เฉลี่ย</h3>
+                <div class="value" id="statAvgQueue">-</div>
+            </div>
+        </div>
+
+        <div class="content" id="content">
+            <div class="loading">กรุณาใส่ Task IDs หรือโหลด JSON report file</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = window.location.origin;
+        let taskIds = [];
+        let monitoring = false;
+        let monitoringInterval = null;
+        let tasksData = {};
+
+        // Load tasks from input or JSON file
+        async function loadTasks() {
+            const input = document.getElementById('taskIdsInput').value.trim();
+            if (!input) {
+                alert('กรุณาใส่ Task IDs หรือ JSON file path');
+                return;
+            }
+
+            try {
+                // Check if input is a JSON file path
+                if (input.endsWith('.json')) {
+                    const response = await fetch(input);
+                    const jsonData = await response.json();
+                    
+                    // Extract task IDs from JSON report
+                    if (jsonData.detailed_results) {
+                        taskIds = jsonData.detailed_results
+                            .map(r => r.request_result?.api_task_id || r.poll_result?.api_task_id)
+                            .filter(id => id);
+                    } else if (jsonData.report?.detailed_results) {
+                        taskIds = jsonData.report.detailed_results
+                            .map(r => r.request_result?.api_task_id || r.poll_result?.api_task_id)
+                            .filter(id => id);
+                    } else {
+                        alert('ไม่พบ Task IDs ใน JSON file');
+                        return;
+                    }
+                } else {
+                    // Parse comma-separated task IDs
+                    taskIds = input.split(',').map(id => id.trim()).filter(id => id);
+                }
+
+                if (taskIds.length === 0) {
+                    alert('ไม่พบ Task IDs');
+                    return;
+                }
+
+                console.log(`Loaded ${taskIds.length} task IDs:`, taskIds);
+                document.getElementById('content').innerHTML = '<div class="loading">กำลังโหลดข้อมูล...</div>';
+                
+                // Initial load
+                await fetchAllTasks();
+                
+            } catch (error) {
+                console.error('Error loading tasks:', error);
+                document.getElementById('content').innerHTML = `<div class="error">เกิดข้อผิดพลาด: ${error.message}</div>`;
+            }
+        }
+
+        // Fetch status for all tasks
+        async function fetchAllTasks() {
+            const promises = taskIds.map(taskId => fetchTaskStatus(taskId));
+            await Promise.all(promises);
+            renderTasks();
+            updateStats();
+        }
+
+        // Fetch status for a single task
+        async function fetchTaskStatus(taskId) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/transcribe/${taskId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                tasksData[taskId] = data;
+            } catch (error) {
+                console.error(`Error fetching task ${taskId}:`, error);
+                tasksData[taskId] = {
+                    task_id: taskId,
+                    status: 'error',
+                    error_message: error.message
+                };
+            }
+        }
+
+        // Render all tasks
+        function renderTasks() {
+            const content = document.getElementById('content');
+            
+            if (taskIds.length === 0) {
+                content.innerHTML = '<div class="loading">ไม่มี Tasks</div>';
+                return;
+            }
+
+            const grid = document.createElement('div');
+            grid.className = 'task-grid';
+
+            taskIds.forEach(taskId => {
+                const task = tasksData[taskId] || { task_id: taskId, status: 'unknown' };
+                const card = createTaskCard(task);
+                grid.appendChild(card);
+            });
+
+            content.innerHTML = '';
+            content.appendChild(grid);
+        }
+
+        // Create task card
+        function createTaskCard(task) {
+            const card = document.createElement('div');
+            card.className = `task-card ${task.status || 'pending'}`;
+            
+            const status = task.status || 'unknown';
+            const progress = task.progress || 0;
+            const taskId = task.task_id || 'unknown';
+            
+            // Calculate times
+            const createdAt = task.created_at ? new Date(task.created_at) : null;
+            const completedAt = task.completed_at ? new Date(task.completed_at) : null;
+            const timeUsed = task.time_used;
+            
+            let totalTime = null;
+            let processingTime = null;
+            let queueWaitTime = null;
+            
+            if (createdAt && completedAt) {
+                totalTime = (completedAt - createdAt) / 1000; // seconds
+            }
+            
+            if (timeUsed !== null && timeUsed !== undefined) {
+                processingTime = timeUsed;
+                if (totalTime) {
+                    queueWaitTime = Math.max(0, totalTime - processingTime);
+                }
+            }
+
+            card.innerHTML = `
+                <div class="task-card-header">
+                    <div class="task-id">Task: ${taskId.substring(0, 8)}...</div>
+                    <div class="task-status ${status}">${status}</div>
+                </div>
+                
+                <div class="task-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progress}%">
+                            ${progress}%
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="task-stats">
+                    ${totalTime !== null ? `
+                        <div class="task-stats-row">
+                            <span class="label">⏱️ เวลารวม:</span>
+                            <span class="value">${formatTime(totalTime)}</span>
+                        </div>
+                    ` : ''}
+                    ${processingTime !== null ? `
+                        <div class="task-stats-row">
+                            <span class="label">⚙️ ประมวลผล:</span>
+                            <span class="value">${formatTime(processingTime)}</span>
+                        </div>
+                    ` : ''}
+                    ${queueWaitTime !== null ? `
+                        <div class="task-stats-row">
+                            <span class="label">⏳ รอ Queue:</span>
+                            <span class="value">${formatTime(queueWaitTime)}</span>
+                        </div>
+                    ` : ''}
+                    ${task.created_at ? `
+                        <div class="task-stats-row">
+                            <span class="label">🕐 เริ่ม:</span>
+                            <span class="value">${formatDateTime(task.created_at)}</span>
+                        </div>
+                    ` : ''}
+                    ${task.completed_at ? `
+                        <div class="task-stats-row">
+                            <span class="label">✅ เสร็จ:</span>
+                            <span class="value">${formatDateTime(task.completed_at)}</span>
+                        </div>
+                    ` : ''}
+                    ${task.error_message ? `
+                        <div class="task-stats-row">
+                            <span class="label">❌ ข้อผิดพลาด:</span>
+                            <span class="value" style="color: #dc3545;">${task.error_message.substring(0, 50)}...</span>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+
+            return card;
+        }
+
+        // Update statistics summary
+        function updateStats() {
+            const tasks = Object.values(tasksData);
+            
+            const total = taskIds.length;
+            const completed = tasks.filter(t => t.status === 'completed').length;
+            const processing = tasks.filter(t => t.status === 'processing' || t.status === 'queued').length;
+            const pending = tasks.filter(t => t.status === 'pending').length;
+            const failed = tasks.filter(t => t.status === 'failed' || t.status === 'error').length;
+
+            // Calculate average times
+            const completedTasks = tasks.filter(t => t.status === 'completed' && t.time_used);
+            
+            let avgTotalTime = null;
+            let avgProcessingTime = null;
+            let avgQueueTime = null;
+
+            if (completedTasks.length > 0) {
+                const totalTimes = [];
+                const processingTimes = [];
+                const queueTimes = [];
+
+                completedTasks.forEach(task => {
+                    const createdAt = task.created_at ? new Date(task.created_at) : null;
+                    const completedAt = task.completed_at ? new Date(task.completed_at) : null;
+                    const timeUsed = task.time_used;
+
+                    if (createdAt && completedAt) {
+                        const totalTime = (completedAt - createdAt) / 1000;
+                        totalTimes.push(totalTime);
+                        
+                        if (timeUsed) {
+                            processingTimes.push(timeUsed);
+                            queueTimes.push(Math.max(0, totalTime - timeUsed));
+                        }
+                    }
+                });
+
+                if (totalTimes.length > 0) {
+                    avgTotalTime = totalTimes.reduce((a, b) => a + b, 0) / totalTimes.length;
+                }
+                if (processingTimes.length > 0) {
+                    avgProcessingTime = processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length;
+                }
+                if (queueTimes.length > 0) {
+                    avgQueueTime = queueTimes.reduce((a, b) => a + b, 0) / queueTimes.length;
+                }
+            }
+
+            // Update UI
+            document.getElementById('statsSummary').style.display = 'grid';
+            document.getElementById('statTotal').textContent = total;
+            document.getElementById('statCompleted').textContent = completed;
+            document.getElementById('statProcessing').textContent = processing;
+            document.getElementById('statPending').textContent = pending;
+            document.getElementById('statFailed').textContent = failed;
+            document.getElementById('statAvgTime').textContent = avgTotalTime ? formatTime(avgTotalTime) : '-';
+            document.getElementById('statAvgProcessing').textContent = avgProcessingTime ? formatTime(avgProcessingTime) : '-';
+            document.getElementById('statAvgQueue').textContent = avgQueueTime ? formatTime(avgQueueTime) : '-';
+        }
+
+        // Start monitoring
+        function startMonitoring() {
+            if (taskIds.length === 0) {
+                alert('กรุณาโหลด Tasks ก่อน');
+                return;
+            }
+
+            monitoring = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+
+            // Check auto-refresh
+            const autoRefresh = document.getElementById('autoRefresh').checked;
+            
+            if (autoRefresh) {
+                monitoringInterval = setInterval(async () => {
+                    if (monitoring) {
+                        await fetchAllTasks();
+                    }
+                }, 5000); // Refresh every 5 seconds
+            }
+        }
+
+        // Stop monitoring
+        function stopMonitoring() {
+            monitoring = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+
+            if (monitoringInterval) {
+                clearInterval(monitoringInterval);
+                monitoringInterval = null;
+            }
+        }
+
+        // Format time (seconds to readable format)
+        function formatTime(seconds) {
+            if (seconds === null || seconds === undefined) return '-';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            if (mins > 0) {
+                return `${mins} นาที ${secs} วินาที`;
+            }
+            return `${secs} วินาที`;
+        }
+
+        // Format datetime
+        function formatDateTime(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleString('th-TH', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        // Auto-start monitoring if task IDs are provided in URL
+        window.addEventListener('load', () => {
+            const params = new URLSearchParams(window.location.search);
+            const taskIdsParam = params.get('task_ids');
+            if (taskIdsParam) {
+                document.getElementById('taskIdsInput').value = taskIdsParam;
+                loadTasks().then(() => {
+                    if (document.getElementById('autoRefresh').checked) {
+                        startMonitoring();
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+

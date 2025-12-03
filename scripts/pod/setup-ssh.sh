@@ -35,23 +35,28 @@ backup_config() {
   fi
 }
 
-write_authorized_keys() {
-  info "ตั้งค่า ${AUTHORIZED_KEYS}"
-  install -d -m 700 -o root -g root "${SSH_HOME}/.ssh"
-  # เขียนคีย์ (ทับเสมอให้ชัดเจน)
-  cat > "${AUTHORIZED_KEYS}" <<'EOF'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICsF/zoSGze7Ty995PGsVQRK65N4c3ZtW0b1pWz+F+F+tu goataog@gmail.com
-EOF
-  # หาก KEY_CONTENT ด้านบนเป็นแหล่งจริง ให้ใช้บล็อกนี้แทน (ป้องกันพิมพ์ผิดใน heredoc):
-  # printf '%s\n' "${KEY_CONTENT}" > "${AUTHORIZED_KEYS}"
+write_authorized_keys(){
+  info "ตรวจและเพิ่มคีย์เข้า ${AUTHORIZED_KEYS}"
 
+  install -d -m 700 -o root -g root "${SSH_HOME}/.ssh"
+
+  # ถ้าไฟล์ยังไม่มีให้สร้างว่าง
+  touch "${AUTHORIZED_KEYS}"
   chown root:root "${AUTHORIZED_KEYS}"
   chmod 600 "${AUTHORIZED_KEYS}"
 
-  # เผื่อกรณีสิทธิ์ที่โฟลเดอร์บ้านถูกแก้ไขไป
-  chown root:root "${SSH_HOME}" "${SSH_HOME}/.ssh"
-  chmod 700 "${SSH_HOME}" "${SSH_HOME}/.ssh"
+  # ลบ \r เผื่อ key มี CRLF
+  sed -i 's/\r$//' "${AUTHORIZED_KEYS}"
+
+  # ตรวจว่ามี key นี้อยู่หรือยัง
+  if grep -Fxq "${KEY_CONTENT}" "${AUTHORIZED_KEYS}"; then
+      info "คีย์นี้มีอยู่แล้ว → ข้าม"
+  else
+      echo "${KEY_CONTENT}" >> "${AUTHORIZED_KEYS}"
+      info "เพิ่มคีย์ใหม่เรียบร้อย"
+  fi
 }
+
 
 update_sshd_config() {
   info "ทำความสะอาด directive ที่ซ้ำซ้อนใน ${SSHD_CONFIG}"
