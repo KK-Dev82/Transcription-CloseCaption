@@ -98,9 +98,27 @@ if [ -f ".env.runpod" ]; then
     echo ""
 fi
 
-# Check if dependencies are installed
+# Setup Python user base for persistent storage (สำคัญ! ต้องทำก่อน check dependencies)
+# Detect Python version dynamically
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.10")
+PYTHON_SITE_PACKAGES="/workspace/.local/lib/python${PYTHON_VERSION}/site-packages"
+
+export PYTHONUSERBASE="/workspace/.local"
+export PATH="/workspace/.local/bin:$PATH"
+export PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH"
+
+# Create persistent directory if not exists
+mkdir -p "$PYTHON_SITE_PACKAGES"
+mkdir -p "/workspace/.local/bin"
+
+# Check if dependencies are installed (ใช้ PYTHONPATH ที่ถูกต้อง)
 echo "🔍 Checking dependencies..."
-if ! python3 -c "import uvicorn" 2>/dev/null; then
+echo "   Python version: ${PYTHON_VERSION}"
+echo "   Installation path: ${PYTHON_SITE_PACKAGES}"
+if ! env PYTHONUSERBASE="/workspace/.local" \
+        PATH="/workspace/.local/bin:$PATH" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import uvicorn" 2>/dev/null; then
     echo "❌ Error: uvicorn is not installed"
     echo ""
     echo "💡 Installing dependencies..."
@@ -138,15 +156,12 @@ echo ""
 
 # Start with nohup - redirect all output to log file
 # Set timezone environment variables for pythainlp
-# เพิ่ม PYTHONPATH และ PATH สำหรับ packages ใน /workspace/.local
-export PYTHONUSERBASE="/workspace/.local"
-export PATH="/workspace/.local/bin:$PATH"
-export PYTHONPATH="/workspace/.local/lib/python3.10/site-packages:$PYTHONPATH"
+# PYTHONUSERBASE และ PATH ได้ถูก set แล้วข้างบน
 nohup env TZ="${TZ:-Asia/Bangkok}" \
          TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
          PYTHONUSERBASE="/workspace/.local" \
          PATH="/workspace/.local/bin:$PATH" \
-         PYTHONPATH="/workspace/.local/lib/python3.10/site-packages:$PYTHONPATH" \
+         PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
          python3 -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port 8010 \
