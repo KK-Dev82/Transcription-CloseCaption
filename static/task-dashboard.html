@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Dashboard - ดู Tasks ตามวันที่</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            padding: 20px 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .controls input[type="date"],
+        .controls select,
+        .controls button {
+            padding: 10px 15px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .controls input[type="date"] {
+            min-width: 200px;
+        }
+
+        .controls select {
+            min-width: 150px;
+        }
+
+        .controls button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .controls button:hover {
+            background: #5568d3;
+        }
+
+        .summary-dashboard {
+            padding: 30px;
+            background: #e3f2fd;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .summary-card h3 {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+
+        .summary-card .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .summary-card.all .number { color: #2196F3; }
+        .summary-card.completed .number { color: #4CAF50; }
+        .summary-card.processing .number { color: #FF9800; }
+        .summary-card.waiting .number { color: #9E9E9E; }
+        .summary-card.failed .number { color: #F44336; }
+
+        .table-container {
+            padding: 30px;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        th {
+            background: #f5f5f5;
+            font-weight: bold;
+            color: #333;
+            position: sticky;
+            top: 0;
+        }
+
+        tr:hover {
+            background: #f9f9f9;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+
+        .status-completed { background: #4CAF50; color: white; }
+        .status-processing { background: #FF9800; color: white; }
+        .status-pending { background: #9E9E9E; color: white; }
+        .status-failed { background: #F44336; color: white; }
+        .status-queued { background: #2196F3; color: white; }
+
+        .progress-bar {
+            width: 100px;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            transition: width 0.3s;
+        }
+
+        .btn-view {
+            padding: 6px 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+
+        .btn-view:hover {
+            background: #5568d3;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+        }
+
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .close {
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #aaa;
+        }
+
+        .close:hover {
+            color: #000;
+        }
+
+        .transcription-text {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Task Dashboard</h1>
+            <p>ดู Tasks ตามวันที่</p>
+        </div>
+
+        <div class="controls">
+            <label>เลือกวันที่:</label>
+            <input type="date" id="datePicker" value="">
+            <select id="statusFilter">
+                <option value="">ทุกสถานะ</option>
+                <option value="completed">เสร็จสิ้น</option>
+                <option value="processing">กำลังประมวลผล</option>
+                <option value="pending">รอ</option>
+                <option value="failed">ล้มเหลว</option>
+            </select>
+            <button onclick="loadTasks()">โหลด Tasks</button>
+            <button onclick="loadToday()">วันนี้</button>
+            <button onclick="exportCSV()">📥 Export CSV</button>
+        </div>
+
+        <div class="summary-dashboard" id="summaryDashboard">
+            <div class="summary-card all">
+                <h3>All Tasks</h3>
+                <div class="number" id="summaryAll">-</div>
+            </div>
+            <div class="summary-card completed">
+                <h3>Completed</h3>
+                <div class="number" id="summaryCompleted">-</div>
+            </div>
+            <div class="summary-card processing">
+                <h3>Processing</h3>
+                <div class="number" id="summaryProcessing">-</div>
+            </div>
+            <div class="summary-card waiting">
+                <h3>Waiting</h3>
+                <div class="number" id="summaryWaiting">-</div>
+            </div>
+            <div class="summary-card failed">
+                <h3>Failed</h3>
+                <div class="number" id="summaryFailed">-</div>
+            </div>
+        </div>
+
+        <div class="table-container" id="tableContainer">
+            <div class="loading">กรุณาเลือกวันที่และกดปุ่ม "โหลด Tasks"</div>
+        </div>
+    </div>
+
+    <!-- Modal for Transcription Detail -->
+    <div id="transcriptionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>รายละเอียด Transcription</h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = window.location.origin;
+
+        // Load available dates on page load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/tasks/available-dates`);
+                const data = await response.json();
+                if (data.dates && data.dates.length > 0) {
+                    document.getElementById('datePicker').value = data.dates[0];
+                    await loadTasks();
+                } else {
+                    // Default to today
+                    const today = new Date().toISOString().split('T')[0];
+                    document.getElementById('datePicker').value = today;
+                }
+            } catch (error) {
+                console.error('Error loading available dates:', error);
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('datePicker').value = today;
+            }
+        });
+
+        async function loadTasks() {
+            const date = document.getElementById('datePicker').value;
+            const status = document.getElementById('statusFilter').value;
+            
+            if (!date) {
+                alert('กรุณาเลือกวันที่');
+                return;
+            }
+
+            const container = document.getElementById('tableContainer');
+            container.innerHTML = '<div class="loading">กำลังโหลดข้อมูล...</div>';
+
+            try {
+                // Load summary
+                await loadSummary(date);
+
+                // Load tasks
+                let url = `${API_BASE_URL}/api/tasks/by-date?date=${date}&limit=1000`;
+                if (status) {
+                    url += `&status=${status}`;
+                }
+
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.tasks && data.tasks.length > 0) {
+                    renderTable(data.tasks);
+                } else {
+                    container.innerHTML = '<div class="no-data">ไม่พบ Tasks สำหรับวันที่นี้</div>';
+                }
+            } catch (error) {
+                container.innerHTML = `<div class="error">เกิดข้อผิดพลาด: ${error.message}</div>`;
+                console.error('Error loading tasks:', error);
+            }
+        }
+
+        async function loadSummary(date) {
+            try {
+                const url = `${API_BASE_URL}/api/tasks/summary${date ? `?date=${date}` : ''}`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.summary) {
+                    document.getElementById('summaryAll').textContent = data.summary.all_tasks || 0;
+                    document.getElementById('summaryCompleted').textContent = data.summary.completed || 0;
+                    document.getElementById('summaryProcessing').textContent = data.summary.processing || 0;
+                    document.getElementById('summaryWaiting').textContent = data.summary.waiting || 0;
+                    document.getElementById('summaryFailed').textContent = data.summary.failed || 0;
+                }
+            } catch (error) {
+                console.error('Error loading summary:', error);
+            }
+        }
+
+        function renderTable(tasks) {
+            const container = document.getElementById('tableContainer');
+            let html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Task ID</th>
+                            <th>Video File</th>
+                            <th>Status</th>
+                            <th>Start Time</th>
+                            <th>End Time</th>
+                            <th>Time Used</th>
+                            <th>Progress</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            tasks.forEach((task, index) => {
+                const timeUsed = task.time_used ? formatTime(task.time_used) : '-';
+                const startTime = task.start_time ? formatDateTime(task.start_time) : '-';
+                const endTime = task.end_time ? formatDateTime(task.end_time) : '-';
+                const progress = task.progress || 0;
+
+                html += `
+                    <tr>
+                        <td>${index + 1}</td>
+                        <td><code style="font-size: 0.85em;">${task.task_id.substring(0, 8)}...</code></td>
+                        <td>${task.video_file || '-'}</td>
+                        <td><span class="status-badge status-${task.status}">${getStatusText(task.status)}</span></td>
+                        <td>${startTime}</td>
+                        <td>${endTime}</td>
+                        <td>${timeUsed}</td>
+                        <td>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${progress}%"></div>
+                            </div>
+                            <span style="margin-left: 10px;">${progress}%</span>
+                        </td>
+                        <td>
+                            ${task.status === 'completed' && task.full_text ? 
+                                `<button class="btn-view" onclick="viewTranscription('${task.task_id}', '${escapeHtml(task.video_file)}')">ดูคำแปล</button>` : 
+                                '-'
+                            }
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `
+                    </tbody>
+                </table>
+            `;
+
+            container.innerHTML = html;
+        }
+
+        function viewTranscription(taskId, videoFile) {
+            // Load full transcription data
+            fetch(`${API_BASE_URL}/transcribe/${taskId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const modal = document.getElementById('transcriptionModal');
+                    const modalBody = document.getElementById('modalBody');
+                    
+                    const fullText = data.full_text || data.transcription || 'ไม่มีข้อความ';
+                    
+                    modalBody.innerHTML = `
+                        <p><strong>Task ID:</strong> ${taskId}</p>
+                        <p><strong>Video File:</strong> ${videoFile}</p>
+                        <p><strong>Language:</strong> ${data.language || 'th'}</p>
+                        <p><strong>Duration:</strong> ${formatTime(data.total_duration || 0)}</p>
+                        <p><strong>Text Length:</strong> ${fullText.length} ตัวอักษร</p>
+                        <hr style="margin: 20px 0;">
+                        <h3>คำแปล:</h3>
+                        <div class="transcription-text">${escapeHtml(fullText)}</div>
+                        <button class="btn-view" style="margin-top: 15px;" onclick="copyText('${escapeHtml(fullText)}')">📋 คัดลอก</button>
+                    `;
+                    
+                    modal.style.display = 'block';
+                })
+                .catch(error => {
+                    alert('เกิดข้อผิดพลาดในการโหลดข้อมูล: ' + error.message);
+                });
+        }
+
+        function closeModal() {
+            document.getElementById('transcriptionModal').style.display = 'none';
+        }
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('คัดลอกแล้ว!');
+            });
+        }
+
+        function loadToday() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('datePicker').value = today;
+            loadTasks();
+        }
+
+        function exportCSV() {
+            const date = document.getElementById('datePicker').value;
+            const status = document.getElementById('statusFilter').value;
+            
+            if (!date) {
+                alert('กรุณาเลือกวันที่');
+                return;
+            }
+
+            let url = `${API_BASE_URL}/api/tasks/by-date?date=${date}&limit=1000`;
+            if (status) {
+                url += `&status=${status}`;
+            }
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.tasks || data.tasks.length === 0) {
+                        alert('ไม่มีข้อมูลให้ Export');
+                        return;
+                    }
+
+                    // Create CSV
+                    let csv = 'Task ID,Video File,Status,Start Time,End Time,Time Used (s),Progress,Text Length\n';
+                    data.tasks.forEach(task => {
+                        const timeUsed = task.time_used || '';
+                        const startTime = task.start_time || '';
+                        const endTime = task.end_time || '';
+                        csv += `"${task.task_id}","${task.video_file || ''}","${task.status}","${startTime}","${endTime}",${timeUsed},${task.progress || 0},${task.text_length || 0}\n`;
+                    });
+
+                    // Download
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    const url = URL.createObjectURL(blob);
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', `tasks_${date}.csv`);
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                })
+                .catch(error => {
+                    alert('เกิดข้อผิดพลาดในการ Export: ' + error.message);
+                });
+        }
+
+        function formatDateTime(isoString) {
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString('th-TH', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function formatTime(seconds) {
+            if (!seconds) return '-';
+            if (seconds < 60) return `${seconds.toFixed(1)}s`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`;
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = (seconds % 60).toFixed(0);
+            return `${hours}h ${minutes}m ${secs}s`;
+        }
+
+        function getStatusText(status) {
+            const statusMap = {
+                'completed': 'เสร็จสิ้น',
+                'processing': 'กำลังประมวลผล',
+                'transcribing': 'กำลังประมวลผล',
+                'pending': 'รอ',
+                'queued': 'รอ',
+                'failed': 'ล้มเหลว'
+            };
+            return statusMap[status] || status;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('transcriptionModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+    </script>
+</body>
+</html>
+

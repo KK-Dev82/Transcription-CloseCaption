@@ -249,9 +249,9 @@ class ConcurrencyTest:
                 if poll_result.get('queue_wait_time'):
                     self.metrics['queue_wait_times'].append(poll_result['queue_wait_time'])
                 
-                total_time = poll_result.get('total_time', 0)
-                processing_time = poll_result.get('processing_time', 0)
-                queue_wait = poll_result.get('queue_wait_time', 0)
+                total_time = poll_result.get('total_time', 0) or 0
+                processing_time = poll_result.get('processing_time', 0) or 0
+                queue_wait = poll_result.get('queue_wait_time', 0) or 0
                 
                 print(f"✅ Task {task_id}: Completed - Total: {total_time:.1f}s, Processing: {processing_time:.1f}s, Queue: {queue_wait:.1f}s")
             else:
