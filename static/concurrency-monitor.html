@@ -291,7 +291,7 @@
             margin-bottom: 20px;
         }
         
-        .overview-progress, .overview-timeline, .overview-workers, .overview-errors {
+        .overview-progress, .overview-timeline, .overview-workers, .overview-errors, .overview-task-ids {
             background: white;
             padding: 20px;
             border-radius: 10px;
@@ -299,10 +299,34 @@
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
         
-        .overview-progress h3, .overview-timeline h3, .overview-workers h3, .overview-errors h3 {
+        .overview-progress h3, .overview-timeline h3, .overview-workers h3, .overview-errors h3, .overview-task-ids h3 {
             color: #333;
             margin-bottom: 15px;
             font-size: 1.2em;
+        }
+        
+        .task-ids-container {
+            margin-top: 10px;
+        }
+        
+        .task-ids-display {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+        
+        .task-ids-text {
+            flex: 1;
+            padding: 10px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            max-height: 100px;
+            overflow-y: auto;
+            word-break: break-all;
+            color: #333;
         }
         
         .overall-progress-bar {
@@ -438,6 +462,308 @@
         .task-detail-section {
             margin-top: 20px;
         }
+        
+        /* Task List Table Styles */
+        .overview-task-list {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .overview-task-list h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .task-list-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        
+        .task-list-controls input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        .task-list-controls input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .copy-btn {
+            padding: 8px 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        
+        .copy-btn:hover {
+            background: #5568d3;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        
+        .task-list-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        
+        .task-list-table thead {
+            background: #667eea;
+            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .task-list-table th {
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        
+        .task-list-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .task-list-table tbody tr {
+            transition: background 0.2s;
+        }
+        
+        .task-list-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .task-list-table tbody tr.pending {
+            background: #fff3cd;
+        }
+        
+        .task-list-table tbody tr.processing {
+            background: #cfe2ff;
+        }
+        
+        .task-list-table tbody tr.completed {
+            background: #d1e7dd;
+        }
+        
+        .task-list-table tbody tr.failed {
+            background: #f8d7da;
+        }
+        
+        .task-id-cell {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .status-badge.pending {
+            background: #ffc107;
+            color: #000;
+        }
+        
+        .status-badge.processing {
+            background: #0d6efd;
+            color: white;
+        }
+        
+        .status-badge.transcribing {
+            background: #0d6efd;
+            color: white;
+        }
+        
+        .status-badge.completed {
+            background: #198754;
+            color: white;
+        }
+        
+        .status-badge.failed {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .status-badge.error {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .progress-cell {
+            min-width: 100px;
+        }
+        
+        .progress-mini {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-mini-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+        }
+        
+        .action-btn {
+            padding: 5px 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        
+        .action-btn:hover {
+            background: #5568d3;
+        }
+        
+        .action-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            overflow: auto;
+        }
+        
+        .modal-content {
+            background: white;
+            margin: 50px auto;
+            padding: 0;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            padding: 20px 30px;
+            border-bottom: 2px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px 10px 0 0;
+        }
+        
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+        
+        .modal-close {
+            font-size: 2em;
+            font-weight: bold;
+            cursor: pointer;
+            color: white;
+            line-height: 1;
+        }
+        
+        .modal-close:hover {
+            opacity: 0.7;
+        }
+        
+        .modal-body {
+            padding: 20px 30px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .modal-task-info {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .transcription-text-container {
+            margin: 20px 0;
+        }
+        
+        .transcription-text-container textarea {
+            width: 100%;
+            min-height: 400px;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            resize: vertical;
+        }
+        
+        .transcription-text-container textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        
+        .close-btn {
+            padding: 10px 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .close-btn:hover {
+            background: #5a6268;
+        }
     </style>
 </head>
 <body>
@@ -463,7 +789,7 @@
         <!-- Overview Section -->
         <div class="overview-section" id="overviewSection" style="display: none;">
             <div class="overview-header">
-                <h2>📊 Overview - ทั้ง 50 Tasks..</h2>
+                <h2>📊 Overview - ทั้ง <span id="overviewTotalTasks">50</span> Tasks</h2>
             </div>
             
             <!-- Overall Progress -->
@@ -532,10 +858,74 @@
                 </div>
             </div>
             
+            <!-- Task IDs Summary -->
+            <div class="overview-task-ids">
+                <h3>📝 Task IDs ทั้งหมด (<span id="taskIdsCount">0</span> ตัว)</h3>
+                <div class="task-ids-container">
+                    <div class="task-ids-display" id="taskIdsDisplay">
+                        <div class="task-ids-text" id="taskIdsText">ยังไม่มี Task IDs</div>
+                        <button onclick="copyAllTaskIds()" class="copy-btn">📋 คัดลอก Task IDs ทั้งหมด</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Task List Table -->
+            <div class="overview-task-list">
+                <h3>📋 รายการ Tasks ทั้งหมด</h3>
+                <div class="task-list-controls">
+                    <input type="text" id="taskListSearch" placeholder="ค้นหา Task ID..." onkeyup="filterTaskList()">
+                    <button onclick="exportTaskList()" class="copy-btn">📥 Export เป็น CSV</button>
+                </div>
+                <div class="table-container">
+                    <table class="task-list-table" id="taskListTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Task ID</th>
+                                <th>สถานะ</th>
+                                <th>Progress</th>
+                                <th>เริ่มต้น</th>
+                                <th>เสร็จสิ้น</th>
+                                <th>เวลารวม</th>
+                                <th>เวลาใช้</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="taskListTableBody">
+                            <tr>
+                                <td colspan="9" style="text-align: center; padding: 20px; color: #666;">
+                                    กำลังโหลดข้อมูล...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
             <!-- Error Summary -->
             <div class="overview-errors" id="overviewErrorsSection" style="display: none;">
                 <h3>❌ สรุป Errors</h3>
                 <div class="error-summary" id="errorSummary"></div>
+            </div>
+        </div>
+        
+        <!-- Modal for viewing transcription text -->
+        <div id="transcriptionModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>📝 ข้อความที่แปลงได้</h2>
+                    <span class="modal-close" onclick="closeTranscriptionModal()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div class="modal-task-info" id="modalTaskInfo"></div>
+                    <div class="transcription-text-container">
+                        <textarea id="modalTranscriptionText" readonly></textarea>
+                    </div>
+                    <div class="modal-actions">
+                        <button onclick="copyTranscriptionText()" class="copy-btn">📋 คัดลอกข้อความ</button>
+                        <button onclick="closeTranscriptionModal()" class="close-btn">ปิด</button>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -759,6 +1149,7 @@
             // Update overview stats
             document.getElementById('overviewCompleted').textContent = completed;
             document.getElementById('overviewTotal').textContent = total;
+            document.getElementById('overviewTotalTasks').textContent = total;
             document.getElementById('overviewProcessing').textContent = processing;
             document.getElementById('overviewPending').textContent = pending;
             document.getElementById('overviewFailed').textContent = failed;
@@ -830,6 +1221,250 @@
             
             // Show overview section
             document.getElementById('overviewSection').style.display = 'block';
+            
+            // Update task list table
+            updateTaskListTable();
+            
+            // Update task IDs display
+            updateTaskIdsDisplay();
+        }
+        
+        // Update Task IDs Display
+        function updateTaskIdsDisplay() {
+            const taskIdsText = document.getElementById('taskIdsText');
+            const taskIdsCount = document.getElementById('taskIdsCount');
+            
+            if (taskIds.length === 0) {
+                taskIdsText.textContent = 'ยังไม่มี Task IDs';
+                if (taskIdsCount) taskIdsCount.textContent = '0';
+                return;
+            }
+            
+            if (taskIdsCount) taskIdsCount.textContent = taskIds.length;
+            
+            // Display task IDs (limit to first 100 characters if too long)
+            let displayText = taskIds.join(', ');
+            if (displayText.length > 500) {
+                displayText = displayText.substring(0, 500) + '... (มีทั้งหมด ' + taskIds.length + ' ตัว)';
+            }
+            taskIdsText.textContent = displayText;
+        }
+        
+        // Export Task List to CSV
+        function exportTaskList() {
+            if (taskIds.length === 0) {
+                alert('ไม่มี Tasks');
+                return;
+            }
+            
+            const headers = ['#', 'Task ID', 'Status', 'Progress', 'Started', 'Completed', 'Total Time', 'Time Used'];
+            const rows = [];
+            
+            taskIds.forEach((taskId, index) => {
+                const task = tasksData[taskId] || { task_id: taskId, status: 'unknown' };
+                const status = task.status || 'pending';
+                const progress = task.progress || 0;
+                
+                const createdAt = task.created_at ? new Date(task.created_at) : null;
+                const completedAt = task.completed_at ? new Date(task.completed_at) : null;
+                const timeUsed = task.time_used;
+                
+                let totalTime = null;
+                if (createdAt && completedAt) {
+                    totalTime = (completedAt - createdAt) / 1000;
+                }
+                
+                rows.push([
+                    index + 1,
+                    taskId,
+                    status,
+                    progress + '%',
+                    createdAt ? formatDateTime(task.created_at) : '-',
+                    completedAt ? formatDateTime(task.completed_at) : '-',
+                    totalTime !== null ? formatTime(totalTime) : '-',
+                    timeUsed !== null && timeUsed !== undefined ? formatTime(timeUsed) : '-'
+                ]);
+            });
+            
+            // Create CSV content
+            let csvContent = headers.join(',') + '\n';
+            rows.forEach(row => {
+                csvContent += row.map(cell => `"${cell}"`).join(',') + '\n';
+            });
+            
+            // Download CSV
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `task_list_${new Date().getTime()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // Update Task List Table
+        function updateTaskListTable() {
+            const tbody = document.getElementById('taskListTableBody');
+            if (!tbody) return;
+            
+            if (taskIds.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: #666;">ไม่มี Tasks</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = '';
+            
+            taskIds.forEach((taskId, index) => {
+                const task = tasksData[taskId] || { task_id: taskId, status: 'unknown' };
+                const status = task.status || 'pending';
+                const progress = task.progress || 0;
+                
+                // Calculate times
+                const createdAt = task.created_at ? new Date(task.created_at) : null;
+                const completedAt = task.completed_at ? new Date(task.completed_at) : null;
+                const timeUsed = task.time_used;
+                
+                let totalTime = null;
+                if (createdAt && completedAt) {
+                    totalTime = (completedAt - createdAt) / 1000;
+                }
+                
+                const row = document.createElement('tr');
+                row.className = status;
+                row.id = `task-row-${taskId}`;
+                
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td class="task-id-cell" title="${taskId}">${taskId}</td>
+                    <td>
+                        <span class="status-badge ${status}">${status}</span>
+                    </td>
+                    <td class="progress-cell">
+                        <div class="progress-mini">
+                            <div class="progress-mini-fill" style="width: ${progress}%"></div>
+                        </div>
+                        <span style="font-size: 0.8em; color: #666;">${progress}%</span>
+                    </td>
+                    <td>${createdAt ? formatDateTime(task.created_at) : '-'}</td>
+                    <td>${completedAt ? formatDateTime(task.completed_at) : '-'}</td>
+                    <td>${totalTime !== null ? formatTime(totalTime) : '-'}</td>
+                    <td>${timeUsed !== null && timeUsed !== undefined ? formatTime(timeUsed) : '-'}</td>
+                    <td>
+                        ${status === 'completed' ? 
+                            `<button class="action-btn" onclick="viewTranscriptionText('${taskId}')">ดูคำแปล</button>` : 
+                            '<span style="color: #999;">-</span>'
+                        }
+                    </td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Filter Task List
+        function filterTaskList() {
+            const searchInput = document.getElementById('taskListSearch');
+            const filter = searchInput.value.toUpperCase();
+            const table = document.getElementById('taskListTable');
+            const rows = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const taskIdCell = row.getElementsByTagName('td')[1];
+                if (taskIdCell) {
+                    const taskId = taskIdCell.textContent || taskIdCell.innerText;
+                    if (taskId.toUpperCase().indexOf(filter) > -1) {
+                        row.style.display = '';
+                    } else {
+                        row.style.display = 'none';
+                    }
+                }
+            }
+        }
+        
+        // Copy All Task IDs
+        function copyAllTaskIds() {
+            if (taskIds.length === 0) {
+                alert('ไม่มี Task IDs');
+                return;
+            }
+            
+            const taskIdsText = taskIds.join(',');
+            navigator.clipboard.writeText(taskIdsText).then(() => {
+                alert(`✅ คัดลอก Task IDs ทั้งหมด ${taskIds.length} ตัวแล้ว!\n\n${taskIdsText.substring(0, 100)}...`);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                // Fallback: select text in a temporary textarea
+                const textarea = document.createElement('textarea');
+                textarea.value = taskIdsText;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert(`✅ คัดลอก Task IDs ทั้งหมด ${taskIds.length} ตัวแล้ว!`);
+            });
+        }
+        
+        // View Transcription Text
+        async function viewTranscriptionText(taskId) {
+            try {
+                const modal = document.getElementById('transcriptionModal');
+                const modalTaskInfo = document.getElementById('modalTaskInfo');
+                const modalText = document.getElementById('modalTranscriptionText');
+                
+                // Show loading
+                modalTaskInfo.innerHTML = `Task ID: ${taskId} - กำลังโหลด...`;
+                modalText.value = 'กำลังโหลด...';
+                modal.style.display = 'block';
+                
+                // Fetch transcription text
+                const response = await fetch(`${API_BASE_URL}/transcribe/${taskId}/text`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const task = tasksData[taskId] || {};
+                
+                // Update modal content
+                modalTaskInfo.innerHTML = `
+                    <strong>Task ID:</strong> ${taskId}<br>
+                    <strong>สถานะ:</strong> ${data.language || task.language || 'th'}<br>
+                    <strong>ระยะเวลา:</strong> ${data.total_duration ? formatTime(data.total_duration) : '-'}<br>
+                    <strong>ความยาวข้อความ:</strong> ${data.full_text ? data.full_text.length : 0} ตัวอักษร
+                `;
+                
+                modalText.value = data.full_text || 'ไม่พบข้อความ';
+                modalText.dataset.taskId = taskId;
+                
+            } catch (error) {
+                console.error('Error fetching transcription text:', error);
+                document.getElementById('modalTaskInfo').innerHTML = `Task ID: ${taskId} - เกิดข้อผิดพลาด`;
+                document.getElementById('modalTranscriptionText').value = `เกิดข้อผิดพลาด: ${error.message}`;
+            }
+        }
+        
+        // Close Transcription Modal
+        function closeTranscriptionModal() {
+            document.getElementById('transcriptionModal').style.display = 'none';
+        }
+        
+        // Copy Transcription Text
+        function copyTranscriptionText() {
+            const textarea = document.getElementById('modalTranscriptionText');
+            textarea.select();
+            document.execCommand('copy');
+            alert('✅ คัดลอกข้อความเรียบร้อยแล้ว!');
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('transcriptionModal');
+            if (event.target === modal) {
+                closeTranscriptionModal();
+            }
         }
         
         // Toggle task details view
