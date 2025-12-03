@@ -32,6 +32,40 @@ if [ ! -f "requirements.txt" ]; then
     exit 1
 fi
 
+# Install system dependencies (FFmpeg, etc.)
+echo "🔧 Installing system dependencies..."
+if command -v apt-get > /dev/null 2>&1; then
+    # Check if ffmpeg is already installed
+    if ! command -v ffmpeg > /dev/null 2>&1; then
+        echo "📦 Installing FFmpeg..."
+        apt-get update -qq > /dev/null 2>&1
+        apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
+            echo "⚠️  Failed to install FFmpeg via apt-get"
+            echo "   You may need to install it manually"
+        }
+        
+        if command -v ffmpeg > /dev/null 2>&1; then
+            echo "✅ FFmpeg installed successfully"
+        else
+            echo "❌ FFmpeg installation failed"
+        fi
+    else
+        FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}')
+        echo "✅ FFmpeg already installed (version: $FFMPEG_VERSION)"
+    fi
+    
+    # Check if ffprobe is available (usually comes with ffmpeg)
+    if ! command -v ffprobe > /dev/null 2>&1; then
+        echo "⚠️  ffprobe not found (usually comes with ffmpeg)"
+    else
+        echo "✅ ffprobe is available"
+    fi
+else
+    echo "⚠️  apt-get not found, skipping system dependencies installation"
+    echo "   Please install FFmpeg manually if needed"
+fi
+echo ""
+
 echo "📋 Installing from requirements.txt..."
 echo "   This may take several minutes..."
 echo ""

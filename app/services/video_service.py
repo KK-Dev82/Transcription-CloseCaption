@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, Future
 import ffmpeg
 import json
 import os
@@ -24,6 +25,11 @@ class VideoService:
         self.whisper_service = WhisperService()
         self.tasks: Dict[str, Dict] = {}
         self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
+        
+        # Thread Pool สำหรับ Audio Extraction (จำกัด concurrent extractions)
+        max_workers = int(os.getenv('AUDIO_EXTRACTION_MAX_WORKERS', '3'))
+        self.extraction_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="audio-extraction")
+        logger.info(f"✅ Initialized Audio Extraction Thread Pool: max_workers={max_workers}")
     
     async def trim_video(self, input_file: str, start_time: float, end_time: float,
                         output_format: str = "mp4", quality: str = "medium") -> str:
@@ -598,13 +604,65 @@ class VideoService:
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการบันทึกผลลัพธ์: {str(e)}")
 
-    def extract_audio(self, video_path: str, output_path: str = None) -> str:
+    def extract_audio(self, video_path: str, output_path: str = None, task_id: str = None) -> str:
         """
         Extract audio ทั้งไฟล์จาก video (ไม่ chunk)
+        ใช้ Thread Pool เพื่อจำกัด concurrent extractions
         
         Args:
             video_path: Path ไปยังไฟล์ video
             output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
+            task_id: Task ID สำหรับการบันทึก metrics (optional)
+            
+        Returns:
+            Path ไปยังไฟล์ audio ที่ extract แล้ว
+        """
+        # บันทึกเวลาต้นเริ่มสำหรับการวิเคราะห์ผล
+        extraction_start_time = time.time()
+        
+        logger.info(f"🎬 [Audio Extraction] เริ่ม extract audio จาก video: {video_path}")
+        if task_id:
+            logger.info(f"   Task ID: {task_id}")
+        
+        # Submit to thread pool (จำกัด concurrent extractions)
+        future = self.extraction_executor.submit(
+            self._extract_audio_sync, video_path, output_path, task_id
+        )
+        
+        # รอให้เสร็จสิ้น
+        try:
+            audio_path = future.result()
+            
+            # บันทึกเวลาที่ใช้ในการ extract
+            extraction_time = time.time() - extraction_start_time
+            logger.info(f"✅ [Audio Extraction] Extract audio สำเร็จ: {audio_path}")
+            logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+            
+            # บันทึก metrics สำหรับการวิเคราะห์ผล (ถ้ามี task_id)
+            if task_id:
+                self._record_extraction_metrics(task_id, video_path, audio_path, extraction_time, success=True)
+            
+            return audio_path
+            
+        except Exception as e:
+            extraction_time = time.time() - extraction_start_time
+            logger.error(f"❌ [Audio Extraction] Error extracting audio: {e}")
+            logger.error(f"   ⏱️  ใช้เวลา (ก่อนเกิด error): {extraction_time:.2f} วินาที")
+            
+            # บันทึก metrics สำหรับการวิเคราะห์ผล (ถ้ามี task_id)
+            if task_id:
+                self._record_extraction_metrics(task_id, video_path, None, extraction_time, success=False, error=str(e))
+            
+            raise
+    
+    def _extract_audio_sync(self, video_path: str, output_path: str = None, task_id: str = None) -> str:
+        """
+        Extract audio แบบ synchronous (ทำงานใน thread pool)
+        
+        Args:
+            video_path: Path ไปยังไฟล์ video
+            output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
+            task_id: Task ID สำหรับ logging (optional)
             
         Returns:
             Path ไปยังไฟล์ audio ที่ extract แล้ว
@@ -622,7 +680,7 @@ class VideoService:
             output_path_obj = Path(output_path)
             output_path_obj.parent.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"🎬 กำลัง extract audio จาก video: {video_path}")
+        logger.info(f"   [Audio Extraction Thread] กำลัง extract audio: {video_path}")
         logger.info(f"   Output: {output_path}")
         
         try:
@@ -640,16 +698,59 @@ class VideoService:
                 .run(quiet=True)
             )
             
-            logger.info(f"✅ Extract audio สำเร็จ: {output_path}")
+            logger.info(f"   [Audio Extraction Thread] Extract audio สำเร็จ: {output_path}")
             return output_path
             
         except ffmpeg.Error as e:
             error_message = e.stderr.decode() if e.stderr else str(e)
-            logger.error(f"❌ FFmpeg error: {error_message}")
+            logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error: {error_message}")
             raise Exception(f"ไม่สามารถ extract audio ได้: {error_message}")
         except Exception as e:
-            logger.error(f"❌ Error extracting audio: {e}")
+            logger.error(f"   [Audio Extraction Thread] ❌ Error extracting audio: {e}")
             raise
+    
+    def _record_extraction_metrics(self, task_id: str, video_path: str, audio_path: Optional[str], 
+                                   extraction_time: float, success: bool, error: str = None):
+        """
+        บันทึก metrics สำหรับการวิเคราะห์ผล Audio Extraction แยกจาก Transcription
+        
+        Args:
+            task_id: Task ID
+            video_path: Path ของไฟล์ video
+            audio_path: Path ของไฟล์ audio ที่ extract แล้ว (None ถ้าไม่สำเร็จ)
+            extraction_time: เวลาที่ใช้ในการ extract (วินาที)
+            success: True ถ้าสำเร็จ, False ถ้าไม่สำเร็จ
+            error: ข้อความ error (ถ้ามี)
+        """
+        try:
+            metrics_dir = Path("storage/metrics")
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            
+            metrics_file = metrics_dir / f"audio_extraction_{task_id}.json"
+            
+            video_size = Path(video_path).stat().st_size if Path(video_path).exists() else None
+            audio_size = Path(audio_path).stat().st_size if audio_path and Path(audio_path).exists() else None
+            
+            metrics = {
+                "task_id": task_id,
+                "type": "audio_extraction",
+                "video_path": video_path,
+                "video_size_bytes": video_size,
+                "audio_path": audio_path,
+                "audio_size_bytes": audio_size,
+                "extraction_time_seconds": extraction_time,
+                "success": success,
+                "error": error,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(metrics_file, 'w', encoding='utf-8') as f:
+                json.dump(metrics, f, indent=2, ensure_ascii=False)
+            
+            logger.debug(f"📊 [Audio Extraction Metrics] บันทึก metrics: {metrics_file}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  ไม่สามารถบันทึก extraction metrics ได้: {e}")
     
     def extract_audio_from_video(self, video_path: str, output_path: str = None, 
                                 audio_format: str = "wav", sample_rate: int = 16000) -> str:

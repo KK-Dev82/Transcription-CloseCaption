@@ -346,8 +346,9 @@ class TranscriptionService:
                 if is_video:
                     logger.info("🎬 ไฟล์เป็น video - กำลัง extract audio...")
                     try:
-                        # Extract audio ทั้งไฟล์ (ไม่ chunk)
-                        audio_path = self.video_service.extract_audio(local_file_path)
+                        # Extract audio ทั้งไฟล์ (ไม่ chunk) - ใช้ Thread Pool
+                        # ส่ง task_id เพื่อบันทึก metrics แยกจาก transcription
+                        audio_path = self.video_service.extract_audio(local_file_path, task_id=task_id)
                         logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
                     except Exception as e:
                         logger.error(f"❌ ไม่สามารถ extract audio ได้: {e}", exc_info=True)
@@ -355,7 +356,7 @@ class TranscriptionService:
                 elif not is_audio:
                     logger.warning("⚠️ ไม่ทราบประเภทไฟล์ - ลองใช้ extract_audio()")
                     try:
-                        audio_path = self.video_service.extract_audio(local_file_path)
+                        audio_path = self.video_service.extract_audio(local_file_path, task_id=task_id)
                         logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
                     except Exception as e:
                         logger.warning(f"⚠️ extract_audio() ล้มเหลว: {e}")
@@ -363,24 +364,27 @@ class TranscriptionService:
                         audio_path = local_file_path
                 
                 # Transcribe ทั้งไฟล์เลย
-                logger.info("🎯 เริ่ม transcription ทั้งไฟล์ (ไม่ chunk)...")
+                logger.info("🎯 [Transcription] เริ่ม transcription ทั้งไฟล์ (ไม่ chunk)...")
                 task.status = "transcribing"
                 task.progress = 20
                 self.json_storage.save_transcription(task_id, task.__dict__)
                 
+                # บันทึกเวลาต้นเริ่มสำหรับ transcription (แยกจาก audio extraction)
+                transcription_start_time = time.time()
+                
                 try:
                     # เรียกใช้ whisper service โดยตรง (ไม่ผ่าน queue)
                     # ⚠️ transcribe_file ไม่ใช่ async function แต่ใช้ asyncio.run() ภายใน
-                    logger.info(f"🔍 Calling whisper_service.transcribe_file()...")
+                    logger.info(f"🔍 [Transcription] Calling whisper_service.transcribe_file()...")
                     try:
                         result = self.whisper_service.transcribe_file(
                             audio_path,
                             language=language,
                             model_size=model_size
                         )
-                        logger.info(f"✅ whisper_service.transcribe_file() returned, result type: {type(result)}")
+                        logger.info(f"✅ [Transcription] whisper_service.transcribe_file() returned, result type: {type(result)}")
                     except Exception as transcribe_error:
-                        logger.error(f"❌ Error in transcribe_file(): {transcribe_error}", exc_info=True)
+                        logger.error(f"❌ [Transcription] Error in transcribe_file(): {transcribe_error}", exc_info=True)
                         raise
                     
                     # เก็บผลลัพธ์
@@ -388,6 +392,19 @@ class TranscriptionService:
                         task.full_text = result.get('text', '') if isinstance(result, dict) else result.text
                         task.language = result.get('language', language) if isinstance(result, dict) else result.language
                         task.chunks = result.get('segments', []) if isinstance(result, dict) else (result.segments if result.segments else [])
+                        
+                        # บันทึกเวลาที่ใช้ในการ transcription
+                        transcription_time = time.time() - transcription_start_time
+                        logger.info(f"✅ [Transcription] Transcription สำเร็จ")
+                        logger.info(f"   ⏱️  ใช้เวลา: {transcription_time:.2f} วินาที")
+                        
+                        # บันทึก metrics สำหรับการวิเคราะห์ผล Transcription แยกจาก Audio Extraction
+                        text_length = len(task.full_text) if task.full_text else 0
+                        chunks_count = len(task.chunks) if task.chunks else 0
+                        self._record_transcription_metrics(
+                            task_id, audio_path, transcription_time, 
+                            text_length, chunks_count, success=True
+                        )
                         task.status = "completed"
                         task.progress = 100
                         
@@ -395,7 +412,16 @@ class TranscriptionService:
                         chunks_count = len(task.chunks) if task.chunks else 0
                         logger.info(f"✅ Transcription สำเร็จ: text length={text_length}, segments={chunks_count}")
                     else:
-                        logger.error(f"❌ Transcription returned None or empty result")
+                        transcription_time = time.time() - transcription_start_time
+                        logger.error(f"❌ [Transcription] Transcription returned None or empty result")
+                        logger.error(f"   ⏱️  ใช้เวลา (ก่อนเกิด error): {transcription_time:.2f} วินาที")
+                        
+                        # บันทึก metrics สำหรับการวิเคราะห์ผล Transcription (empty result)
+                        self._record_transcription_metrics(
+                            task_id, audio_path, transcription_time, 
+                            0, 0, success=False, error="Transcription returned empty result"
+                        )
+                        
                         task.status = "failed"
                         task.error_message = "Transcription returned empty result"
                         task.progress = 0
@@ -416,7 +442,18 @@ class TranscriptionService:
                     return
                     
                 except Exception as e:
-                    logger.error(f"❌ Transcription failed: {e}", exc_info=True)
+                    # บันทึกเวลาที่ใช้ในการ transcription (แม้จะล้มเหลว)
+                    transcription_time = time.time() - transcription_start_time if 'transcription_start_time' in locals() else 0
+                    logger.error(f"❌ [Transcription] Transcription failed: {e}", exc_info=True)
+                    logger.error(f"   ⏱️  ใช้เวลา (ก่อนเกิด error): {transcription_time:.2f} วินาที")
+                    
+                    # บันทึก metrics สำหรับการวิเคราะห์ผล Transcription (failed)
+                    audio_path_var = audio_path if 'audio_path' in locals() else None
+                    self._record_transcription_metrics(
+                        task_id, audio_path_var, transcription_time, 
+                        0, 0, success=False, error=str(e)
+                    )
+                    
                     task.status = "failed"
                     task.error_message = str(e)
                     self.json_storage.save_transcription(task_id, task.__dict__)
@@ -1269,4 +1306,48 @@ class TranscriptionService:
                     logger.warning(f"⚠️ Backend callback failed: {response.status_code}")
                     
         except Exception as e:
-            logger.error(f"❌ Failed to send backend callback: {e}") 
+            logger.error(f"❌ Failed to send backend callback: {e}")
+    
+    def _record_transcription_metrics(self, task_id: str, audio_path: Optional[str], 
+                                     transcription_time: float, text_length: int, 
+                                     chunks_count: int, success: bool, error: str = None):
+        """
+        บันทึก metrics สำหรับการวิเคราะห์ผล Transcription แยกจาก Audio Extraction
+        
+        Args:
+            task_id: Task ID
+            audio_path: Path ของไฟล์ audio ที่ใช้ transcription
+            transcription_time: เวลาที่ใช้ในการ transcription (วินาที)
+            text_length: ความยาวของข้อความที่ได้ (ตัวอักษร)
+            chunks_count: จำนวน chunks/segments ที่ได้
+            success: True ถ้าสำเร็จ, False ถ้าไม่สำเร็จ
+            error: ข้อความ error (ถ้ามี)
+        """
+        try:
+            metrics_dir = Path("storage/metrics")
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            
+            metrics_file = metrics_dir / f"transcription_{task_id}.json"
+            
+            audio_size = Path(audio_path).stat().st_size if audio_path and Path(audio_path).exists() else None
+            
+            metrics = {
+                "task_id": task_id,
+                "type": "transcription",
+                "audio_path": audio_path,
+                "audio_size_bytes": audio_size,
+                "transcription_time_seconds": transcription_time,
+                "text_length": text_length,
+                "chunks_count": chunks_count,
+                "success": success,
+                "error": error,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(metrics_file, 'w', encoding='utf-8') as f:
+                json.dump(metrics, f, indent=2, ensure_ascii=False)
+            
+            logger.debug(f"📊 [Transcription Metrics] บันทึก metrics: {metrics_file}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  ไม่สามารถบันทึก transcription metrics ได้: {e}") 
