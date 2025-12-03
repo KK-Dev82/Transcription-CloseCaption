@@ -137,11 +137,13 @@ class VideoWorker:
                     routing_key='media.audio.chunk.extracted'
                 )
                 
-                # ตั้งค่า QoS - เพิ่ม prefetch_count เพื่อให้ workers รับงานได้หลายงานพร้อมกัน
-                # prefetch_count=10 หมายความว่าแต่ละ worker จะรับงานได้ 10 งานพร้อมกัน (chunks)
-                # ใช้ ThreadPoolExecutor (max_workers=10) เพื่อประมวลผล parallel
-                # RTX 4080 Super, 16GB VRAM → สามารถประมวลผลได้ 10 chunks พร้อมกัน
-                self.channel.basic_qos(prefetch_count=10)
+                # ตั้งค่า QoS สำหรับ transcription_queue (full video tasks)
+                # prefetch_count=1 หมายความว่าแต่ละ worker จะรับได้แค่ 1 task ต่อครั้ง
+                # Worker จะ process task ให้เสร็จก่อนถึงจะรับ task ใหม่
+                # ช่วยลด connection overload และความเสี่ยงเมื่อ worker crash
+                transcription_prefetch = int(os.getenv('TRANSCRIPTION_QUEUE_PREFETCH_COUNT', '1'))
+                self.channel.basic_qos(prefetch_count=transcription_prefetch)
+                logger.info(f"✅ Set QoS for transcription_queue: prefetch_count={transcription_prefetch}")
                 
                 logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
                 return True
@@ -165,14 +167,15 @@ class VideoWorker:
         """ตั้งค่า consumers สำหรับแต่ละ queue"""
         # ตั้งค่า QoS สำหรับ transcription_chunk_queue ก่อน consume
         # ⚠️ ต้องเรียก basic_qos ก่อน basic_consume สำหรับ queue นี้
-        # เพิ่ม prefetch_count เป็น 20 เพื่อให้ workers รับ chunks ได้มากขึ้น (ลด idle time)
-        # Model lock จะจัดการให้ transcription เป็น sequential แต่ workers จะไม่ idle รอ
-        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '3'))
-        # prefetch_count ควรสูงกว่า max_workers เพื่อให้ workers มีงานรออยู่เสมอ
-        # RTX 4080 Super 16GB → prefetch_count=20, max_workers=5-10 (ขึ้นอยู่กับ model size)
-        prefetch_count = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', '20'))
-        self.channel.basic_qos(prefetch_count=prefetch_count, prefetch_size=0, global_qos=False)
-        logger.info(f"✅ Set QoS: prefetch_count={prefetch_count} for transcription_chunk_queue (max_workers={max_workers})")
+        # prefetch_count ควรเท่ากับหรือสูงกว่า max_workers เล็กน้อย
+        # เพื่อให้ workers มีงานรออยู่เสมอ แต่ไม่รับงานมากเกินไป
+        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '5'))
+        # prefetch_count = max_workers เพื่อให้รับงานได้เท่ากับจำนวน workers ที่พร้อมทำงาน
+        # RTX 4080 Super 16GB → max_workers=5, prefetch_count=5-10 (ขึ้นอยู่กับ model size)
+        chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', str(max_workers)))
+        # ใช้ global_qos=False เพื่อให้ prefetch_count เป็นต่อ queue (ไม่ใช่ต่อ channel)
+        self.channel.basic_qos(prefetch_count=chunk_prefetch, prefetch_size=0, global_qos=False)
+        logger.info(f"✅ Set QoS: prefetch_count={chunk_prefetch} for transcription_chunk_queue (max_workers={max_workers})")
         
         # Trim video consumer
         self.channel.basic_consume(
