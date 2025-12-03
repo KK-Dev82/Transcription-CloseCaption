@@ -3,6 +3,10 @@
 #
 # วิธีใช้งาน:
 #   bash scripts/pod/check-service-status.sh
+#
+# Port Configuration:
+#   - Internal Port: 8010 (บน Pod)
+#   - External Port: 41462 (จากภายนอก, forward ไปที่ 8010)
 
 set -e
 
@@ -170,20 +174,37 @@ echo ""
 echo "7️⃣  External Access"
 echo "───────────────────"
 EXTERNAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || curl -s ifconfig.me 2>/dev/null || echo "80.15.7.37")
-EXTERNAL_URL="http://${EXTERNAL_IP}:8010"
+EXTERNAL_PORT="41462"  # External port (mapped to internal 8010)
+INTERNAL_PORT="8010"   # Internal port
+EXTERNAL_URL="http://${EXTERNAL_IP}:${EXTERNAL_PORT}"
+INTERNAL_URL="http://localhost:${INTERNAL_PORT}"
 
+echo "   Internal URL: $INTERNAL_URL/health"
+echo "   External URL: $EXTERNAL_URL/health"
+echo ""
+
+# Check internal access
+echo "   Checking internal access..."
+INTERNAL_RESPONSE=$(curl -s -m 5 "$INTERNAL_URL/health" 2>&1 || echo "ERROR")
+if echo "$INTERNAL_RESPONSE" | grep -q "healthy\|status"; then
+    echo -e "   ${GREEN}✅ Internal access OK${NC}"
+else
+    echo -e "   ${RED}❌ Internal access FAILED${NC}"
+fi
+
+# Check external access
+echo "   Checking external access..."
 EXTERNAL_RESPONSE=$(curl -s -m 5 "$EXTERNAL_URL/health" 2>&1 || echo "ERROR")
-EXTERNAL_CODE=$(echo "$EXTERNAL_RESPONSE" | tail -1)
 
 if echo "$EXTERNAL_RESPONSE" | grep -q "healthy\|status"; then
-    echo -e "${GREEN}✅ External access OK${NC}"
-    echo "   URL: $EXTERNAL_URL/health"
+    echo -e "   ${GREEN}✅ External access OK${NC}"
+    echo "   External port mapping: ${EXTERNAL_PORT} -> ${INTERNAL_PORT}"
 elif echo "$EXTERNAL_RESPONSE" | grep -q "ERROR\|Connection refused\|Network is unreachable"; then
-    echo -e "${YELLOW}⚠️  External access blocked${NC}"
-    echo "   This is normal if firewall blocks external access"
-    echo "   Backend should still be able to connect from internal network"
+    echo -e "   ${YELLOW}⚠️  External access blocked or port not exposed${NC}"
+    echo "   Port mapping: ${EXTERNAL_PORT} -> ${INTERNAL_PORT}"
+    echo "   💡 Check RunPod port mapping: ${EXTERNAL_PORT} should forward to ${INTERNAL_PORT}"
 else
-    echo -e "${YELLOW}⚠️  External access status unknown${NC}"
+    echo -e "   ${YELLOW}⚠️  External access status unknown${NC}"
 fi
 echo ""
 
