@@ -7,6 +7,7 @@
 1. **เวลารวมในการแปลงทั้งหมดทุก Task กี่นาที**
 2. **เวลาที่ใช้แปลงแต่ละ task เท่าไร**
 3. **เวลารอใน Queue** (ถ้ามี)
+4. **ดู Queue Process และสถิติแบบ Real-time** (ผ่าน HTML Monitor)
 
 ---
 
@@ -213,6 +214,78 @@ bash scripts/pod/check-service-status.sh
 - **เวลารวมแต่ละ Task**: ~5-12 นาที
 - **เวลาประมวลผลแต่ละ Task**: ~5 นาที
 - **เวลารอใน Queue**: 0-20 นาที
+
+---
+
+## 📊 HTML Monitor - ดู Queue Process และสถิติแบบ Real-time
+
+หลังจากรันสคริปต์ทดสอบเสร็จแล้ว จะได้:
+1. **JSON Report File** - ข้อมูลละเอียดทั้งหมด
+2. **HTML Monitor URL** - หน้า web สำหรับดู queue process แบบ real-time
+
+### วิธีเปิด HTML Monitor:
+
+#### Option 1: เปิดจาก URL ที่สคริปต์แสดงให้
+
+หลังจากรันสคริปต์เสร็จ จะเห็น URL แบบนี้:
+```
+🌐 เปิดหน้า Monitor ที่: static/concurrency-monitor.html?task_ids=xxx&json_file=report.json
+   หรือเข้าไปที่: http://80.15.7.37:8010/static/concurrency-monitor.html?task_ids=xxx&json_file=report.json
+```
+
+เปิด URL นี้ใน browser
+
+#### Option 2: เปิดหน้า Monitor แล้วโหลด JSON File
+
+1. เปิดหน้า Monitor:
+   ```
+   http://80.15.7.37:8010/static/concurrency-monitor.html
+   ```
+
+2. ใส่ JSON file path ที่สคริปต์สร้างไว้:
+   ```
+   concurrency_report_20241202_120000.json
+   ```
+
+3. กด "โหลด Tasks"
+
+4. กด "เริ่ม Monitor" เพื่อ auto-refresh ทุก 5 วินาที
+
+### ฟีเจอร์ HTML Monitor:
+
+✅ **Real-time Status** - ดูสถานะของแต่ละ task แบบ real-time
+✅ **Progress Tracking** - ดู progress bar ของแต่ละ task
+✅ **สถิติแต่ละ Task**:
+   - ⏱️ เวลารวม (Total Time)
+   - ⚙️ เวลาประมวลผล (Processing Time)
+   - ⏳ เวลารอ Queue (Queue Wait Time)
+   - 🕐 เวลาเริ่มและเสร็จ
+✅ **สรุปสถิติรวม**:
+   - จำนวน tasks ทั้งหมด/เสร็จ/กำลังประมวลผล/รอ/ล้มเหลว
+   - เวลาเฉลี่ย (รวม/ประมวลผล/รอ queue)
+✅ **Auto Refresh** - รีเฟรชอัตโนมัติทุก 5 วินาที
+
+### ตัวอย่างหน้าจอ:
+
+```
+📊 50 Concurrency Monitor
+========================================
+
+[โหลด Tasks] [เริ่ม Monitor] [หยุด Monitor] [✓ Auto Refresh]
+
+สรุปสถิติ:
+[ทั้งหมด: 50] [เสร็จสิ้น: 45] [กำลังประมวลผล: 3] [รอ: 2] [ล้มเหลว: 0]
+[เวลารวมเฉลี่ย: 7.5 นาที] [เวลาประมวลผลเฉลี่ย: 5.2 นาที] [เวลารอ Queue เฉลี่ย: 2.3 นาที]
+
+Task Cards:
+[Task: abc12345... | completed | ████████████████ 100%]
+  ⏱️ เวลารวม: 5 นาที 30 วินาที
+  ⚙️ ประมวลผล: 5 นาที 19 วินาที
+  ⏳ รอ Queue: 11 วินาที
+  🕐 เริ่ม: 02/12/2024 20:05:04
+  ✅ เสร็จ: 02/12/2024 20:10:34
+...
+```
 
 ---
 

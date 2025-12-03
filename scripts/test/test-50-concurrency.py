@@ -389,6 +389,18 @@ class ConcurrencyTest:
         
         # Save to file
         if output_file:
+            # Extract task IDs from results
+            task_ids = []
+            for result in self.results:
+                task_id = None
+                if isinstance(result, dict):
+                    if result.get('request_result') and result['request_result'].get('api_task_id'):
+                        task_id = result['request_result']['api_task_id']
+                    elif result.get('poll_result') and result['poll_result'].get('api_task_id'):
+                        task_id = result['poll_result']['api_task_id']
+                if task_id:
+                    task_ids.append(task_id)
+            
             report_data = {
                 'test_summary': {
                     'num_concurrent': self.num_concurrent,
@@ -397,6 +409,7 @@ class ConcurrencyTest:
                     'success_rate': len(successful_results) / self.num_concurrent * 100 if self.num_concurrent > 0 else 0,
                     'total_test_time': total_test_time
                 },
+                'task_ids': task_ids,  # Add task IDs for HTML monitor
                 'metrics': {
                     'total_times': {
                         'mean': statistics.mean(self.metrics['total_times']) if self.metrics['total_times'] else None,
@@ -424,6 +437,12 @@ class ConcurrencyTest:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(report_data, f, indent=2, default=str, ensure_ascii=False)
             print(f"📄 รายงานบันทึกไว้ที่: {output_file}")
+            
+            # Create HTML monitor link
+            if task_ids:
+                monitor_url = f"static/concurrency-monitor.html?task_ids={','.join(task_ids)}&json_file={output_file}"
+                print(f"🌐 เปิดหน้า Monitor ที่: {monitor_url}")
+                print(f"   หรือเข้าไปที่: {self.api_url}/{monitor_url}")
 
 
 async def main():
