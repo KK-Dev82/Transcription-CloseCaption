@@ -87,16 +87,33 @@ if [ -f "/tmp/video-worker.log" ]; then
     echo ""
     
     # Check for "Channel is closed"
-    CHANNEL_CLOSED_COUNT=$(tail -100 /tmp/video-worker.log | grep -i "channel is closed" | wc -l | tr -d ' ' || echo "0")
+    CHANNEL_CLOSED_COUNT=$(tail -500 /tmp/video-worker.log | grep -i "channel is closed" | wc -l | tr -d ' ' || echo "0")
     if [ "$CHANNEL_CLOSED_COUNT" -gt 0 ]; then
-        print_warning "พบ 'Channel is closed' $CHANNEL_CLOSED_COUNT ครั้ง"
+        print_warning "พบ 'Channel is closed' $CHANNEL_CLOSED_COUNT ครั้ง (ใน 500 บรรทัดล่าสุด)"
     fi
     
-    # Check last activity
+    # Check for processing activity
+    PROCESSING_COUNT=$(tail -500 /tmp/video-worker.log | grep -iE "processing.*task|received.*message|starting.*transcription|extract.*audio|Task ID:" | wc -l | tr -d ' ' || echo "0")
+    print_status "พบ processing activity: $PROCESSING_COUNT ครั้ง (ใน 500 บรรทัดล่าสุด)"
+    
+    # Check last activity timestamp
     LAST_ACTIVITY=$(tail -5 /tmp/video-worker.log | tail -1 || echo "")
     if [ -n "$LAST_ACTIVITY" ]; then
         print_status "Last log entry:"
         echo "  $LAST_ACTIVITY"
+        
+        # Extract timestamp and check if it's recent
+        LAST_LOG_TIME=$(echo "$LAST_ACTIVITY" | grep -oE "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" || echo "")
+        if [ -n "$LAST_LOG_TIME" ]; then
+            NOW=$(date '+%Y-%m-%d %H:%M:%S')
+            # Simple check - if last log is older than 5 minutes, it's stale
+            print_status "Last log time: $LAST_LOG_TIME"
+            
+            # Check if worker is stuck (no activity in last 10 minutes)
+            if [ "$PROCESSING_COUNT" -eq 0 ]; then
+                print_warning "⚠️ ไม่พบ processing activity ล่าสุด - worker อาจหยุดทำงานหรือ stuck"
+            fi
+        fi
     fi
 else
     print_warning "ไม่พบ log file: /tmp/video-worker.log"
@@ -196,6 +213,39 @@ fi
 
 if [ "$ERROR_COUNT" -gt 0 ]; then
     print_warning "พบ errors ใน logs"
+    ISSUES_FOUND=$((ISSUES_FOUND + 1))
+fi
+
+# Check if worker is stuck (no processing activity)
+if [ "$PROCESSING_COUNT" -eq 0 ] && [ -n "$WORKER_PIDS" ]; then
+    print_warning "⚠️ Worker ทำงานอยู่แต่ไม่มีการ process messages - อาจ stuck หรือ connection หลุด"
+    ISSUES_FOUND=$((ISSUES_FOUND + 1))
+fi
+
+# Check queue messages vs consumer
+QUEUE_MESSAGES=$(python3 << 'PYEOF' 2>/dev/null || echo "0"
+import pika
+try:
+    credentials = pika.PlainCredentials('${RABBITMQ_USER}', '${RABBITMQ_PASSWORD}')
+    parameters = pika.ConnectionParameters(
+        host='${RABBITMQ_HOST}',
+        port=${RABBITMQ_PORT},
+        credentials=credentials,
+        connection_attempts=1,
+        retry_delay=1
+    )
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    method = channel.queue_declare(queue='transcription_queue', passive=True)
+    print(method.method.message_count)
+    connection.close()
+except:
+    print("0")
+PYEOF
+)
+
+if [ "$QUEUE_MESSAGES" -gt 0 ] && [ "$PROCESSING_COUNT" -eq 0 ] && [ -n "$WORKER_PIDS" ]; then
+    print_warning "⚠️ มี $QUEUE_MESSAGES messages รอในคิว แต่ worker ไม่ได้ process - ควร restart"
     ISSUES_FOUND=$((ISSUES_FOUND + 1))
 fi
 
