@@ -273,6 +273,171 @@
         .task-card.processing {
             animation: pulse 2s infinite;
         }
+        
+        /* Overview Section Styles */
+        .overview-section {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        .overview-header {
+            margin-bottom: 20px;
+        }
+        
+        .overview-header h2 {
+            color: #667eea;
+            font-size: 1.5em;
+            margin-bottom: 20px;
+        }
+        
+        .overview-progress, .overview-timeline, .overview-workers, .overview-errors {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .overview-progress h3, .overview-timeline h3, .overview-workers h3, .overview-errors h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .overall-progress-bar {
+            width: 100%;
+            height: 40px;
+            background: #e9ecef;
+            border-radius: 20px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            position: relative;
+        }
+        
+        .overall-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #198754 0%, #20c997 100%);
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+        
+        .overview-stats-row {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 0.95em;
+            color: #666;
+        }
+        
+        .timeline-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        
+        .timeline-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .timeline-label {
+            font-weight: bold;
+            color: #666;
+        }
+        
+        .timeline-value {
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .worker-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .worker-status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .worker-label {
+            font-weight: bold;
+            color: #666;
+        }
+        
+        .worker-value {
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .worker-value.active {
+            color: #198754;
+        }
+        
+        .worker-value.warning {
+            color: #ffc107;
+        }
+        
+        .worker-value.error {
+            color: #dc3545;
+        }
+        
+        .error-summary {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .error-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            border-radius: 5px;
+        }
+        
+        .error-item .error-task {
+            font-weight: bold;
+            color: #721c24;
+        }
+        
+        .error-item .error-message {
+            color: #721c24;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+        
+        .toggle-detail-btn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .toggle-detail-btn:hover {
+            background: #5568d3;
+        }
+        
+        .task-detail-section {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -295,6 +460,86 @@
             </div>
         </div>
 
+        <!-- Overview Section -->
+        <div class="overview-section" id="overviewSection" style="display: none;">
+            <div class="overview-header">
+                <h2>📊 Overview - ทั้ง 50 Tasks</h2>
+            </div>
+            
+            <!-- Overall Progress -->
+            <div class="overview-progress">
+                <h3>ความคืบหน้ารวม</h3>
+                <div class="overall-progress-bar">
+                    <div class="overall-progress-fill" id="overallProgressFill" style="width: 0%">
+                        <span id="overallProgressText">0%</span>
+                    </div>
+                </div>
+                <div class="overview-stats-row">
+                    <span>เสร็จแล้ว: <strong id="overviewCompleted">0</strong>/<strong id="overviewTotal">50</strong></span>
+                    <span>กำลังทำ: <strong id="overviewProcessing">0</strong></span>
+                    <span>รอ: <strong id="overviewPending">0</strong></span>
+                    <span>ล้มเหลว: <strong id="overviewFailed">0</strong></span>
+                </div>
+            </div>
+            
+            <!-- Timeline -->
+            <div class="overview-timeline">
+                <h3>Timeline</h3>
+                <div class="timeline-info">
+                    <div class="timeline-item">
+                        <span class="timeline-label">เริ่มต้น:</span>
+                        <span class="timeline-value" id="timelineStart">-</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">สิ้นสุด:</span>
+                        <span class="timeline-value" id="timelineEnd">-</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">ใช้เวลาทั้งหมด:</span>
+                        <span class="timeline-value" id="timelineTotal">-</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">เวลาที่เร็วที่สุด:</span>
+                        <span class="timeline-value" id="timelineMin">-</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">เวลาที่ช้าที่สุด:</span>
+                        <span class="timeline-value" id="timelineMax">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Worker Status -->
+            <div class="overview-workers">
+                <h3>สถานะ Workers</h3>
+                <div class="worker-status-grid" id="workerStatusGrid">
+                    <div class="worker-status-item">
+                        <span class="worker-label">Queue Messages:</span>
+                        <span class="worker-value" id="workerQueueMessages">-</span>
+                    </div>
+                    <div class="worker-status-item">
+                        <span class="worker-label">Active Consumers:</span>
+                        <span class="worker-value" id="workerConsumers">-</span>
+                    </div>
+                    <div class="worker-status-item">
+                        <span class="worker-label">Active Tasks:</span>
+                        <span class="worker-value" id="workerActiveTasks">-</span>
+                    </div>
+                    <div class="worker-status-item">
+                        <span class="worker-label">Queue Status:</span>
+                        <span class="worker-value" id="workerQueueStatus">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Error Summary -->
+            <div class="overview-errors" id="overviewErrorsSection" style="display: none;">
+                <h3>❌ สรุป Errors</h3>
+                <div class="error-summary" id="errorSummary"></div>
+            </div>
+        </div>
+        
+        <!-- Stats Summary -->
         <div class="stats-summary" id="statsSummary" style="display: none;">
             <div class="stat-card">
                 <h3>ทั้งหมด</h3>
@@ -333,6 +578,12 @@
         <div class="content" id="content">
             <div class="loading">กรุณาใส่ Task IDs หรือโหลด JSON report file</div>
         </div>
+        
+        <div style="padding: 20px 30px; text-align: center;">
+            <button class="toggle-detail-btn" onclick="toggleTaskDetails()" id="toggleDetailBtn">
+                แสดงรายละเอียดแต่ละ Task
+            </button>
+        </div>
     </div>
 
     <script>
@@ -341,6 +592,9 @@
         let monitoring = false;
         let monitoringInterval = null;
         let tasksData = {};
+        let showTaskDetails = false;
+        let testStartTime = null;
+        let testEndTime = null;
 
         // Load tasks from input or JSON file
         async function loadTasks() {
@@ -365,9 +619,22 @@
                         taskIds = jsonData.report.detailed_results
                             .map(r => r.request_result?.api_task_id || r.poll_result?.api_task_id)
                             .filter(id => id);
+                    } else if (jsonData.task_ids) {
+                        // Direct task_ids array
+                        taskIds = jsonData.task_ids.filter(id => id);
                     } else {
                         alert('ไม่พบ Task IDs ใน JSON file');
                         return;
+                    }
+                    
+                    // Load test start/end time from report if available
+                    if (jsonData.test_summary) {
+                        const totalTime = jsonData.test_summary.total_test_time;
+                        if (totalTime && !testStartTime) {
+                            // Estimate start time (assume test ended recently)
+                            testEndTime = Date.now();
+                            testStartTime = testEndTime - (totalTime * 1000);
+                        }
                     }
                 } else {
                     // Parse comma-separated task IDs
@@ -382,6 +649,9 @@
                 console.log(`Loaded ${taskIds.length} task IDs:`, taskIds);
                 document.getElementById('content').innerHTML = '<div class="loading">กำลังโหลดข้อมูล...</div>';
                 
+                // Show overview section
+                document.getElementById('overviewSection').style.display = 'block';
+                
                 // Initial load
                 await fetchAllTasks();
                 
@@ -395,8 +665,20 @@
         async function fetchAllTasks() {
             const promises = taskIds.map(taskId => fetchTaskStatus(taskId));
             await Promise.all(promises);
-            renderTasks();
+            
+            // Fetch worker status
+            await fetchWorkerStatus();
+            
+            // Update overview
+            updateOverview();
+            
+            // Update stats
             updateStats();
+            
+            // Render tasks (if detail view is shown)
+            if (showTaskDetails) {
+                renderTasks();
+            }
         }
 
         // Fetch status for a single task
@@ -418,6 +700,153 @@
             }
         }
 
+        // Fetch worker status
+        async function fetchWorkerStatus() {
+            try {
+                // Fetch queue stats
+                const queueResponse = await fetch(`${API_BASE_URL}/queue/stats`);
+                if (queueResponse.ok) {
+                    const queueData = await queueResponse.json();
+                    if (queueData.stats) {
+                        const stats = queueData.stats;
+                        document.getElementById('workerQueueMessages').textContent = stats.total_messages || 0;
+                        document.getElementById('workerConsumers').textContent = stats.total_consumers || 0;
+                        
+                        // Check transcription_queue specifically
+                        const transcriptionQueue = stats.queue_details?.['transcription_queue'];
+                        if (transcriptionQueue) {
+                            document.getElementById('workerQueueMessages').textContent = transcriptionQueue.message_count || 0;
+                            document.getElementById('workerConsumers').textContent = transcriptionQueue.consumer_count || 0;
+                            
+                            const queueStatus = transcriptionQueue.message_count > 0 ? 'active' : 'idle';
+                            const statusEl = document.getElementById('workerQueueStatus');
+                            statusEl.textContent = queueStatus;
+                            statusEl.className = 'worker-value ' + (queueStatus === 'active' ? 'active' : 'warning');
+                        }
+                    }
+                }
+                
+                // Fetch active tasks
+                const activeResponse = await fetch(`${API_BASE_URL}/api/active-tasks`);
+                if (activeResponse.ok) {
+                    const activeData = await activeResponse.json();
+                    if (activeData.count !== undefined) {
+                        document.getElementById('workerActiveTasks').textContent = activeData.count || 0;
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching worker status:', error);
+                document.getElementById('workerQueueMessages').textContent = 'Error';
+                document.getElementById('workerConsumers').textContent = 'Error';
+                document.getElementById('workerActiveTasks').textContent = 'Error';
+            }
+        }
+        
+        // Update Overview
+        function updateOverview() {
+            const tasks = Object.values(tasksData);
+            const total = taskIds.length;
+            const completed = tasks.filter(t => t.status === 'completed').length;
+            const processing = tasks.filter(t => t.status === 'processing' || t.status === 'transcribing' || t.status === 'queued').length;
+            const pending = tasks.filter(t => t.status === 'pending').length;
+            const failed = tasks.filter(t => t.status === 'failed' || t.status === 'error').length;
+            
+            // Calculate progress percentage
+            const progressPercent = total > 0 ? (completed / total) * 100 : 0;
+            document.getElementById('overallProgressFill').style.width = `${progressPercent}%`;
+            document.getElementById('overallProgressText').textContent = `${progressPercent.toFixed(1)}%`;
+            
+            // Update overview stats
+            document.getElementById('overviewCompleted').textContent = completed;
+            document.getElementById('overviewTotal').textContent = total;
+            document.getElementById('overviewProcessing').textContent = processing;
+            document.getElementById('overviewPending').textContent = pending;
+            document.getElementById('overviewFailed').textContent = failed;
+            
+            // Update timeline
+            const completedTasks = tasks.filter(t => t.status === 'completed' && t.created_at && t.completed_at);
+            const allTasksWithTime = tasks.filter(t => t.created_at);
+            
+            if (allTasksWithTime.length > 0) {
+                // Find earliest start time
+                const startTimes = allTasksWithTime
+                    .map(t => new Date(t.created_at).getTime())
+                    .filter(t => !isNaN(t));
+                
+                if (startTimes.length > 0) {
+                    testStartTime = Math.min(...startTimes);
+                    document.getElementById('timelineStart').textContent = formatDateTime(new Date(testStartTime).toISOString());
+                }
+                
+                // Find latest end time
+                const endTimes = completedTasks
+                    .map(t => new Date(t.completed_at).getTime())
+                    .filter(t => !isNaN(t));
+                
+                if (endTimes.length > 0) {
+                    testEndTime = Math.max(...endTimes);
+                    document.getElementById('timelineEnd').textContent = formatDateTime(new Date(testEndTime).toISOString());
+                    
+                    // Calculate total time
+                    const totalTime = (testEndTime - testStartTime) / 1000;
+                    document.getElementById('timelineTotal').textContent = formatTime(totalTime);
+                } else {
+                    document.getElementById('timelineEnd').textContent = 'ยังไม่เสร็จ';
+                    document.getElementById('timelineTotal').textContent = 'กำลังคำนวณ...';
+                }
+                
+                // Calculate min/max processing times
+                const processingTimes = completedTasks
+                    .map(t => t.time_used)
+                    .filter(t => t !== null && t !== undefined && t > 0);
+                
+                if (processingTimes.length > 0) {
+                    const minTime = Math.min(...processingTimes);
+                    const maxTime = Math.max(...processingTimes);
+                    document.getElementById('timelineMin').textContent = formatTime(minTime);
+                    document.getElementById('timelineMax').textContent = formatTime(maxTime);
+                }
+            }
+            
+            // Update error summary
+            const failedTasks = tasks.filter(t => t.status === 'failed' || t.status === 'error' || t.error_message);
+            if (failedTasks.length > 0) {
+                document.getElementById('overviewErrorsSection').style.display = 'block';
+                const errorSummary = document.getElementById('errorSummary');
+                errorSummary.innerHTML = '';
+                
+                failedTasks.forEach(task => {
+                    const errorItem = document.createElement('div');
+                    errorItem.className = 'error-item';
+                    errorItem.innerHTML = `
+                        <div class="error-task">Task: ${(task.task_id || 'unknown').substring(0, 8)}...</div>
+                        <div class="error-message">${task.error_message || 'Unknown error'}</div>
+                    `;
+                    errorSummary.appendChild(errorItem);
+                });
+            } else {
+                document.getElementById('overviewErrorsSection').style.display = 'none';
+            }
+            
+            // Show overview section
+            document.getElementById('overviewSection').style.display = 'block';
+        }
+        
+        // Toggle task details view
+        function toggleTaskDetails() {
+            showTaskDetails = !showTaskDetails;
+            const btn = document.getElementById('toggleDetailBtn');
+            const content = document.getElementById('content');
+            
+            if (showTaskDetails) {
+                btn.textContent = 'ซ่อนรายละเอียดแต่ละ Task';
+                renderTasks();
+            } else {
+                btn.textContent = 'แสดงรายละเอียดแต่ละ Task';
+                content.innerHTML = '<div class="loading">กดปุ่ม "แสดงรายละเอียดแต่ละ Task" เพื่อดูรายละเอียด</div>';
+            }
+        }
+        
         // Render all tasks
         function renderTasks() {
             const content = document.getElementById('content');
