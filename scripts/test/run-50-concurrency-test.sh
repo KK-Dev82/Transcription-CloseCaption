@@ -1,12 +1,12 @@
 #!/bin/bash
-# Script สำหรับทดสอบ 50 Concurrency บน Pod
+# Script สำหรับทดสอบ 50 Concurrency (รันบน Server โดยตรง)
 #
 # วิธีใช้งาน:
 #   bash scripts/test/run-50-concurrency-test.sh <file_name> [options]
 #
 # ตัวอย่าง:
 #   bash scripts/test/run-50-concurrency-test.sh v10-1.mp4
-#   bash scripts/test/run-50-concurrency-test.sh test-video-10min.mp4 --api-url http://80.15.7.37:41462
+#   bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://localhost:8010 50 medium
 
 set -e
 
@@ -26,16 +26,21 @@ print_header() { echo -e "${CYAN}$1${NC}"; }
 
 # Default values
 FILE_NAME="${1}"
-API_URL="${2:-http://80.15.7.37:41462}"
+API_URL="${2:-http://localhost:8010}"
 NUM_CONCURRENT="${3:-50}"
 MODEL_SIZE="${4:-medium}"
 LANGUAGE="${5:-th}"
 POLL_INTERVAL="${6:-5}"
 
+# Get script directory and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_DIR"
+
 # Check arguments
 if [ -z "$FILE_NAME" ]; then
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  🔍 50 Concurrency Test Script                               ║"
+    echo "║  🔍 50 Concurrency Test Script (รันบน Server)               ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     echo "Usage:"
@@ -43,7 +48,7 @@ if [ -z "$FILE_NAME" ]; then
     echo ""
     echo "Arguments:"
     echo "  file_name        - ชื่อไฟล์ใน uploads/ (เช่น v10-1.mp4)"
-    echo "  api_url          - API URL (default: http://80.15.7.37:41462)"
+    echo "  api_url          - API URL (default: http://localhost:8010)"
     echo "  num_concurrent   - จำนวน concurrent requests (default: 50)"
     echo "  model_size       - ขนาดโมเดล (default: medium)"
     echo "  language         - ภาษา (default: th)"
@@ -54,23 +59,21 @@ if [ -z "$FILE_NAME" ]; then
     echo "  bash scripts/test/run-50-concurrency-test.sh v10-1.mp4"
     echo ""
     echo "  # Custom API URL"
-    echo "  bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://80.15.7.37:41462"
+    echo "  bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://localhost:8010"
     echo ""
     echo "  # Custom concurrent count"
-    echo "  bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://80.15.7.37:41462 30"
+    echo "  bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://localhost:8010 30"
     echo ""
     exit 1
 fi
 
 print_header "╔══════════════════════════════════════════════════════════════╗"
-print_header "║  🚀 50 Concurrency Test                                      ║"
+print_header "║  🚀 50 Concurrency Test (รันบน Server)                       ║"
 print_header "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
 # Configuration
 FILE_PATH="uploads/${FILE_NAME}"
-SSH_HOST="pytorch-pod"
-PROJECT_DIR="/workspace/transcription-service"
 TEST_SCRIPT="scripts/test/test-50-concurrency.py"
 
 print_status "Configuration:"
@@ -81,48 +84,30 @@ echo "  Concurrent Requests: $NUM_CONCURRENT"
 echo "  Model Size: $MODEL_SIZE"
 echo "  Language: $LANGUAGE"
 echo "  Poll Interval: ${POLL_INTERVAL}s"
+echo "  Project Directory: $PROJECT_DIR"
 echo ""
 
-# Step 1: ตรวจสอบ SSH connection
-print_status "Step 1: ตรวจสอบ SSH connection..."
-if ! ssh -o ConnectTimeout=5 "$SSH_HOST" "echo 'SSH OK'" > /dev/null 2>&1; then
-    print_error "❌ ไม่สามารถเชื่อมต่อ SSH ไปยัง $SSH_HOST ได้"
-    echo ""
-    echo "💡 ตรวจสอบ:"
-    echo "   1. SSH config: cat ~/.ssh/config | grep pytorch-pod"
-    echo "   2. SSH connection: ssh pytorch-pod"
-    exit 1
-fi
-print_success "✅ SSH connection OK"
-echo ""
-
-# Step 2: ตรวจสอบไฟล์บน Pod
-print_status "Step 2: ตรวจสอบไฟล์บน Pod..."
-FILE_EXISTS=$(ssh "$SSH_HOST" "cd $PROJECT_DIR && [ -f '$FILE_PATH' ] && echo 'yes' || echo 'no'")
-
-if [ "$FILE_EXISTS" != "yes" ]; then
+# Step 1: ตรวจสอบไฟล์
+print_status "Step 1: ตรวจสอบไฟล์..."
+if [ ! -f "$FILE_PATH" ]; then
     print_error "❌ ไฟล์ไม่พบ: $FILE_PATH"
     echo ""
-    echo "🔍 ตรวจสอบไฟล์ใน uploads directory:"
-    ssh "$SSH_HOST" "cd $PROJECT_DIR && ls -lh uploads/ | head -10" || echo "   (ไม่สามารถ list files ได้)"
+    echo "🔍 ไฟล์ใน uploads directory:"
+    ls -lh uploads/ 2>/dev/null | head -10 || echo "   (uploads directory ไม่มี หรือว่าง)"
     echo ""
-    echo "💡 วิธีแก้ไข:"
-    echo "   1. Upload ไฟล์ไปยัง Pod:"
-    echo "      scp $FILE_NAME $SSH_HOST:$PROJECT_DIR/uploads/"
-    echo ""
-    echo "   2. หรือตรวจสอบ path ที่ถูกต้อง:"
-    echo "      ssh $SSH_HOST 'cd $PROJECT_DIR && find . -name \"$FILE_NAME\" -type f'"
+    echo "💡 ตรวจสอบ path ที่ถูกต้อง:"
+    echo "   find . -name \"$FILE_NAME\" -type f"
     exit 1
 fi
 
 # ตรวจสอบขนาดไฟล์
-FILE_SIZE=$(ssh "$SSH_HOST" "cd $PROJECT_DIR && stat -f%z '$FILE_PATH' 2>/dev/null || stat -c%s '$FILE_PATH' 2>/dev/null || echo '0'")
+FILE_SIZE=$(stat -f%z "$FILE_PATH" 2>/dev/null || stat -c%s "$FILE_PATH" 2>/dev/null || echo "0")
 FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
 print_success "✅ ไฟล์พบ: $FILE_PATH (${FILE_SIZE_MB} MB)"
 echo ""
 
-# Step 3: ตรวจสอบ API health
-print_status "Step 3: ตรวจสอบ API health..."
+# Step 2: ตรวจสอบ API health
+print_status "Step 2: ตรวจสอบ API health..."
 HEALTH_RESPONSE=$(curl -s -f "${API_URL}/health" 2>&1 || echo "ERROR")
 if echo "$HEALTH_RESPONSE" | grep -q "healthy\|status"; then
     print_success "✅ API is healthy"
@@ -133,18 +118,16 @@ else
 fi
 echo ""
 
-# Step 4: ตรวจสอบ test script
-print_status "Step 4: ตรวจสอบ test script..."
-if ! ssh "$SSH_HOST" "cd $PROJECT_DIR && [ -f '$TEST_SCRIPT' ]" > /dev/null 2>&1; then
+# Step 3: ตรวจสอบ test script
+print_status "Step 3: ตรวจสอบ test script..."
+if [ ! -f "$TEST_SCRIPT" ]; then
     print_error "❌ Test script ไม่พบ: $TEST_SCRIPT"
-    echo ""
-    echo "💡 ตรวจสอบว่า code ถูก push และ pull บน Pod แล้ว"
     exit 1
 fi
 print_success "✅ Test script พบ"
 echo ""
 
-# Step 5: แสดงสรุปและยืนยัน
+# Step 4: แสดงสรุปและยืนยัน
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 print_header "📋 Test Summary"
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -167,22 +150,21 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 echo ""
 
-# Step 6: รันการทดสอบ
+# Step 5: รันการทดสอบ
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 print_status "🚀 เริ่มการทดสอบ..."
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# รัน test script บน Pod
-ssh "$SSH_HOST" "cd $PROJECT_DIR && \
-    python3 $TEST_SCRIPT \
-        --api-url $API_URL \
-        --file-path $FILE_PATH \
-        --file-name \"$FILE_NAME\" \
-        --num-concurrent $NUM_CONCURRENT \
-        --model-size $MODEL_SIZE \
-        --language $LANGUAGE \
-        --poll-interval $POLL_INTERVAL" || {
+# รัน test script โดยตรง
+python3 "$TEST_SCRIPT" \
+    --api-url "$API_URL" \
+    --file-path "$FILE_PATH" \
+    --file-name "$FILE_NAME" \
+    --num-concurrent "$NUM_CONCURRENT" \
+    --model-size "$MODEL_SIZE" \
+    --language "$LANGUAGE" \
+    --poll-interval "$POLL_INTERVAL" || {
     print_error "❌ การทดสอบล้มเหลว"
     exit 1
 }
@@ -193,9 +175,8 @@ print_success "✅ การทดสอบเสร็จสิ้น!"
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "💡 ตรวจสอบรายงานผล:"
-echo "   ssh $SSH_HOST 'cd $PROJECT_DIR && ls -lt concurrency_report_*.json | head -1'"
+echo "   ls -lt concurrency_report_*.json | head -1"
 echo ""
 echo "💡 ดู HTML Monitor:"
-echo "   ssh $SSH_HOST 'cd $PROJECT_DIR && cat static/concurrency-monitor.html'"
+echo "   cat static/concurrency-monitor.html"
 echo ""
-

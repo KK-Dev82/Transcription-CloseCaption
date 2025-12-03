@@ -54,23 +54,34 @@ pip install aiohttp python-dateutil
 
 ### Option 1: ใช้ Wrapper Script (แนะนำ) ⭐
 
-**วิธีที่ง่ายที่สุด** - Script จะตรวจสอบไฟล์และรันทดสอบให้อัตโนมัติ:
+**รันบน Server โดยตรง** - Script จะตรวจสอบไฟล์และรันทดสอบให้อัตโนมัติ:
 
 ```bash
-# จาก Local Machine
-bash scripts/test/run-50-concurrency-test.sh v10-1.mp4
+# SSH เข้า Pod
+ssh pytorch-pod
 
-# หรือระบุ options
-bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://80.15.7.37:41462 50 medium
+# ไปที่ project directory
+cd /workspace/transcription-service
+
+# รัน wrapper script
+bash scripts/test/run-50-concurrency-test.sh v10-1.mp4
 ```
 
-**ไฟล์ต้องอยู่ที่**: `/workspace/transcription-service/uploads/` บน Pod
+**หรือระบุ options:**
+```bash
+bash scripts/test/run-50-concurrency-test.sh \
+  v10-1.mp4 \
+  http://localhost:8010 \
+  50 \
+  medium
+```
+
+**ไฟล์ต้องอยู่ที่**: `/workspace/transcription-service/uploads/v10-1.mp4`
 
 **Script นี้จะ:**
-- ✅ ตรวจสอบ SSH connection
-- ✅ ตรวจสอบว่ามีไฟล์อยู่บน Pod หรือไม่
+- ✅ ตรวจสอบว่ามีไฟล์อยู่บน Server หรือไม่
 - ✅ ตรวจสอบ API health
-- ✅ รันการทดสอบบน Pod โดยอัตโนมัติ
+- ✅ รันการทดสอบบน Server โดยอัตโนมัติ
 
 ---
 
