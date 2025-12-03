@@ -52,18 +52,60 @@ pip install aiohttp python-dateutil
 
 ## 🚀 วิธีใช้งาน
 
-### Option 1: ใช้ file_path (ไฟล์ที่อยู่ใน Server)
+### Option 1: ใช้ Wrapper Script (แนะนำ) ⭐
+
+**วิธีที่ง่ายที่สุด** - Script จะตรวจสอบไฟล์และรันทดสอบให้อัตโนมัติ:
+
+```bash
+# จาก Local Machine
+bash scripts/test/run-50-concurrency-test.sh v10-1.mp4
+
+# หรือระบุ options
+bash scripts/test/run-50-concurrency-test.sh v10-1.mp4 http://80.15.7.37:41462 50 medium
+```
+
+**ไฟล์ต้องอยู่ที่**: `/workspace/transcription-service/uploads/` บน Pod
+
+**Script นี้จะ:**
+- ✅ ตรวจสอบ SSH connection
+- ✅ ตรวจสอบว่ามีไฟล์อยู่บน Pod หรือไม่
+- ✅ ตรวจสอบ API health
+- ✅ รันการทดสอบบน Pod โดยอัตโนมัติ
+
+---
+
+### Option 2: รันบน Pod โดยตรง
+
+```bash
+# SSH เข้า Pod
+ssh pytorch-pod
+cd /workspace/transcription-service/scripts/test
+
+# รันทดสอบ
+python test-50-concurrency.py \
+  --api-url http://localhost:8010 \
+  --file-path uploads/v10-1.mp4 \
+  --file-name "v10-1.mp4" \
+  --num-concurrent 50 \
+  --model-size medium
+```
+
+---
+
+### Option 3: รันจาก Local Machine (ใช้ file_path)
 
 ```bash
 cd transcription-close-caption-service/scripts/test
 
 python test-50-concurrency.py \
-  --api-url http://80.15.7.37:8010 \
-  --file-path uploads/test-video-10min.mp4 \
-  --file-name "test-video-10min.mp4" \
+  --api-url http://80.15.7.37:41462 \
+  --file-path uploads/v10-1.mp4 \
+  --file-name "v10-1.mp4" \
   --num-concurrent 50 \
   --model-size medium
 ```
+
+**หมายเหตุ**: file_path ต้องมีอยู่บน Pod ที่ `/workspace/transcription-service/uploads/`
 
 ### Option 2: ใช้ file_url (URL จาก FileService)
 

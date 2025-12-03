@@ -62,6 +62,12 @@ class ConcurrencyTest:
         request_start = time.time()
         
         try:
+            # ตรวจสอบ file_path ถ้าใช้ local file
+            if self.file_path:
+                # ถ้า file_path ไม่มี absolute path ให้ตรวจสอบจาก API
+                # หรือใช้ file_url แทน
+                pass  # Server จะตรวจสอบเอง
+            
             payload = {
                 "language": self.language,
                 "model_size": self.model_size,
@@ -483,6 +489,24 @@ async def main():
     
     if not args.file_path and not args.file_url:
         parser.error("ต้องระบุ --file-path หรือ --file-url อย่างใดอย่างหนึ่ง")
+    
+    # แสดงข้อมูลก่อนเริ่มทดสอบ
+    print("="*80)
+    print("📋 Test Configuration")
+    print("="*80)
+    print(f"API URL: {args.api_url}")
+    print(f"Concurrent Requests: {args.num_concurrent}")
+    if args.file_path:
+        print(f"File Path: {args.file_path}")
+        print("⚠️  หมายเหตุ: file_path ต้องมีอยู่บน server")
+        print("   ตรวจสอบไฟล์ด้วย: bash scripts/test/check-file-before-test.sh " + args.file_path)
+    if args.file_url:
+        print(f"File URL: {args.file_url}")
+    print(f"Language: {args.language}")
+    print(f"Model Size: {args.model_size}")
+    print(f"Poll Interval: {args.poll_interval}s")
+    print("="*80)
+    print("")
     
     # Create test instance
     test = ConcurrencyTest(
