@@ -81,6 +81,88 @@ class ThaiTextProcessor:
         
         logger.info("Thai Text Processor initialized with dictionary")
     
+    def _fix_abnormal_repetition(self, text: str) -> str:
+        """
+        แก้ไขการซ้ำคำผิดปกติ เช่น "การการการ..." → "การ"
+        ตรวจจับและลบการซ้ำคำที่มากเกินไป (มากกว่า 3 ครั้งติดกัน)
+        """
+        if not text or len(text.strip()) < 6:  # ขนาดเล็กเกินไป ไม่น่าจะมีการซ้ำผิดปกติ
+            return text
+        
+        corrected = text
+        
+        # ขั้นตอนที่ 1: แก้ไขการซ้ำคำที่ไม่มีช่องว่าง (เช่น "การการการการ...")
+        # Pattern: จับคำไทย 1-6 ตัวอักษรที่ซ้ำกันติดกัน 4+ ครั้ง
+        pattern_no_space = r'([ก-ฮ]{1,6}?)\1{3,}'
+        
+        def replace_repetition_no_space(match):
+            repeated_word = match.group(1)
+            full_match = match.group(0)
+            repeat_count = len(full_match) // len(repeated_word)
+            
+            # ถ้าซ้ำมากกว่า 10 ครั้ง ถือว่าเป็นความผิดปกติจาก transcription
+            if repeat_count > 10:
+                logger.warning(
+                    f"⚠️ Detected abnormal word repetition (no spaces): "
+                    f"'{repeated_word}' repeated {repeat_count} times "
+                    f"(length: {len(full_match)} chars). "
+                    f"Replacing with single occurrence."
+                )
+                return repeated_word
+            elif repeat_count > 3:
+                logger.info(
+                    f"ℹ️ Detected word repetition (no spaces): "
+                    f"'{repeated_word}' repeated {repeat_count} times. "
+                    f"Reducing to 2 occurrences."
+                )
+                return repeated_word * 2
+            else:
+                return full_match
+        
+        corrected = re.sub(pattern_no_space, replace_repetition_no_space, corrected)
+        
+        # ขั้นตอนที่ 2: แก้ไขการซ้ำคำที่มีช่องว่าง (เช่น "การ การ การ...")
+        # ตรวจสอบว่ามีคำซ้ำติดกันมากเกินไปหรือไม่
+        words = corrected.split()
+        if len(words) > 20:
+            consecutive_repeats = 0
+            prev_word = None
+            max_consecutive = 0
+            
+            for word in words:
+                if word == prev_word:
+                    consecutive_repeats += 1
+                    max_consecutive = max(max_consecutive, consecutive_repeats)
+                else:
+                    consecutive_repeats = 1
+                prev_word = word
+            
+            # ถ้ามีคำซ้ำติดกันมากกว่า 5 ครั้ง ถือว่าผิดปกติ
+            if max_consecutive > 5:
+                logger.warning(
+                    f"⚠️ Detected abnormal consecutive word repetition: "
+                    f"same word repeated {max_consecutive} times consecutively. "
+                    f"Text length: {len(corrected)} chars, Word count: {len(words)}"
+                )
+                # ลดการซ้ำติดกันเหลือ 2 ครั้ง
+                deduplicated_words = []
+                prev_word = None
+                repeat_count = 0
+                
+                for word in words:
+                    if word == prev_word:
+                        repeat_count += 1
+                        if repeat_count <= 2:  # อนุญาตให้ซ้ำได้ 2 ครั้ง
+                            deduplicated_words.append(word)
+                    else:
+                        repeat_count = 1
+                        deduplicated_words.append(word)
+                        prev_word = word
+                
+                corrected = ' '.join(deduplicated_words)
+        
+        return corrected
+    
     def correct_text(self, text: str) -> str:
         """แก้ไขข้อความภาษาไทย"""
         if not text or not text.strip():
@@ -88,6 +170,9 @@ class ThaiTextProcessor:
             
         # ขั้นตอนที่ 0: ปรับปรุงข้อความให้เป็นมาตรฐาน
         corrected = normalize(text)
+        
+        # ขั้นตอนที่ 0.5: แก้ไขการซ้ำคำผิดปกติ (ต้องทำก่อน tokenization)
+        corrected = self._fix_abnormal_repetition(corrected)
         
         # ขั้นตอนที่ 1: แทนที่คำที่ผิดทั่วไป
         for wrong, correct_word in self.common_corrections.items():
