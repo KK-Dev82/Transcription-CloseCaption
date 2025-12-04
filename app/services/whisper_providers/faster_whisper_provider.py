@@ -15,6 +15,7 @@ import logging
 import threading
 import asyncio
 import gc
+import contextlib
 from pathlib import Path
 from typing import Dict, Optional
 import torch
@@ -36,10 +37,26 @@ _model_cache = {}
 _model_locks = {}
 _cache_lock = threading.Lock()
 
-# GPU Concurrency Semaphore (global เพื่อควบคุม concurrent GPU tasks)
+# GPU Concurrency Semaphore (ใช้ threading.Semaphore เพื่อหลีกเลี่ยง event loop binding)
 # เริ่มที่ 1 เพื่อป้องกัน CUDA OOM
-_gpu_concurrency_semaphore = None
+_gpu_thread_semaphore = None
 _gpu_semaphore_lock = threading.Lock()
+
+
+@contextlib.asynccontextmanager
+async def _async_semaphore_wrapper(thread_semaphore: threading.Semaphore):
+    """
+    Async context manager wrapper สำหรับ threading.Semaphore
+    เพื่อให้สามารถใช้ async with ได้ (ไม่ผูกกับ class หรือ event loop)
+    """
+    # Acquire ใน thread pool เพื่อไม่ block event loop
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, thread_semaphore.acquire)
+    try:
+        yield
+    finally:
+        # Release ใน thread pool
+        await loop.run_in_executor(None, thread_semaphore.release)
 
 
 class FasterWhisperProvider(WhisperProvider):
@@ -195,35 +212,35 @@ class FasterWhisperProvider(WhisperProvider):
         """
         # ใช้ GPU Concurrency Semaphore สำหรับ CUDA device
         if self.device == "cuda":
-            # Get or create GPU concurrency semaphore
-            semaphore = self._get_gpu_concurrency_semaphore()
+            # ใช้ threading.Semaphore เพื่อหลีกเลี่ยงปัญหา event loop binding
+            thread_semaphore = self._get_gpu_thread_semaphore()
             
-            # Use semaphore to control concurrent GPU tasks
-            async with semaphore:
+            # Wrap threading.Semaphore ด้วย async context manager
+            async with _async_semaphore_wrapper(thread_semaphore):
                 logger.debug(f"[Faster Whisper] GPU Concurrency Semaphore acquired - Starting transcription")
                 return await self._transcribe_with_retry(audio_path, language, model_size)
         else:
             # CPU mode ไม่ต้องใช้ semaphore
             return await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
     
-    def _get_gpu_concurrency_semaphore(self) -> asyncio.Semaphore:
+    def _get_gpu_thread_semaphore(self) -> threading.Semaphore:
         """
-        Get or create GPU concurrency semaphore (global singleton)
+        Get or create GPU concurrency thread semaphore (global singleton)
         
         Returns:
-            asyncio.Semaphore สำหรับควบคุม concurrent GPU tasks
+            threading.Semaphore สำหรับควบคุม concurrent GPU tasks (ไม่ผูกกับ event loop)
         """
-        global _gpu_concurrency_semaphore
+        global _gpu_thread_semaphore
         
-        if _gpu_concurrency_semaphore is None:
+        if _gpu_thread_semaphore is None:
             with _gpu_semaphore_lock:
                 # Double-check pattern
-                if _gpu_concurrency_semaphore is None:
+                if _gpu_thread_semaphore is None:
                     gpu_concurrency = int(os.getenv('GPU_CONCURRENCY', '1'))
-                    _gpu_concurrency_semaphore = asyncio.Semaphore(gpu_concurrency)
-                    logger.info(f"✅ [Faster Whisper] Initialized GPU Concurrency Semaphore: max_concurrent={gpu_concurrency}")
+                    _gpu_thread_semaphore = threading.Semaphore(gpu_concurrency)
+                    logger.info(f"✅ [Faster Whisper] Initialized GPU Concurrency Thread Semaphore: max_concurrent={gpu_concurrency}")
         
-        return _gpu_concurrency_semaphore
+        return _gpu_thread_semaphore
     
     async def _transcribe_with_retry(
         self,

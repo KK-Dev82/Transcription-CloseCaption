@@ -22,7 +22,7 @@ class ConcurrencyTest:
     def __init__(
         self,
         api_url: str,
-        num_concurrent: int = 50,
+        num_concurrent: int = 5,
         file_path: Optional[str] = None,
         file_url: Optional[str] = None,
         file_name: Optional[str] = None,
@@ -476,7 +476,7 @@ async def main():
     )
     
     parser.add_argument('--api-url', required=True, help='Transcription Service API URL (เช่น http://80.15.7.37:8010)')
-    parser.add_argument('--num-concurrent', type=int, default=50, help='จำนวน concurrent requests (default: 50)')
+    parser.add_argument('--num-concurrent', type=int, default=5, help='จำนวน concurrent requests (default: 5)')
     parser.add_argument('--file-path', help='Path ของไฟล์วิดีโอใน server (เช่น uploads/test.mp4)')
     parser.add_argument('--file-url', help='URL ของไฟล์วิดีโอ (เช่น http://...)')
     parser.add_argument('--file-name', help='ชื่อไฟล์ (default: test-video-10min.mp4)')

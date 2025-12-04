@@ -158,8 +158,47 @@ class VideoWorker:
                         # Re-setup consumers after reconnection
                         self.setup_consumers()
                         logger.info("✅ Consumers re-registered (via maintenance thread)")
+                        # Reconnect publish channel
+                        self._connect_publish_channel()
                     else:
                         logger.warning("⚠️ Failed to reconnect (maintenance thread will retry later)")
+                
+                # ตรวจสอบ publish connection
+                publish_connection_ok = False
+                try:
+                    if self.publish_connection and not self.publish_connection.is_closed:
+                        if self.publish_channel and not self.publish_channel.is_closed:
+                            # Try a simple operation to verify connection
+                            self.publish_connection.process_data_events(time_limit=0.001)
+                            publish_connection_ok = True
+                except (AttributeError, pika.exceptions.ConnectionClosed, 
+                        pika.exceptions.StreamLostError, ConnectionResetError) as e:
+                    logger.warning(f"⚠️ Publish connection check failed: {e}")
+                    publish_connection_ok = False
+                
+                # ถ้า publish connection ไม่ดี ให้ reconnect
+                if not publish_connection_ok:
+                    logger.warning("⚠️ Publish connection lost, attempting to reconnect...")
+                    try:
+                        if self.publish_channel and not self.publish_channel.is_closed:
+                            self.publish_channel.close()
+                    except:
+                        pass
+                    self.publish_channel = None
+                    
+                    try:
+                        if self.publish_connection and not self.publish_connection.is_closed:
+                            self.publish_connection.close()
+                    except:
+                        pass
+                    self.publish_connection = None
+                    
+                    # Try to reconnect publish channel
+                    try:
+                        self._connect_publish_channel()
+                        logger.info("✅ Publish channel reconnected successfully (via maintenance thread)")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to reconnect publish channel: {e}")
                 
             except Exception as e:
                 logger.error(f"❌ Error in connection maintenance thread: {e}", exc_info=True)
@@ -327,15 +366,33 @@ class VideoWorker:
     def _get_publish_channel(self):
         """
         Get publish channel (thread-safe)
-        ถ้า publish connection ไม่มี ให้ใช้ main channel แทน (แต่ไม่แนะนำ)
+        ถ้า publish connection หลุดจะลอง reconnect
         """
+        # ตรวจสอบว่า publish channel ใช้งานได้หรือไม่
         if self.publish_channel and not self.publish_channel.is_closed:
-            return self.publish_channel
-        elif self.channel and not self.channel.is_closed:
-            logger.warning("⚠️ Using main channel for publishing (not thread-safe)")
+            try:
+                # ตรวจสอบว่า connection ยังทำงานอยู่หรือไม่
+                if self.publish_connection and not self.publish_connection.is_closed:
+                    return self.publish_channel
+            except Exception:
+                pass
+        
+        # ถ้า publish channel ไม่มีหรือหลุด ให้ลอง reconnect
+        logger.warning("⚠️ Publish channel is closed, attempting to reconnect...")
+        try:
+            self._connect_publish_channel()
+            if self.publish_channel and not self.publish_channel.is_closed:
+                logger.info("✅ Publish channel reconnected successfully")
+                return self.publish_channel
+        except Exception as e:
+            logger.error(f"❌ Failed to reconnect publish channel: {e}")
+        
+        # Fallback to main channel (not recommended, but better than crashing)
+        if self.channel and not self.channel.is_closed:
+            logger.warning("⚠️ Using main channel for publishing (not thread-safe, but connection is available)")
             return self.channel
         else:
-            raise RuntimeError("No available channel for publishing")
+            raise RuntimeError("No available channel for publishing (both publish and main channels are closed)")
     
     def _get_queue_arguments(
         self,
@@ -1448,7 +1505,8 @@ class VideoWorker:
             }
             
             # Publish result กลับไป Backend
-            self.channel.basic_publish(
+            publish_ch = self._get_publish_channel()
+            publish_ch.basic_publish(
                 exchange=self.transcription_exchange,
                 routing_key=self.transcription_chunk_completed_routing_key,
                 body=json.dumps(result_message),
