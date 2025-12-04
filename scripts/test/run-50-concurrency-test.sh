@@ -150,14 +150,55 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 echo ""
 
+# Step 4.5: Setup Python environment (สำหรับ persistent dependencies)
+print_status "Step 4.5: Setting up Python environment..."
+# Detect Python version dynamically
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.10")
+PYTHON_SITE_PACKAGES="/workspace/.local/lib/python${PYTHON_VERSION}/site-packages"
+
+export PYTHONUSERBASE="/workspace/.local"
+export PATH="/workspace/.local/bin:$PATH"
+export PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH"
+
+echo "   Python version: ${PYTHON_VERSION}"
+echo "   Installation path: ${PYTHON_SITE_PACKAGES}"
+echo ""
+
+# Check if aiohttp is installed
+if ! env PYTHONUSERBASE="/workspace/.local" \
+        PATH="/workspace/.local/bin:$PATH" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import aiohttp" 2>/dev/null; then
+    print_warning "⚠️  aiohttp is not installed"
+    echo ""
+    echo "💡 Installing aiohttp..."
+    env PYTHONUSERBASE="/workspace/.local" \
+        PATH="/workspace/.local/bin:$PATH" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        pip3 install --user --no-cache-dir aiohttp==3.9.1 || {
+        print_error "❌ Failed to install aiohttp"
+        echo ""
+        echo "💡 Please run: bash scripts/pod/install-dependencies.sh"
+        exit 1
+    }
+    print_success "✅ aiohttp installed"
+    echo ""
+else
+    print_success "✅ aiohttp is available"
+    echo ""
+fi
+
 # Step 5: รันการทดสอบ
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 print_status "🚀 เริ่มการทดสอบ..."
 print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# รัน test script โดยตรง
-python3 "$TEST_SCRIPT" \
+# รัน test script ด้วย environment variables ที่ถูกต้อง
+env PYTHONUSERBASE="/workspace/.local" \
+    PATH="/workspace/.local/bin:$PATH" \
+    PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+    python3 "$TEST_SCRIPT" \
     --api-url "$API_URL" \
     --file-path "$FILE_PATH" \
     --file-name "$FILE_NAME" \
