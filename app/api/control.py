@@ -9,6 +9,7 @@ import signal
 import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
+from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -190,82 +191,121 @@ async def start_service():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/videos")
+async def list_video_files():
+    """ดึงรายการไฟล์วิดีโอใน uploads directory"""
+    try:
+        from ..services.file_service import FileService
+        file_service = FileService()
+        
+        upload_dir = Path("uploads")
+        if not upload_dir.exists():
+            return {"videos": []}
+        
+        videos = []
+        for file_path in upload_dir.iterdir():
+            if file_path.is_file():
+                if file_service.is_video_file(str(file_path)):
+                    stat = file_path.stat()
+                    videos.append({
+                        "filename": file_path.name,
+                        "file_path": f"uploads/{file_path.name}",
+                        "file_size": stat.st_size,
+                        "file_type": file_path.suffix.lower(),
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    })
+        
+        # เรียงตามวันที่แก้ไขล่าสุด
+        videos.sort(key=lambda x: x["modified_at"], reverse=True)
+        
+        return {"videos": videos, "total": len(videos)}
+        
+    except Exception as e:
+        logger.error(f"Error listing videos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/test", response_model=Dict[str, Any])
 async def start_test(request: TestRequest):
-    """เริ่มการทดสอบ Concurrency"""
-    global _running_test_process
-    
-    async with _test_lock:
-        if _running_test_process is not None:
-            # ตรวจสอบว่า process ยังทำงานอยู่หรือไม่
-            if _running_test_process.poll() is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Test is already running"
-                )
-            else:
-                # Process เสร็จแล้ว ให้ reset
-                _running_test_process = None
+    """เริ่มการทดสอบ Concurrency และ return task IDs ทันที"""
+    try:
+        project_root = Path(__file__).parent.parent.parent
         
-        try:
-            script_path = Path(__file__).parent.parent.parent / "scripts" / "test" / "run-50-concurrency-test.sh"
-            
-            if not script_path.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail="Test script not found"
-                )
-            
-            # ตรวจสอบว่าไฟล์ video มีอยู่หรือไม่
-            video_path = Path(request.video_file)
-            if not video_path.is_absolute():
-                # ถ้าเป็น relative path ให้หาจาก uploads
-                project_root = script_path.parent.parent.parent
-                video_path = project_root / "uploads" / request.video_file
-            
-            if not video_path.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Video file not found: {video_path}"
-                )
-            
-            # ใช้ video_file name เท่านั้นสำหรับ script
-            video_file_name = Path(request.video_file).name
-            
-            # สร้าง command
-            api_url = request.api_url or "http://localhost:8010"
-            cmd = [
-                "bash",
-                str(script_path),
-                video_file_name,
-                api_url,
-                str(request.num_concurrent),
-                request.model_size,
-                request.language
-            ]
-            
-            # Run test in background
-            _running_test_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=str(script_path.parent.parent.parent)
+        # ตรวจสอบว่าไฟล์ video มีอยู่หรือไม่
+        video_path = Path(request.video_file)
+        if not video_path.is_absolute():
+            # ถ้าเป็น relative path ให้หาจาก uploads
+            video_path = project_root / "uploads" / request.video_file
+        
+        if not video_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video file not found: {video_path}"
             )
-            
-            return {
-                "status": "started",
-                "message": "Test started",
-                "test_id": str(_running_test_process.pid),
-                "video_file": video_file_name,
-                "num_concurrent": request.num_concurrent,
-                "pid": _running_test_process.pid
-            }
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error starting test: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+        
+        # ใช้ video_file name เท่านั้น
+        video_file_name = Path(request.video_file).name
+        file_path_str = str(video_path)
+        
+        # Import transcription service เพื่อเรียก transcription โดยตรง
+        from ..services.transcription_service import TranscriptionService
+        transcription_service = TranscriptionService()
+        
+        # เรียก transcription API โดยตรงเพื่อดึง task IDs
+        task_ids = []
+        
+        async def create_task(index: int):
+            try:
+                task_id = await transcription_service.start_transcription(
+                    file_path=file_path_str,
+                    file_name=video_file_name,
+                    language=request.language,
+                    model_size=request.model_size,
+                    use_chunking=False
+                )
+                return task_id
+            except Exception as e:
+                logger.error(f"Error creating task {index}: {e}")
+                return None
+        
+        # ส่ง requests พร้อมกัน (จำกัด concurrent requests)
+        semaphore = asyncio.Semaphore(min(request.num_concurrent, 10))  # จำกัด concurrent API calls
+        
+        async def create_task_with_semaphore(index: int):
+            async with semaphore:
+                return await create_task(index)
+        
+        tasks = [create_task_with_semaphore(i) for i in range(request.num_concurrent)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # เก็บ task IDs ที่สำเร็จ
+        for result in results:
+            if isinstance(result, str) and result:
+                task_ids.append(result)
+        
+        logger.info(f"✅ Created {len(task_ids)} transcription tasks out of {request.num_concurrent} requests")
+        
+        if len(task_ids) == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create any transcription tasks"
+            )
+        
+        return {
+            "status": "started",
+            "message": f"Test started - {len(task_ids)} tasks created",
+            "video_file": video_file_name,
+            "num_concurrent": request.num_concurrent,
+            "task_ids": task_ids,
+            "requested": request.num_concurrent,
+            "created": len(task_ids)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting test: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/stop-test", response_model=Dict[str, Any])
