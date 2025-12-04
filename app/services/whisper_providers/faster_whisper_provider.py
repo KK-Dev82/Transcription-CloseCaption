@@ -36,6 +36,11 @@ _model_cache = {}
 _model_locks = {}
 _cache_lock = threading.Lock()
 
+# GPU Concurrency Semaphore (global เพื่อควบคุม concurrent GPU tasks)
+# เริ่มที่ 1 เพื่อป้องกัน CUDA OOM
+_gpu_concurrency_semaphore = None
+_gpu_semaphore_lock = threading.Lock()
+
 
 class FasterWhisperProvider(WhisperProvider):
     """
@@ -173,11 +178,12 @@ class FasterWhisperProvider(WhisperProvider):
         model_size: str = None
     ) -> TranscriptionResult:
         """
-        Transcribe audio using faster-whisper with retry logic
+        Transcribe audio using faster-whisper with retry logic and GPU concurrency control
         
         Note: 
         - ถ้า GPU mode timeout จะ retry ก่อน fallback ไป CPU mode
         - Max retry attempts: 3 (configurable via GPU_TRANSCRIPTION_MAX_RETRIES)
+        - GPU concurrency controlled by semaphore (default: 1)
         
         Args:
             audio_path: Path ไปยังไฟล์ audio
@@ -187,12 +193,37 @@ class FasterWhisperProvider(WhisperProvider):
         Returns:
             TranscriptionResult
         """
-        # ใช้ retry wrapper สำหรับ GPU mode
+        # ใช้ GPU Concurrency Semaphore สำหรับ CUDA device
         if self.device == "cuda":
-            return await self._transcribe_with_retry(audio_path, language, model_size)
+            # Get or create GPU concurrency semaphore
+            semaphore = self._get_gpu_concurrency_semaphore()
+            
+            # Use semaphore to control concurrent GPU tasks
+            async with semaphore:
+                logger.debug(f"[Faster Whisper] GPU Concurrency Semaphore acquired - Starting transcription")
+                return await self._transcribe_with_retry(audio_path, language, model_size)
         else:
-            # CPU mode ไม่ต้อง retry
+            # CPU mode ไม่ต้องใช้ semaphore
             return await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
+    
+    def _get_gpu_concurrency_semaphore(self) -> asyncio.Semaphore:
+        """
+        Get or create GPU concurrency semaphore (global singleton)
+        
+        Returns:
+            asyncio.Semaphore สำหรับควบคุม concurrent GPU tasks
+        """
+        global _gpu_concurrency_semaphore
+        
+        if _gpu_concurrency_semaphore is None:
+            with _gpu_semaphore_lock:
+                # Double-check pattern
+                if _gpu_concurrency_semaphore is None:
+                    gpu_concurrency = int(os.getenv('GPU_CONCURRENCY', '1'))
+                    _gpu_concurrency_semaphore = asyncio.Semaphore(gpu_concurrency)
+                    logger.info(f"✅ [Faster Whisper] Initialized GPU Concurrency Semaphore: max_concurrent={gpu_concurrency}")
+        
+        return _gpu_concurrency_semaphore
     
     async def _transcribe_with_retry(
         self,
@@ -258,13 +289,24 @@ class FasterWhisperProvider(WhisperProvider):
                     logger.error(f"[Faster Whisper] ❌ Non-timeout error: {e}")
                     raise
         
-        # Fallback to CPU mode after all retries failed
-        logger.warning(f"[Faster Whisper] 🔄 Falling back to CPU mode after {MAX_RETRY_ATTEMPTS} GPU retry attempts")
-        try:
-            return await self._transcribe_cpu_fallback(audio_path, language, model_size)
-        except Exception as cpu_error:
-            logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
-            raise RuntimeError(f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries, and CPU fallback also failed: {cpu_error}") from last_error
+        # Check if CPU fallback is allowed
+        ALLOW_CPU_FALLBACK = os.getenv('ALLOW_CPU_FALLBACK', 'false').lower() == 'true'
+        
+        if ALLOW_CPU_FALLBACK:
+            # Fallback to CPU mode after all retries failed
+            logger.warning(f"[Faster Whisper] 🔄 Falling back to CPU mode after {MAX_RETRY_ATTEMPTS} GPU retry attempts")
+            try:
+                return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+            except Exception as cpu_error:
+                logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
+                raise RuntimeError(f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries, and CPU fallback also failed: {cpu_error}") from last_error
+        else:
+            # Fail fast - no CPU fallback
+            logger.error(f"[Faster Whisper] ❌ GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries. CPU fallback is disabled (ALLOW_CPU_FALLBACK=false)")
+            raise RuntimeError(
+                f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries. "
+                f"CPU fallback is disabled. Error: {last_error}"
+            ) from last_error
     
     async def _transcribe_gpu_single_attempt(
         self,

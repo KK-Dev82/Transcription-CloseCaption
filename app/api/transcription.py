@@ -37,7 +37,8 @@ async def start_transcription(request: TranscriptionRequest):
             use_chunking=request.use_chunking,
             callback_url=request.callback_url,
             job_id=request.job_id,
-            user_id=request.user_id
+            user_id=request.user_id,
+            idempotency_key=request.idempotency_key if hasattr(request, 'idempotency_key') else None
         )
         
         # ดึง task status

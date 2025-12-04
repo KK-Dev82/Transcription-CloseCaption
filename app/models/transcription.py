@@ -14,6 +14,7 @@ class TranscriptionRequest(BaseModel):
     callback_url: Optional[str] = None  # URL สำหรับ callback เมื่อเสร็จ (จาก Backend)
     job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)
     user_id: Optional[str] = None  # User ID (ถ้ามี)
+    idempotency_key: Optional[str] = None  # Idempotency key สำหรับป้องกัน duplicate requests
 
     @root_validator(skip_on_failure=True)
     def validate_source(cls, values):

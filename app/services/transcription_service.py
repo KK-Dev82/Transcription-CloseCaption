@@ -172,37 +172,114 @@ class TranscriptionService:
         use_chunking: bool = False,  # Default: false - transcribe ทั้งไฟล์เลย
         callback_url: str = None,
         job_id: int = None,
-        user_id: str = None
+        user_id: str = None,
+        idempotency_key: Optional[str] = None
     ) -> str:
         """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
-        # ตรวจสอบ Queue size ก่อนส่ง task (ป้องกัน queue overflow)
+        # ============================================================
+        # Idempotency Check: ตรวจสอบ duplicate requests
+        # ============================================================
+        # ตรวจสอบว่าเคยมี task ที่ completed แล้วหรือไม่
+        if idempotency_key or file_path or file_url:
+            existing_task = self._check_idempotency(
+                idempotency_key=idempotency_key,
+                file_path=file_path,
+                file_url=file_url,
+                language=language,
+                model_size=model_size
+            )
+            if existing_task:
+                logger.info(f"✅ Found existing task (idempotency check): {existing_task.task_id} (status: {existing_task.status})")
+                return existing_task.task_id
+        
+        # ============================================================
+        # Admission Control: ตรวจสอบ Queue sizes ก่อนรับ request
+        # ============================================================
+        # ใช้ 3-Queue Architecture ถ้าเปิดใช้งาน
+        use_3queue_architecture = os.getenv('USE_3QUEUE_ARCHITECTURE', 'true').lower() == 'true'
+        
         try:
-            MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
+            from fastapi import HTTPException
             
-            queue_info = self.rabbitmq_service.get_queue_info()
-            transcription_queue_info = queue_info.get('transcription_queue', {})
-            current_queue_size = transcription_queue_info.get('message_count', 0)
-            
-            if current_queue_size >= MAX_QUEUE_SIZE:
-                error_msg = (
-                    f"Queue is full ({current_queue_size}/{MAX_QUEUE_SIZE}). "
-                    f"Please try again later."
+            if use_3queue_architecture:
+                # 3-Queue Architecture: ตรวจสอบ transcription_request_queue
+                MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+                MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+                MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
+                RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+                
+                queue_info = self.rabbitmq_service.get_queue_info()
+                
+                # Check transcription_request_queue
+                request_queue_info = queue_info.get('transcription_request_queue', {})
+                request_queue_size = request_queue_info.get('message_count', 0)
+                
+                if request_queue_size >= MAX_QUEUE_REQUEST:
+                    error_msg = f"Request queue is full ({request_queue_size}/{MAX_QUEUE_REQUEST}). Please try again later."
+                    logger.warning(f"⚠️ {error_msg}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail=error_msg,
+                        headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                    )
+                
+                # Check audio_extraction_queue (optional - for full admission control)
+                extraction_queue_info = queue_info.get('audio_extraction_queue', {})
+                extraction_queue_size = extraction_queue_info.get('message_count', 0)
+                
+                if extraction_queue_size >= MAX_QUEUE_EXTRACTION:
+                    error_msg = f"Audio extraction queue is full ({extraction_queue_size}/{MAX_QUEUE_EXTRACTION}). Please try again later."
+                    logger.warning(f"⚠️ {error_msg}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail=error_msg,
+                        headers={"Retry-After": "60"}
+                    )
+                
+                # Check transcription_queue (optional - for full admission control)
+                transcription_queue_info = queue_info.get('transcription_queue', {})
+                transcription_queue_size = transcription_queue_info.get('message_count', 0)
+                
+                if transcription_queue_size >= MAX_QUEUE_TRANSCRIBE:
+                    error_msg = f"Transcription queue is full ({transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}). Please try again later."
+                    logger.warning(f"⚠️ {error_msg}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail=error_msg,
+                        headers={"Retry-After": "120"}
+                    )
+                
+                logger.info(
+                    f"✅ Admission control passed - Request: {request_queue_size}/{MAX_QUEUE_REQUEST}, "
+                    f"Extraction: {extraction_queue_size}/{MAX_QUEUE_EXTRACTION}, "
+                    f"Transcription: {transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}"
                 )
-                logger.warning(f"⚠️ {error_msg}")
-                from fastapi import HTTPException
-                raise HTTPException(
-                    status_code=503,
-                    detail=error_msg
-                )
+            else:
+                # Legacy: ตรวจสอบ transcription_queue เก่า
+                MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
+                
+                queue_info = self.rabbitmq_service.get_queue_info()
+                transcription_queue_info = queue_info.get('transcription_queue', {})
+                current_queue_size = transcription_queue_info.get('message_count', 0)
+                
+                if current_queue_size >= MAX_QUEUE_SIZE:
+                    error_msg = (
+                        f"Queue is full ({current_queue_size}/{MAX_QUEUE_SIZE}). "
+                        f"Please try again later."
+                    )
+                    logger.warning(f"⚠️ {error_msg}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail=error_msg
+                    )
+                
+                logger.info(f"✅ Queue size check passed: {current_queue_size}/{MAX_QUEUE_SIZE} messages")
             
-            logger.info(f"✅ Queue size check passed: {current_queue_size}/{MAX_QUEUE_SIZE} messages")
-            
+        except HTTPException:
+            # Re-raise HTTPException (503)
+            raise
         except Exception as e:
-            # Check if it's HTTPException (503) and re-raise
-            if "HTTPException" in str(type(e)) or hasattr(e, 'status_code'):
-                raise
-            
             # Log error but continue (don't block if queue check fails)
             logger.warning(f"⚠️ Queue size check failed (continuing anyway): {e}")
         
@@ -220,21 +297,49 @@ class TranscriptionService:
                 user_id=user_id,
             )
 
-            try:
-                signature = inspect.signature(self.rabbitmq_service.send_transcription_task)
-                if "callback_url" in signature.parameters and callback_url:
-                    send_kwargs["callback_url"] = callback_url
-                elif callback_url:
-                    logger.warning(
-                        "RabbitMQService.send_transcription_task does not accept 'callback_url'. Skipping this parameter to maintain compatibility."
-                    )
-            except (ValueError, TypeError):
-                if callback_url:
-                    logger.warning(
-                        "Unable to inspect send_transcription_task signature; skipping 'callback_url' parameter."
-                    )
-
-            task_id = self.rabbitmq_service.send_transcription_task(**send_kwargs)
+            # ============================================================
+            # Routing: ส่งไปยัง queue ตาม Architecture ที่เลือก
+            # ============================================================
+            use_3queue_architecture = os.getenv('USE_3QUEUE_ARCHITECTURE', 'true').lower() == 'true'
+            
+            if use_3queue_architecture:
+                # 3-Queue Architecture: ส่งไปยัง transcription_request_queue
+                logger.info("📤 Using 3-Queue Architecture: sending to transcription_request_queue")
+                
+                try:
+                    signature = inspect.signature(self.rabbitmq_service.send_transcription_request_task)
+                    if "callback_url" in signature.parameters and callback_url:
+                        send_kwargs["callback_url"] = callback_url
+                    elif callback_url:
+                        logger.warning(
+                            "RabbitMQService.send_transcription_request_task does not accept 'callback_url'. Skipping this parameter."
+                        )
+                except (ValueError, TypeError):
+                    if callback_url:
+                        logger.warning(
+                            "Unable to inspect send_transcription_request_task signature; skipping 'callback_url' parameter."
+                        )
+                
+                task_id = self.rabbitmq_service.send_transcription_request_task(**send_kwargs)
+            else:
+                # Legacy: ส่งไปยัง transcription_queue เก่า (backward compatible)
+                logger.info("📤 Using Legacy Architecture: sending to transcription_queue")
+                
+                try:
+                    signature = inspect.signature(self.rabbitmq_service.send_transcription_task)
+                    if "callback_url" in signature.parameters and callback_url:
+                        send_kwargs["callback_url"] = callback_url
+                    elif callback_url:
+                        logger.warning(
+                            "RabbitMQService.send_transcription_task does not accept 'callback_url'. Skipping this parameter to maintain compatibility."
+                        )
+                except (ValueError, TypeError):
+                    if callback_url:
+                        logger.warning(
+                            "Unable to inspect send_transcription_task signature; skipping 'callback_url' parameter."
+                        )
+                
+                task_id = self.rabbitmq_service.send_transcription_task(**send_kwargs)
             
             # สร้าง task response
             task = TranscriptionResponse(
@@ -1063,6 +1168,93 @@ class TranscriptionService:
         
         logger.warning(f"❌ Task {task_id} not found in storage or memory")
         return None
+    
+    def _check_idempotency(
+        self,
+        idempotency_key: Optional[str] = None,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base"
+    ) -> Optional[TranscriptionResponse]:
+        """
+        ตรวจสอบ idempotency: หา existing task ที่มี parameters เหมือนกัน
+        
+        Args:
+            idempotency_key: Idempotency key จาก client (optional)
+            file_path: Path ของไฟล์
+            file_url: URL ของไฟล์
+            language: ภาษา
+            model_size: ขนาด model
+            
+        Returns:
+            TranscriptionResponse ถ้าพบ existing task ที่ completed
+            None ถ้าไม่พบหรือ task ยังไม่เสร็จ
+        """
+        try:
+            # ถ้ามี idempotency_key ให้ค้นหาจาก metadata
+            if idempotency_key:
+                # ค้นหาจาก all tasks โดยใช้ idempotency_key
+                all_tasks = self.json_storage.list_all_transcriptions()
+                for task_data in all_tasks:
+                    if task_data.get('idempotency_key') == idempotency_key:
+                        task_status = task_data.get('status', '')
+                        if task_status == 'completed':
+                            # สร้าง TranscriptionResponse จาก existing task
+                            task = self._build_task_from_storage(task_data.get('task_id'), task_data)
+                            if task:
+                                logger.info(f"✅ Found completed task with idempotency_key={idempotency_key}: {task.task_id}")
+                                return task
+                        elif task_status in ['pending', 'processing']:
+                            # Return existing task ID (ไม่ต้องสร้างใหม่)
+                            logger.info(f"✅ Found existing task with idempotency_key={idempotency_key}: {task_data.get('task_id')} (status: {task_status})")
+                            task = self._build_task_from_storage(task_data.get('task_id'), task_data)
+                            if task:
+                                return task
+            
+            # ถ้าไม่มี idempotency_key ให้ค้นหาจาก file_path/file_url + parameters
+            if file_path or file_url:
+                all_tasks = self.json_storage.list_all_transcriptions()
+                for task_data in all_tasks:
+                    # ตรวจสอบว่า file_path หรือ file_url ตรงกัน
+                    task_file_path = task_data.get('file_path')
+                    task_file_url = task_data.get('file_url')
+                    
+                    # เปรียบเทียบ file_path หรือ file_url
+                    file_match = False
+                    if file_path and task_file_path:
+                        # Normalize paths (remove trailing slashes, etc.)
+                        if str(Path(file_path).resolve()) == str(Path(task_file_path).resolve()):
+                            file_match = True
+                    elif file_url and task_file_url:
+                        if str(file_url).strip() == str(task_file_url).strip():
+                            file_match = True
+                    
+                    if file_match:
+                        # ตรวจสอบว่า parameters อื่นๆ ตรงกัน
+                        task_language = task_data.get('language', 'th')
+                        task_model_size = task_data.get('model_size', 'base')
+                        
+                        if task_language == language and task_model_size == model_size:
+                            task_status = task_data.get('status', '')
+                            if task_status == 'completed':
+                                # สร้าง TranscriptionResponse จาก existing task
+                                task = self._build_task_from_storage(task_data.get('task_id'), task_data)
+                                if task:
+                                    logger.info(f"✅ Found completed task with matching file: {task.task_id}")
+                                    return task
+                            elif task_status in ['pending', 'processing']:
+                                # Return existing task ID
+                                logger.info(f"✅ Found existing task with matching file: {task_data.get('task_id')} (status: {task_status})")
+                                task = self._build_task_from_storage(task_data.get('task_id'), task_data)
+                                if task:
+                                    return task
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Idempotency check failed: {e}")
+            return None  # Continue with new task creation
     
     def get_all_tasks(self) -> List[TranscriptionResponse]:
         """ดึงรายการ tasks ทั้งหมด"""
