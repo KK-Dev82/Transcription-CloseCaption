@@ -194,6 +194,7 @@ class TranscriptionService:
         model_size: str = "base",
         chunk_duration: int = 30,
         use_chunking: bool = False,  # Default: false - transcribe ทั้งไฟล์เลย
+        display_mode: str = "full_text",  # "full_text" หรือ "realtime_chunks"
         callback_url: str = None,
         job_id: int = None,
         user_id: str = None,
@@ -317,6 +318,7 @@ class TranscriptionService:
                 model_size=model_size,
                 chunk_duration=chunk_duration,
                 use_chunking=use_chunking,
+                display_mode=display_mode,
                 job_id=job_id,
                 user_id=user_id,
             )

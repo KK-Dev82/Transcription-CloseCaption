@@ -639,8 +639,14 @@ class VideoWorker:
             task_data['status'] = 'processing'
             self.json_storage.save_video_task(task_data['task_id'], task_data)
             
-            # ประมวลผลการตัดวิดีโอ
-            asyncio.run(self._execute_trim_task(task_data))
+            # ประมวลผลการตัดวิดีโอ - สร้าง event loop ใหม่เพื่อป้องกัน conflict
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_trim_task(task_data))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
             
             # Acknowledge message (with connection check)
             try:
@@ -675,8 +681,14 @@ class VideoWorker:
             task_data['status'] = 'processing'
             self.json_storage.save_video_task(task_data['task_id'], task_data)
             
-            # ประมวลผลการรวมวิดีโอ
-            asyncio.run(self._execute_merge_task(task_data))
+            # ประมวลผลการรวมวิดีโอ - สร้าง event loop ใหม่เพื่อป้องกัน conflict
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_merge_task(task_data))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
             
             # Acknowledge message (with connection check)
             try:
@@ -711,8 +723,14 @@ class VideoWorker:
             task_data['status'] = 'processing'
             self.json_storage.save_video_task(task_data['task_id'], task_data)
             
-            # ประมวลผลการแปลงรูปแบบ
-            asyncio.run(self._execute_convert_task(task_data))
+            # ประมวลผลการแปลงรูปแบบ - สร้าง event loop ใหม่เพื่อป้องกัน conflict
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_convert_task(task_data))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
             
             # Acknowledge message (with connection check)
             try:
@@ -747,8 +765,14 @@ class VideoWorker:
             task_data['status'] = 'processing'
             self.json_storage.save_video_task(task_data['task_id'], task_data)
             
-            # ประมวลผลการปรับขนาดวิดีโอ
-            asyncio.run(self._execute_resize_task(task_data))
+            # ประมวลผลการปรับขนาดวิดีโอ - สร้าง event loop ใหม่เพื่อป้องกัน conflict
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_resize_task(task_data))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
             
             # Acknowledge message (with connection check)
             try:
@@ -1223,7 +1247,14 @@ class VideoWorker:
             logger.info(f"รับ audio chunk extracted message: {chunk_id}")
             
             # ประมวลผล audio chunk และ transcribe
-            asyncio.run(self._execute_audio_chunk_transcription(message_data))
+            # สร้าง event loop ใหม่เพื่อป้องกัน conflict
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._execute_audio_chunk_transcription(message_data))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
             
             # Acknowledge message (with connection check)
             try:
@@ -1334,6 +1365,7 @@ class VideoWorker:
                 logger.info(f"✅ [Thread {thread_name}] Completed chunk {chunk_index+1}/{total_chunks} for task {parent_task_id}")
             finally:
                 loop.close()
+                asyncio.set_event_loop(None)  # Clear event loop for the thread
             
             # Clean up
             if delivery_tag in self.active_chunks:
@@ -1433,7 +1465,18 @@ class VideoWorker:
             
             # Update progress
             completed_chunks = sum(1 for c in parent_task['chunks'] if c is not None)
-            progress = 10 + int((completed_chunks / total_chunks) * 80)  # 10-90%
+            
+            # ตรวจสอบ display_mode เพื่อคำนวณ progress
+            display_mode = parent_task.get('display_mode', 'full_text')
+            if display_mode == 'realtime_chunks':
+                # Realtime chunks: progress = (completed_chunks / total_chunks) * 100
+                # 100% = All chunks completed, % per chunk = 100 / total_chunks
+                progress = int((completed_chunks / total_chunks) * 100)
+            else:
+                # Full text (default): progress = 10 + (completed_chunks / total_chunks) * 80
+                # 10% = starting, 10-90% = processing chunks, 90-100% = merging/finalizing
+                progress = 10 + int((completed_chunks / total_chunks) * 80)  # 10-90%
+            
             parent_task['progress'] = progress
             parent_task['status'] = f"processing_chunk_{completed_chunks}_of_{total_chunks}"
             
@@ -1904,6 +1947,7 @@ class VideoWorker:
                 model_size = task_data.get('model_size', 'base')
                 chunk_duration = task_data.get('chunk_duration', 30)
                 use_chunking = task_data.get('use_chunking', False)
+                display_mode = task_data.get('display_mode', 'full_text')
                 callback_url = task_data.get('callback_url')
                 job_id = task_data.get('job_id')
                 user_id = task_data.get('user_id')
@@ -1924,9 +1968,16 @@ class VideoWorker:
                 if file_url:
                     if not local_file_path or not Path(local_file_path).exists():
                         logger.info(f"📥 [Download & Route] Downloading file from URL: {file_url}")
-                        local_file_path, _ = asyncio.run(
-                            self.transcription_service._download_source_file(task_id, file_url, file_name)
-                        )
+                        # สร้าง event loop ใหม่เพื่อป้องกัน conflict
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            local_file_path, _ = loop.run_until_complete(
+                                self.transcription_service._download_source_file(task_id, file_url, file_name)
+                            )
+                        finally:
+                            loop.close()
+                            asyncio.set_event_loop(None)
                         logger.info(f"✅ [Download & Route] File downloaded: {local_file_path}")
                     else:
                         logger.info(f"✅ [Download & Route] Using existing file: {local_file_path}")
@@ -1958,6 +2009,7 @@ class VideoWorker:
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
                     "use_chunking": use_chunking,
+                    "display_mode": display_mode,
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,
@@ -2046,6 +2098,7 @@ class VideoWorker:
                 model_size = task_data.get('model_size', 'base')
                 chunk_duration = task_data.get('chunk_duration', 30)
                 use_chunking = task_data.get('use_chunking', False)
+                display_mode = task_data.get('display_mode', 'full_text')
                 callback_url = task_data.get('callback_url')
                 job_id = task_data.get('job_id')
                 user_id = task_data.get('user_id')
@@ -2085,6 +2138,7 @@ class VideoWorker:
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
                     "use_chunking": use_chunking,
+                    "display_mode": display_mode,
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,

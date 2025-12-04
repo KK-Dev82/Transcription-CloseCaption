@@ -280,6 +280,7 @@ class RabbitMQService:
         model_size: str = "base",
         chunk_duration: int = 30,
         use_chunking: bool = False,
+        display_mode: str = "full_text",
         callback_url: Optional[str] = None,
         job_id: Optional[int] = None,
         user_id: Optional[str] = None
@@ -310,6 +311,7 @@ class RabbitMQService:
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
                     "use_chunking": use_chunking,
+                    "display_mode": display_mode,
                     "status": "pending",
                     "created_at": time.time(),
                     "callback_url": callback_url,
@@ -372,6 +374,7 @@ class RabbitMQService:
         model_size: str = "base",
         chunk_duration: int = 30,
         use_chunking: bool = False,
+        display_mode: str = "full_text",
         callback_url: Optional[str] = None,
         job_id: Optional[int] = None,
         user_id: Optional[str] = None
@@ -402,6 +405,7 @@ class RabbitMQService:
                     "model_size": model_size,
                     "chunk_duration": chunk_duration,
                     "use_chunking": use_chunking,
+                    "display_mode": display_mode,
                     "status": "pending",
                     "created_at": time.time(),
                     "callback_url": callback_url,
