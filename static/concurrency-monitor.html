@@ -773,6 +773,33 @@
             <p>ดู Queue Process และสถิติการแปลงเสียง</p>
         </div>
 
+        <!-- Control Panel -->
+        <div class="control-panel" style="padding: 20px 30px; background: #fff3cd; border-bottom: 2px solid #ffc107;">
+            <h3 style="margin-bottom: 15px; color: #856404;">🎛️ Service Control</h3>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                <button onclick="controlService('restart')" id="btnRestart" class="control-btn" style="background: #ffc107; color: #000;">🔄 Restart</button>
+                <button onclick="controlService('start')" id="btnStart" class="control-btn" style="background: #198754; color: white;">▶️ Start</button>
+                <button onclick="showTestDialog()" id="btnTest" class="control-btn" style="background: #0d6efd; color: white;">🧪 Test</button>
+                <button onclick="stopTest()" id="btnStopTest" class="control-btn" style="background: #dc3545; color: white;" disabled>⏹️ Stop Test</button>
+                <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+                    <span id="serviceStatus" style="padding: 5px 10px; background: white; border-radius: 5px; font-size: 0.9em;">กำลังตรวจสอบ...</span>
+                    <button onclick="checkServiceStatus()" style="padding: 5px 10px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">🔄 Refresh Status</button>
+                </div>
+            </div>
+            <!-- Test Dialog (hidden by default) -->
+            <div id="testDialog" style="display: none; margin-top: 15px; padding: 15px; background: white; border-radius: 8px; border: 2px solid #ffc107;">
+                <h4 style="margin-bottom: 10px;">🧪 Run Concurrency Test</h4>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <input type="text" id="testVideoFile" placeholder="Video file name (e.g., v10-1.mp4)" style="padding: 8px; border: 1px solid #ccc; border-radius: 5px; min-width: 200px;">
+                    <input type="number" id="testConcurrent" value="5" min="1" max="50" style="padding: 8px; border: 1px solid #ccc; border-radius: 5px; width: 80px;">
+                    <label style="font-size: 0.9em; color: #666;">Concurrent</label>
+                    <button onclick="startTest()" style="padding: 8px 15px; background: #198754; color: white; border: none; border-radius: 5px; cursor: pointer;">เริ่ม Test</button>
+                    <button onclick="hideTestDialog()" style="padding: 8px 15px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">ยกเลิก</button>
+                </div>
+                <div id="testStatus" style="margin-top: 10px; font-size: 0.9em; color: #666;"></div>
+            </div>
+        </div>
+
         <div class="controls">
             <input type="text" id="taskIdsInput" placeholder="ใส่ Task IDs คั่นด้วย comma หรือ JSON file path (เช่น: task1,task2,task3 หรือ report.json)">
             <button onclick="loadTasks()">โหลด Tasks</button>
@@ -1651,6 +1678,26 @@
             document.getElementById('statAvgQueue').textContent = avgQueueTime ? formatTime(avgQueueTime) : '-';
         }
 
+        // Improved auto-refresh with error handling
+        let refreshErrorCount = 0;
+        const MAX_REFRESH_ERRORS = 5;
+        
+        async function safeRefresh() {
+            try {
+                await fetchAllTasks();
+                refreshErrorCount = 0; // Reset on success
+            } catch (error) {
+                refreshErrorCount++;
+                console.error(`Refresh error (${refreshErrorCount}/${MAX_REFRESH_ERRORS}):`, error);
+                
+                if (refreshErrorCount >= MAX_REFRESH_ERRORS) {
+                    console.warn('Too many refresh errors, stopping auto-refresh');
+                    stopMonitoring();
+                    alert('Auto-refresh stopped due to repeated errors. Please check your connection.');
+                }
+            }
+        }
+
         // Start monitoring
         function startMonitoring() {
             if (taskIds.length === 0) {
@@ -1668,7 +1715,7 @@
             if (autoRefresh) {
                 monitoringInterval = setInterval(async () => {
                     if (monitoring) {
-                        await fetchAllTasks();
+                        await safeRefresh();
                     }
                 }, 5000); // Refresh every 5 seconds
             }
@@ -1684,6 +1731,9 @@
                 clearInterval(monitoringInterval);
                 monitoringInterval = null;
             }
+            
+            // Reset error count when stopping
+            refreshErrorCount = 0;
         }
 
         // Format time (seconds to readable format)
@@ -1722,7 +1772,207 @@
                     }
                 });
             }
+            
+            // Check service status on load
+            checkServiceStatus();
+            
+            // Check test status periodically
+            setInterval(checkTestStatus, 5000);
         });
+
+        // ============ Control Functions ============
+        
+        // Check Service Status
+        async function checkServiceStatus() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/control/status`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const data = await response.json();
+                const statusEl = document.getElementById('serviceStatus');
+                
+                if (data.status === 'running') {
+                    statusEl.textContent = '✅ Service Running';
+                    statusEl.style.background = '#d1e7dd';
+                    statusEl.style.color = '#0f5132';
+                } else if (data.status === 'partial') {
+                    statusEl.textContent = '⚠️ Service Partial';
+                    statusEl.style.background = '#fff3cd';
+                    statusEl.style.color = '#856404';
+                } else {
+                    statusEl.textContent = '❌ Service Stopped';
+                    statusEl.style.background = '#f8d7da';
+                    statusEl.style.color = '#842029';
+                }
+            } catch (error) {
+                console.error('Error checking service status:', error);
+                const statusEl = document.getElementById('serviceStatus');
+                statusEl.textContent = '❓ Status Unknown';
+                statusEl.style.background = '#e2e3e5';
+                statusEl.style.color = '#383d41';
+            }
+        }
+        
+        // Control Service (restart/start)
+        async function controlService(action) {
+            const btnId = action === 'restart' ? 'btnRestart' : 'btnStart';
+            const btn = document.getElementById(btnId);
+            const originalText = btn.innerHTML;
+            
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Processing...';
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/control/${action}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                alert(`${action === 'restart' ? 'Restart' : 'Start'} initiated: ${data.message}`);
+                
+                // Refresh status after a delay
+                setTimeout(checkServiceStatus, 2000);
+                
+            } catch (error) {
+                console.error(`Error ${action}ing service:`, error);
+                alert(`Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+        
+        // Show Test Dialog
+        function showTestDialog() {
+            document.getElementById('testDialog').style.display = 'block';
+        }
+        
+        // Hide Test Dialog
+        function hideTestDialog() {
+            document.getElementById('testDialog').style.display = 'none';
+        }
+        
+        // Start Test
+        async function startTest() {
+            const videoFile = document.getElementById('testVideoFile').value.trim();
+            const numConcurrent = parseInt(document.getElementById('testConcurrent').value) || 5;
+            const statusEl = document.getElementById('testStatus');
+            
+            if (!videoFile) {
+                alert('กรุณาใส่ชื่อไฟล์ video');
+                return;
+            }
+            
+            const btnTest = document.getElementById('btnTest');
+            const btnStopTest = document.getElementById('btnStopTest');
+            
+            btnTest.disabled = true;
+            statusEl.textContent = 'กำลังเริ่ม test...';
+            statusEl.style.color = '#0d6efd';
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/control/test`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        video_file: videoFile,
+                        num_concurrent: numConcurrent
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                statusEl.textContent = `✅ Test started (PID: ${data.pid})`;
+                statusEl.style.color = '#198754';
+                
+                btnStopTest.disabled = false;
+                hideTestDialog();
+                
+                // Check test status periodically
+                checkTestStatus();
+                
+            } catch (error) {
+                console.error('Error starting test:', error);
+                statusEl.textContent = `❌ Error: ${error.message}`;
+                statusEl.style.color = '#dc3545';
+                btnTest.disabled = false;
+            }
+        }
+        
+        // Stop Test
+        async function stopTest() {
+            const btnStopTest = document.getElementById('btnStopTest');
+            const statusEl = document.getElementById('testStatus');
+            
+            btnStopTest.disabled = true;
+            statusEl.textContent = 'กำลังหยุด test...';
+            statusEl.style.color = '#ffc107';
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/control/stop-test`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                statusEl.textContent = `✅ ${data.message}`;
+                statusEl.style.color = '#198754';
+                
+                document.getElementById('btnTest').disabled = false;
+                
+            } catch (error) {
+                console.error('Error stopping test:', error);
+                statusEl.textContent = `❌ Error: ${error.message}`;
+                statusEl.style.color = '#dc3545';
+            } finally {
+                setTimeout(checkTestStatus, 1000);
+            }
+        }
+        
+        // Check Test Status
+        async function checkTestStatus() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/control/test/status`);
+                if (!response.ok) return;
+                
+                const data = await response.json();
+                const btnTest = document.getElementById('btnTest');
+                const btnStopTest = document.getElementById('btnStopTest');
+                const statusEl = document.getElementById('testStatus');
+                
+                if (data.is_running) {
+                    btnTest.disabled = true;
+                    btnStopTest.disabled = false;
+                    statusEl.textContent = `⏳ Test running (PID: ${data.pid})`;
+                    statusEl.style.color = '#0d6efd';
+                } else {
+                    btnTest.disabled = false;
+                    btnStopTest.disabled = true;
+                    if (statusEl.textContent && statusEl.textContent.includes('running')) {
+                        statusEl.textContent = '✅ Test completed';
+                        statusEl.style.color = '#198754';
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking test status:', error);
+            }
+        }
+        
     </script>
 </body>
 </html>

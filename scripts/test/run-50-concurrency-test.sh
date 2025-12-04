@@ -27,7 +27,7 @@ print_header() { echo -e "${CYAN}$1${NC}"; }
 # Default values
 FILE_NAME="${1}"
 API_URL="${2:-http://localhost:8010}"
-NUM_CONCURRENT="${3:-50}"
+NUM_CONCURRENT="${3:-5}"
 MODEL_SIZE="${4:-medium}"
 LANGUAGE="${5:-th}"
 POLL_INTERVAL="${6:-5}"
@@ -49,7 +49,7 @@ if [ -z "$FILE_NAME" ]; then
     echo "Arguments:"
     echo "  file_name        - ชื่อไฟล์ใน uploads/ (เช่น v10-1.mp4)"
     echo "  api_url          - API URL (default: http://localhost:8010)"
-    echo "  num_concurrent   - จำนวน concurrent requests (default: 50)"
+    echo "  num_concurrent   - จำนวน concurrent requests (default: 5)"
     echo "  model_size       - ขนาดโมเดล (default: medium)"
     echo "  language         - ภาษา (default: th)"
     echo "  poll_interval    - ช่วงเวลาการตรวจสอบ (วินาที, default: 5)"
