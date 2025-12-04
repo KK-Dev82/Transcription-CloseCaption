@@ -36,6 +36,9 @@ class VideoWorker:
         self.json_storage = JSONStorage()
         self.connection = None
         self.channel = None
+        # Publish connection/channel แยกสำหรับ publishing จาก threads (thread-safe)
+        self.publish_connection = None
+        self.publish_channel = None
         self.running = True
         
         # RabbitMQ configuration
@@ -86,6 +89,15 @@ class VideoWorker:
         self.running = False
         self._maintenance_thread_running = False  # Stop maintenance thread
         try:
+            # ปิด publish connection
+            if self.publish_connection:
+                try:
+                    if not self.publish_connection.is_closed:
+                        self.publish_connection.close()
+                except (AttributeError, pika.exceptions.ConnectionClosed):
+                    pass  # Already closed
+            
+            # ปิด main connection
             if self.connection:
                 try:
                     if not self.connection.is_closed:
@@ -259,6 +271,10 @@ class VideoWorker:
                 logger.info(f"✅ Set QoS for transcription_queue: prefetch_count={transcription_prefetch}")
                 
                 logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
+                
+                # สร้าง publish connection แยกสำหรับ publishing จาก threads (thread-safe)
+                self._connect_publish_channel()
+                
                 return True
                 
             except (AMQPConnectionError, Exception) as e:
@@ -275,6 +291,51 @@ class VideoWorker:
                     logger.error("   2. Check RABBITMQ_HOST and RABBITMQ_PORT environment variables")
                     logger.error("   3. For local testing, use SSH Tunnel: ssh -L 5672:localhost:5672 ...")
                     return False
+    
+    def _connect_publish_channel(self):
+        """
+        สร้าง publish connection/channel แยกสำหรับ publishing จาก threads
+        เพื่อแก้ปัญหา thread-safety กับ Pika BlockingConnection
+        """
+        try:
+            logger.info("🔗 Creating separate publish connection for thread-safe publishing...")
+            
+            credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
+            heartbeat_timeout = int(os.getenv('RABBITMQ_HEARTBEAT_TIMEOUT', '1800'))
+            blocked_timeout = int(os.getenv('RABBITMQ_BLOCKED_TIMEOUT', '600'))
+            
+            parameters = pika.ConnectionParameters(
+                host=self.rabbitmq_host,
+                port=self.rabbitmq_port,
+                credentials=credentials,
+                heartbeat=heartbeat_timeout,
+                blocked_connection_timeout=blocked_timeout,
+                connection_attempts=3,
+                retry_delay=2
+            )
+            
+            self.publish_connection = pika.BlockingConnection(parameters)
+            self.publish_channel = self.publish_connection.channel()
+            
+            logger.info("✅ Publish connection created successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to create publish connection: {e}")
+            logger.warning("⚠️ Will fall back to main channel (may cause thread-safety issues)")
+            self.publish_connection = None
+            self.publish_channel = None
+    
+    def _get_publish_channel(self):
+        """
+        Get publish channel (thread-safe)
+        ถ้า publish connection ไม่มี ให้ใช้ main channel แทน (แต่ไม่แนะนำ)
+        """
+        if self.publish_channel and not self.publish_channel.is_closed:
+            return self.publish_channel
+        elif self.channel and not self.channel.is_closed:
+            logger.warning("⚠️ Using main channel for publishing (not thread-safe)")
+            return self.channel
+        else:
+            raise RuntimeError("No available channel for publishing")
     
     def _get_queue_arguments(
         self,
@@ -1708,6 +1769,17 @@ class VideoWorker:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
         finally:
+            # ปิด publish connection
+            try:
+                if self.publish_connection:
+                    try:
+                        if not self.publish_connection.is_closed:
+                            self.publish_connection.close()
+                    except (AttributeError, pika.exceptions.ConnectionClosed):
+                        pass  # Already closed
+            except Exception as e:
+                logger.warning(f"Error closing publish connection: {e}")
+            # ปิด main connection
             try:
                 if self.connection:
                     try:
@@ -1827,10 +1899,13 @@ class VideoWorker:
                     "created_at": datetime.now().isoformat()
                 }
                 
+                # ใช้ publish channel สำหรับ publishing จาก threads (thread-safe)
+                publish_ch = self._get_publish_channel()
+                
                 if is_video:
                     # Route to audio_extraction_queue
                     logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue")
-                    self.channel.basic_publish(
+                    publish_ch.basic_publish(
                         exchange='',
                         routing_key=self.audio_extraction_queue,
                         body=json.dumps(route_message),
@@ -1843,7 +1918,7 @@ class VideoWorker:
                 elif is_audio:
                     # Route directly to transcription_queue
                     logger.info(f"📤 [Download & Route] Routing audio file to transcription_queue")
-                    self.channel.basic_publish(
+                    publish_ch.basic_publish(
                         exchange='',
                         routing_key=self.transcription_queue,
                         body=json.dumps(route_message),
@@ -1856,7 +1931,7 @@ class VideoWorker:
                 else:
                     # Unknown file type - try to route to extraction first
                     logger.warning(f"⚠️ [Download & Route] Unknown file type - routing to audio_extraction_queue")
-                    self.channel.basic_publish(
+                    publish_ch.basic_publish(
                         exchange='',
                         routing_key=self.audio_extraction_queue,
                         body=json.dumps(route_message),
@@ -1951,7 +2026,9 @@ class VideoWorker:
                 }
                 
                 logger.info(f"📤 [Audio Extraction] Sending to transcription_queue: {task_id}")
-                self.channel.basic_publish(
+                # ใช้ publish channel สำหรับ publishing จาก threads (thread-safe)
+                publish_ch = self._get_publish_channel()
+                publish_ch.basic_publish(
                     exchange='',
                     routing_key=self.transcription_queue,
                     body=json.dumps(transcription_message),
