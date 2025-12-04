@@ -180,6 +180,25 @@ class TranscriptionService:
             response.user_id = data.get("user_id", getattr(existing, "user_id", None))
             response.callback_url = data.get("callback_url", getattr(existing, "callback_url", None))
             
+            # เติมข้อมูล progress tracking และ time tracking ใหม่
+            valid_chunks = [c for c in chunk_entries if c is not None]
+            
+            # Progress tracking: total_chunks, completed_chunks
+            response.total_chunks = data.get("total_chunks") or (len(valid_chunks) if valid_chunks else None)
+            response.completed_chunks = data.get("completed_chunks") or len(valid_chunks)
+            
+            # Progress tracking: total_tasks, completed_tasks
+            response.total_tasks = data.get("total_tasks")
+            response.completed_tasks = data.get("completed_tasks")
+            
+            # Time tracking: แยกตาม phase
+            response.audio_extraction_time = self._coerce_optional_float(data.get("audio_extraction_time"))
+            response.transcription_time = self._coerce_optional_float(data.get("transcription_time"))
+            response.text_correction_time = self._coerce_optional_float(data.get("text_correction_time"))
+            
+            # Task breakdown
+            response.task_breakdown = data.get("task_breakdown")
+            
             return response
         except Exception as error:
             logger.error(f"ไม่สามารถสร้าง TranscriptionResponse จาก storage สำหรับ task {task_id}: {error}")
@@ -532,6 +551,8 @@ class TranscriptionService:
                 
                 # Extract audio ถ้าเป็น video
                 audio_path = local_file_path
+                audio_extraction_time = None  # Initialize เป็น None
+                
                 if is_video:
                     logger.info("🎬 ไฟล์เป็น video - กำลัง extract audio...")
                     try:
@@ -539,18 +560,25 @@ class TranscriptionService:
                         # ส่ง task_id เพื่อบันทึก metrics แยกจาก transcription
                         audio_path = self.video_service.extract_audio(local_file_path, task_id=task_id)
                         logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
+                        # Note: audio_extraction_time จะถูกบันทึกใน audio_extraction_queue worker
+                        # สำหรับกรณี non-chunking ที่เรียก transcription_service โดยตรง จะไม่มี audio_extraction_time
                     except Exception as e:
                         logger.error(f"❌ ไม่สามารถ extract audio ได้: {e}", exc_info=True)
                         raise
-                elif not is_audio:
+                elif is_audio:
+                    logger.info("🎵 ไฟล์เป็น audio file โดยตรง - ไม่ต้อง extract audio")
+                    # audio_extraction_time จะเป็น None (ไม่มีการ extract)
+                else:
                     logger.warning("⚠️ ไม่ทราบประเภทไฟล์ - ลองใช้ extract_audio()")
                     try:
                         audio_path = self.video_service.extract_audio(local_file_path, task_id=task_id)
                         logger.info(f"✅ Extract audio สำเร็จ: {audio_path}")
+                        # Note: ถ้าสำเร็จจะถือว่าเป็น video และ extract แล้ว
                     except Exception as e:
                         logger.warning(f"⚠️ extract_audio() ล้มเหลว: {e}")
                         # ใช้ไฟล์เดิม (อาจเป็น audio อยู่แล้ว)
                         audio_path = local_file_path
+                        # audio_extraction_time จะเป็น None (ไม่มีการ extract)
                 
                 # ตรวจสอบ timeout อีกครั้งก่อนเริ่ม transcription
                 if self._check_task_timeout(task_id, task):
@@ -609,6 +637,53 @@ class TranscriptionService:
                         text_length = len(task.full_text) if task.full_text else 0
                         chunks_count = len(task.chunks) if task.chunks else 0
                         logger.info(f"✅ Transcription สำเร็จ: text length={text_length}, segments={chunks_count}")
+                        
+                        # บันทึก transcription_time ใน task metadata
+                        task_dict = task.__dict__.copy()
+                        task_dict['transcription_time'] = transcription_time
+                        task_dict['time_used'] = transcription_time  # สำหรับ backward compatibility
+                        
+                        # อัปเดต total_chunks และ completed_chunks (สำหรับ non-chunking mode)
+                        # ใน non-chunking mode: total_chunks = 1 (ทั้งไฟล์คือ 1 chunk)
+                        task_dict['total_chunks'] = 1
+                        task_dict['completed_chunks'] = 1
+                        
+                        # อัปเดต total_tasks และ completed_tasks
+                        # total_tasks = 1 (audio extraction, ถ้ามี) + 1 (transcription)
+                        # ตรวจสอบว่ามี audio_extraction_time หรือไม่
+                        existing_data = self.json_storage.load_transcription(task_id)
+                        audio_extraction_done = existing_data and existing_data.get('audio_extraction_time') is not None
+                        
+                        # ถ้าไม่มี audio_extraction_time (เช่น เป็น audio file โดยตรง) ให้ตั้งเป็น None ชัดเจน
+                        if 'audio_extraction_time' not in task_dict:
+                            if existing_data and 'audio_extraction_time' in existing_data:
+                                # ดึงจาก existing_data (อาจบันทึกจาก audio extraction queue)
+                                task_dict['audio_extraction_time'] = existing_data.get('audio_extraction_time')
+                            else:
+                                # เป็น audio file โดยตรง - ไม่มีการ extract audio
+                                task_dict['audio_extraction_time'] = None
+                        
+                        total_tasks = (1 if audio_extraction_done else 0) + 1  # 1 transcription task
+                        completed_tasks = (1 if audio_extraction_done else 0) + 1
+                        task_dict['total_tasks'] = total_tasks
+                        task_dict['completed_tasks'] = completed_tasks
+                        
+                        # สร้าง task_breakdown ถ้ายังไม่มี
+                        if 'task_breakdown' not in task_dict:
+                            task_dict['task_breakdown'] = []
+                        
+                        # เพิ่ม transcription task ใน task_breakdown ถ้ายังไม่มี
+                        transcription_task_exists = any(
+                            t.get('type') == 'transcription' for t in task_dict.get('task_breakdown', [])
+                        )
+                        if not transcription_task_exists:
+                            task_dict['task_breakdown'].append({
+                                'type': 'transcription',
+                                'status': 'completed',
+                                'time': transcription_time,
+                                'chunks_count': chunks_count,
+                                'completed_at': datetime.now().isoformat()
+                            })
                     else:
                         transcription_time = time.time() - transcription_start_time
                         logger.error(f"❌ [Transcription] Transcription returned None or empty result")
@@ -623,10 +698,12 @@ class TranscriptionService:
                         task.status = "failed"
                         task.error_message = "Transcription returned empty result"
                         task.progress = 0
+                        task_dict = task.__dict__.copy()
+                        task_dict['transcription_time'] = transcription_time
                     
                     # บันทึกผลลัพธ์
                     logger.info(f"💾 Saving transcription result to storage...")
-                    self.json_storage.save_transcription(task_id, task.__dict__)
+                    self.json_storage.save_transcription(task_id, task_dict)
                     logger.info(f"✅ Transcription saved to storage")
                     
                     # Cleanup temporary audio file (ถ้า extract จาก video)
@@ -1045,10 +1122,17 @@ class TranscriptionService:
             # Note: full_text และ chunks ถูกบันทึกไปแล้วที่บรรทัด 470
             logger.info("กำลังบันทึกผลลัพธ์สุดท้าย (metadata update)...")
             
+            # ดึงข้อมูลที่มีอยู่แล้วจาก storage เพื่อ merge (เช่น transcription_time, audio_extraction_time, total_tasks, etc.)
+            existing_data = self.json_storage.load_transcription(task_id)
+            
             # คำนวณ processing time
             completed_time = datetime.now()
             created_time = task.created_at if task.created_at else completed_time
             processing_time_seconds = (completed_time - created_time).total_seconds()
+            
+            # ดึง transcription_time และ audio_extraction_time จาก existing_data ถ้ามี
+            transcription_time = existing_data.get('transcription_time') if existing_data else None
+            audio_extraction_time = existing_data.get('audio_extraction_time') if existing_data else None
             
             final_data = {
                 "task_id": task.task_id,
@@ -1066,14 +1150,22 @@ class TranscriptionService:
                 "completed_at": completed_time.isoformat(),  # อัปเดต completed_at
                 "end_time": completed_time.isoformat(),  # Alias for compatibility
                 "updated_at": completed_time.isoformat(),
-                "processing_time": processing_time_seconds,  # เวลาที่ใช้ในการประมวลผล (วินาที)
+                "processing_time": processing_time_seconds,  # เวลาที่ใช้ในการประมวลผลทั้งหมด (วินาที)
                 "result_time": processing_time_seconds,  # Alias for compatibility
+                "transcription_time": transcription_time,  # เวลาที่ใช้ในการ transcription โดยเฉพาะ (วินาที)
+                "audio_extraction_time": audio_extraction_time,  # เวลาที่ใช้ในการ extract audio (วินาที), None ถ้าเป็น audio file โดยตรง
                 "error_message": task.error_message,
                 "progress": 100,  # อัปเดต progress เป็น 100
                 "job_id": getattr(task, "job_id", None),
                 "user_id": getattr(task, "user_id", None),
                 "callback_url": getattr(task, "callback_url", None)
             }
+            
+            # รวมข้อมูล progress tracking จาก existing_data ถ้ามี
+            if existing_data:
+                for key in ['total_tasks', 'completed_tasks', 'total_chunks', 'completed_chunks', 'task_breakdown']:
+                    if key in existing_data:
+                        final_data[key] = existing_data[key]
             
             # บันทึก metadata อัปเดต (จะ merge กับข้อมูลเดิม)
             logger.info(f"💾 Updating final metadata: task_id={task_id}, full_text length={len(task.full_text) if task.full_text else 0}, chunks count={len(final_data['chunks'])}")

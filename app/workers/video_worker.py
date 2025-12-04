@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from typing import Dict, Any
 import pika
 from pika.exceptions import AMQPConnectionError
@@ -1480,6 +1481,38 @@ class VideoWorker:
             # Update progress
             completed_chunks = sum(1 for c in parent_task['chunks'] if c is not None)
             
+            # อัปเดต total_chunks และ completed_chunks
+            parent_task['total_chunks'] = total_chunks
+            parent_task['completed_chunks'] = completed_chunks
+            
+            # อัปเดต total_tasks และ completed_tasks
+            # total_tasks = 1 (audio extraction, ถ้ามีและไม่เป็น null) + total_chunks (transcription chunks)
+            # ถ้าเป็น audio file โดยตรง audio_extraction_time จะเป็น None → total_tasks = total_chunks (ไม่มี audio extraction task)
+            audio_extraction_done = parent_task.get('audio_extraction_time') is not None
+            total_tasks = (1 if audio_extraction_done else 0) + total_chunks
+            completed_tasks = (1 if audio_extraction_done else 0) + completed_chunks
+            parent_task['total_tasks'] = total_tasks
+            parent_task['completed_tasks'] = completed_tasks
+            
+            # สร้าง task_breakdown ถ้ายังไม่มี
+            if 'task_breakdown' not in parent_task:
+                parent_task['task_breakdown'] = []
+            
+            # เพิ่ม transcription chunk task ใน task_breakdown
+            chunk_processing_time = chunk_data.get('processing_time', 0)
+            chunk_task_exists = any(
+                t.get('type') == 'transcription_chunk' and t.get('chunk_index') == chunk_index
+                for t in parent_task['task_breakdown']
+            )
+            if not chunk_task_exists:
+                parent_task['task_breakdown'].append({
+                    'type': 'transcription_chunk',
+                    'chunk_index': chunk_index,
+                    'status': 'completed',
+                    'time': chunk_processing_time,
+                    'completed_at': datetime.now().isoformat()
+                })
+            
             # ตรวจสอบ display_mode เพื่อคำนวณ progress
             display_mode = parent_task.get('display_mode', 'full_text')
             if display_mode == 'realtime_chunks':
@@ -1497,7 +1530,7 @@ class VideoWorker:
             # Save to storage
             self.json_storage.save_transcription(parent_task_id, parent_task)
             
-            logger.info(f"💾 Saved chunk {chunk_index+1}/{total_chunks} - Progress: {progress}% ({completed_chunks}/{total_chunks} completed)")
+            logger.info(f"💾 Saved chunk {chunk_index+1}/{total_chunks} - Progress: {progress}% ({completed_chunks}/{total_chunks} completed, {completed_tasks}/{total_tasks} tasks)")
             
             # Check if all chunks completed
             if completed_chunks >= total_chunks:
@@ -1769,12 +1802,59 @@ class VideoWorker:
                         full_text = task_in_service.full_text if task_in_service.full_text else ''
                         chunks = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
                 
+                # ดึง transcription_time จาก existing_transcription
+                transcription_time = existing_transcription.get('transcription_time') or existing_transcription.get('processing_time') or existing_transcription.get('time_used')
+                
+                # คำนวณ chunks ข้อมูล
+                valid_chunks = [c for c in chunks if c is not None]
+                total_chunks = len(valid_chunks) if valid_chunks else (existing_transcription.get('total_chunks') or 0)
+                
                 task_data['status'] = 'completed'
                 task_data['completed_at'] = datetime.now().isoformat()
                 task_data['progress'] = 100
                 task_data['full_text'] = full_text
                 task_data['chunks'] = chunks
                 task_data['total_duration'] = existing_transcription.get('total_duration', task_data.get('total_duration'))
+                
+                # บันทึก transcription_time ใน task metadata
+                if transcription_time:
+                    task_data['transcription_time'] = transcription_time
+                
+                # ตรวจสอบ audio_extraction_time - ถ้าไม่มี (เป็น audio file โดยตรง) จะเป็น None
+                if 'audio_extraction_time' not in task_data:
+                    # ดึงจาก existing_transcription ถ้ามี (อาจบันทึกจาก audio extraction queue)
+                    audio_extraction_time = existing_transcription.get('audio_extraction_time') if existing_transcription else None
+                    task_data['audio_extraction_time'] = audio_extraction_time  # อาจเป็น None ถ้าเป็น audio file โดยตรง
+                
+                # อัปเดต total_chunks และ completed_chunks
+                task_data['total_chunks'] = total_chunks if total_chunks > 0 else len(valid_chunks)
+                task_data['completed_chunks'] = len(valid_chunks)
+                
+                # อัปเดต total_tasks และ completed_tasks
+                # total_tasks = 1 (audio extraction, ถ้ามีและไม่เป็น null) + total_chunks (transcription chunks)
+                # ถ้าเป็น audio file โดยตรง audio_extraction_time จะเป็น None → total_tasks = total_chunks
+                audio_extraction_done = task_data.get('audio_extraction_time') is not None
+                total_tasks = (1 if audio_extraction_done else 0) + (total_chunks if total_chunks > 0 else 1)
+                completed_tasks = (1 if audio_extraction_done else 0) + len(valid_chunks)
+                task_data['total_tasks'] = total_tasks if total_tasks > 0 else 1  # อย่างน้อย 1 task (transcription)
+                task_data['completed_tasks'] = completed_tasks
+                
+                # สร้าง task_breakdown ถ้ายังไม่มี
+                if 'task_breakdown' not in task_data:
+                    task_data['task_breakdown'] = []
+                
+                # เพิ่ม transcription task ใน task_breakdown ถ้ายังไม่มี
+                transcription_task_exists = any(
+                    t.get('type') == 'transcription' for t in task_data.get('task_breakdown', [])
+                )
+                if transcription_time and not transcription_task_exists:
+                    task_data['task_breakdown'].append({
+                        'type': 'transcription',
+                        'status': 'completed',
+                        'time': transcription_time,
+                        'chunks_count': len(valid_chunks),
+                        'completed_at': datetime.now().isoformat()
+                    })
             else:
                 # ถ้าไม่มี existing_transcription ให้ลองดึงจาก task object ใน transcription_service
                 logger.warning(f"⚠️  No existing transcription data found in storage for {task_id}")
@@ -2133,8 +2213,30 @@ class VideoWorker:
                 
                 # Extract audio using VideoService (uses Thread Pool)
                 logger.info(f"🎬 [Audio Extraction] Starting audio extraction...")
+                extraction_start_time = time.time()
                 audio_path = self.video_service.extract_audio(video_file_path, task_id=task_id)
+                extraction_time = time.time() - extraction_start_time
                 logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
+                logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+                
+                # บันทึก audio_extraction_time ใน task metadata
+                task_data['audio_extraction_time'] = extraction_time
+                
+                # Initialize task_breakdown ถ้ายังไม่มี
+                if 'task_breakdown' not in task_data:
+                    task_data['task_breakdown'] = []
+                
+                # เพิ่ม audio extraction task ใน task_breakdown
+                task_data['task_breakdown'].append({
+                    'type': 'audio_extraction',
+                    'status': 'completed',
+                    'time': extraction_time,
+                    'completed_at': datetime.now().isoformat()
+                })
+                
+                # อัปเดต total_tasks และ completed_tasks
+                task_data['total_tasks'] = task_data.get('total_tasks', 0) + 1  # Audio extraction task
+                task_data['completed_tasks'] = task_data.get('completed_tasks', 0) + 1
                 
                 # Update status
                 task_data['status'] = 'routing_to_transcription'
