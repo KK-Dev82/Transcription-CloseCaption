@@ -132,6 +132,28 @@ class TranscriptionService:
                 except Exception:
                     time_used = None
             
+            # สร้าง original_text และ corrected_text จาก chunks
+            original_text_parts = []
+            corrected_text_parts = []
+            for chunk in chunk_entries:
+                # ถ้า chunk มี original_text และ text แสดงว่าได้ผ่าน correction แล้ว
+                if chunk.get("original_text") and chunk.get("text"):
+                    original_text_parts.append(chunk.get("original_text", ""))
+                    corrected_text_parts.append(chunk.get("text", ""))
+                else:
+                    # ถ้าไม่มี original_text ให้ใช้ text เป็นทั้ง original และ corrected
+                    chunk_text = chunk.get("text", "")
+                    original_text_parts.append(chunk_text)
+                    corrected_text_parts.append(chunk_text)
+            
+            original_text = " ".join(original_text_parts) if original_text_parts else None
+            corrected_text = " ".join(corrected_text_parts) if corrected_text_parts else None
+            
+            # ถ้า full_text มีอยู่แล้วและ chunks ไม่มี original_text ให้ใช้ full_text เป็น corrected_text
+            full_text_value = data.get("full_text")
+            if full_text_value and not corrected_text:
+                corrected_text = full_text_value
+            
             response = TranscriptionResponse(
                 task_id=task_id,
                 status=str(data.get("status", getattr(existing, "status", "pending"))),
@@ -140,7 +162,9 @@ class TranscriptionService:
                 file_name=data.get("file_name") or getattr(existing, "file_name", None),
                 total_duration=self._coerce_optional_float(data.get("total_duration")),
                 chunks=chunk_objects or None,
-                full_text=data.get("full_text"),
+                full_text=full_text_value,
+                original_text=original_text or data.get("original_text"),
+                corrected_text=corrected_text or data.get("corrected_text"),
                 partial_text=data.get("partial_text", getattr(existing, "partial_text", None)),
                 language=data.get("language") or getattr(existing, "language", None),
                 created_at=created_at,

@@ -904,7 +904,13 @@
                 <h3>📋 รายการ Tasks ทั้งหมด</h3>
                 <div class="task-list-controls">
                     <input type="text" id="taskListSearch" placeholder="ค้นหา Task ID..." onkeyup="filterTaskList()">
+                    <input type="text" id="textSearchInput" placeholder="🔍 ค้นหาข้อความ (แสดงเวลาที่พบ)..." onkeyup="handleTextSearch()" style="flex: 1; min-width: 250px;">
+                    <button onclick="clearTextSearch()" class="copy-btn" id="clearSearchBtn" style="display: none;">✕ ล้าง</button>
                     <button onclick="exportTaskList()" class="copy-btn">📥 Export เป็น CSV</button>
+                </div>
+                <div id="textSearchResults" style="display: none; margin-bottom: 15px; padding: 15px; background: #e3f2fd; border-radius: 8px; border-left: 4px solid #0d6efd;">
+                    <h4 style="margin-bottom: 10px; color: #0d6efd;">🔍 ผลการค้นหา: "<span id="searchQueryText"></span>"</h4>
+                    <div id="searchResultsList"></div>
                 </div>
                 <div class="table-container">
                     <table class="task-list-table" id="taskListTable">
@@ -948,6 +954,10 @@
                 </div>
                 <div class="modal-body">
                     <div class="modal-task-info" id="modalTaskInfo"></div>
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <button onclick="switchTextMode('corrected')" id="btnCorrected" class="copy-btn" style="flex: 1;">✅ Corrected Text</button>
+                        <button onclick="switchTextMode('original')" id="btnOriginal" class="copy-btn" style="flex: 1; background: #6c757d;">📝 Original Text</button>
+                    </div>
                     <div class="transcription-text-container">
                         <textarea id="modalTranscriptionText" readonly></textarea>
                     </div>
@@ -1464,17 +1474,24 @@
                     }
                 }
                 
-                // Try to get full_text from task status first
-                let fullText = null;
-                if (task && task.full_text) {
-                    fullText = task.full_text;
-                } else {
-                    // Fallback: try to fetch from /text endpoint
+                // Try to get both original_text and corrected_text
+                let originalText = null;
+                let correctedText = null;
+                
+                // Get from task status first
+                if (task) {
+                    originalText = task.original_text;
+                    correctedText = task.corrected_text || task.full_text;
+                }
+                
+                // Fallback: try to fetch from /text endpoint
+                if (!originalText || !correctedText) {
                     try {
                         const response = await fetch(`${API_BASE_URL}/transcribe/${taskId}/text`);
                         if (response.ok) {
                             const textData = await response.json();
-                            fullText = textData.full_text;
+                            originalText = textData.original_text || originalText || textData.full_text;
+                            correctedText = textData.corrected_text || textData.full_text || correctedText;
                         }
                     } catch (e) {
                         console.warn('Could not fetch from /text endpoint:', e);
@@ -1482,15 +1499,20 @@
                 }
                 
                 // If still no text, check if task is completed but has no text
-                if (!fullText) {
+                if (!correctedText && !originalText) {
                     if (task && task.status === 'completed') {
-                        fullText = '⚠️ การแปลงเสร็จแล้ว แต่ไม่พบข้อความ (อาจเป็นเพราะไฟล์ไม่มีเสียงหรือเกิดข้อผิดพลาดในการแปลง)';
+                        correctedText = '⚠️ การแปลงเสร็จแล้ว แต่ไม่พบข้อความ (อาจเป็นเพราะไฟล์ไม่มีเสียงหรือเกิดข้อผิดพลาดในการแปลง)';
                     } else if (task && task.status === 'failed') {
-                        fullText = `❌ การแปลงล้มเหลว: ${task.error_message || 'ไม่ทราบสาเหตุ'}`;
+                        correctedText = `❌ การแปลงล้มเหลว: ${task.error_message || 'ไม่ทราบสาเหตุ'}`;
                     } else {
-                        fullText = '⚠️ ยังไม่พบข้อความ - การแปลงอาจยังไม่เสร็จ หรือยังไม่มีข้อความ';
+                        correctedText = '⚠️ ยังไม่พบข้อความ - การแปลงอาจยังไม่เสร็จ หรือยังไม่มีข้อความ';
                     }
                 }
+                
+                // Store both texts for switching
+                modalText.dataset.originalText = originalText || '';
+                modalText.dataset.correctedText = correctedText || '';
+                modalText.dataset.currentMode = 'corrected';
                 
                 // Update modal content
                 modalTaskInfo.innerHTML = `
@@ -1498,12 +1520,16 @@
                     <strong>สถานะ:</strong> ${task ? task.status : 'unknown'}<br>
                     <strong>ภาษา:</strong> ${task ? (task.language || 'th') : 'th'}<br>
                     <strong>ระยะเวลา:</strong> ${task && task.total_duration ? formatTime(task.total_duration) : '-'}<br>
-                    <strong>ความยาวข้อความ:</strong> ${fullText ? fullText.length : 0} ตัวอักษร<br>
+                    <strong>ความยาวข้อความ (Corrected):</strong> ${correctedText ? correctedText.length : 0} ตัวอักษร<br>
+                    ${originalText ? `<strong>ความยาวข้อความ (Original):</strong> ${originalText.length} ตัวอักษร<br>` : ''}
                     <strong>Progress:</strong> ${task ? (task.progress || 0) : 0}%
                 `;
                 
-                modalText.value = fullText || 'ไม่พบข้อความ';
-                modalText.dataset.taskId = taskId;
+                // Show corrected text by default
+                modalText.value = correctedText || originalText || 'ไม่พบข้อความ';
+                
+                // Update button states
+                switchTextMode('corrected');
                 
             } catch (error) {
                 console.error('Error fetching transcription text:', error);
@@ -1523,6 +1549,27 @@
             textarea.select();
             document.execCommand('copy');
             alert('✅ คัดลอกข้อความเรียบร้อยแล้ว!');
+        }
+        
+        // Switch between original and corrected text
+        function switchTextMode(mode) {
+            const textarea = document.getElementById('modalTranscriptionText');
+            const btnOriginal = document.getElementById('btnOriginal');
+            const btnCorrected = document.getElementById('btnCorrected');
+            
+            if (mode === 'original') {
+                const originalText = textarea.dataset.originalText || '';
+                textarea.value = originalText || 'ไม่พบ Original Text';
+                textarea.dataset.currentMode = 'original';
+                btnOriginal.style.background = '#6c757d';
+                btnCorrected.style.background = '#667eea';
+            } else {
+                const correctedText = textarea.dataset.correctedText || '';
+                textarea.value = correctedText || 'ไม่พบ Corrected Text';
+                textarea.dataset.currentMode = 'corrected';
+                btnCorrected.style.background = '#6c757d';
+                btnOriginal.style.background = '#667eea';
+            }
         }
         
         // Close modal when clicking outside
@@ -2080,6 +2127,170 @@
             } catch (error) {
                 console.error('Error checking test status:', error);
             }
+        }
+        
+        // ============ Text Search Functions ============
+        
+        let searchTimeout = null;
+        
+        // Handle text search with debounce
+        async function handleTextSearch() {
+            const searchInput = document.getElementById('textSearchInput');
+            const query = searchInput.value.trim();
+            const clearBtn = document.getElementById('clearSearchBtn');
+            const resultsDiv = document.getElementById('textSearchResults');
+            
+            if (!query) {
+                clearTextSearch();
+                return;
+            }
+            
+            clearBtn.style.display = 'inline-block';
+            
+            // Debounce search
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+            
+            searchTimeout = setTimeout(async () => {
+                await performTextSearch(query);
+            }, 500);
+        }
+        
+        // Clear text search
+        function clearTextSearch() {
+            document.getElementById('textSearchInput').value = '';
+            document.getElementById('clearSearchBtn').style.display = 'none';
+            document.getElementById('textSearchResults').style.display = 'none';
+        }
+        
+        // Perform text search in chunks
+        async function performTextSearch(query) {
+            const resultsDiv = document.getElementById('textSearchResults');
+            const resultsList = document.getElementById('searchResultsList');
+            const queryText = document.getElementById('searchQueryText');
+            
+            queryText.textContent = query;
+            resultsDiv.style.display = 'block';
+            resultsList.innerHTML = '<div style="padding: 10px; color: #666;">กำลังค้นหา...</div>';
+            
+            const searchResults = [];
+            const searchQuery = query.toLowerCase();
+            
+            // Search in all loaded tasks
+            for (const taskId of taskIds) {
+                const task = tasksData[taskId];
+                if (!task || task.status !== 'completed') {
+                    continue;
+                }
+                
+                // Fetch chunks if not already loaded
+                let chunks = task.chunks;
+                if (!chunks || chunks.length === 0) {
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/transcribe/${taskId}/chunks`);
+                        if (response.ok) {
+                            const chunksData = await response.json();
+                            chunks = chunksData.chunks || [];
+                            // Cache chunks
+                            if (!tasksData[taskId].chunks) {
+                                tasksData[taskId].chunks = chunks;
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`Error fetching chunks for task ${taskId}:`, error);
+                        continue;
+                    }
+                }
+                
+                if (!chunks || chunks.length === 0) {
+                    continue;
+                }
+                
+                // Search in chunks
+                for (const chunk of chunks) {
+                    const chunkText = (chunk.text || '').toLowerCase();
+                    const originalText = (chunk.original_text || '').toLowerCase();
+                    
+                    // Search in corrected text or original text
+                    const textToSearch = chunkText || originalText;
+                    if (textToSearch.includes(searchQuery)) {
+                        const startTime = chunk.start_time || chunk.start || 0;
+                        const endTime = chunk.end_time || chunk.end || 0;
+                        
+                        searchResults.push({
+                            taskId: taskId,
+                            startTime: startTime,
+                            endTime: endTime,
+                            text: chunk.text || chunk.original_text || '',
+                            originalText: chunk.original_text || chunk.text || ''
+                        });
+                    }
+                }
+            }
+            
+            // Display results
+            if (searchResults.length === 0) {
+                resultsList.innerHTML = '<div style="padding: 10px; color: #856404;">ไม่พบข้อความที่ค้นหา</div>';
+                return;
+            }
+            
+            // Group by task
+            const resultsByTask = {};
+            searchResults.forEach(result => {
+                if (!resultsByTask[result.taskId]) {
+                    resultsByTask[result.taskId] = [];
+                }
+                resultsByTask[result.taskId].push(result);
+            });
+            
+            let html = '';
+            for (const taskId in resultsByTask) {
+                const taskResults = resultsByTask[taskId];
+                const task = tasksData[taskId] || {};
+                
+                html += `<div style="margin-bottom: 15px; padding: 10px; background: white; border-radius: 5px; border-left: 3px solid #0d6efd;">`;
+                html += `<div style="font-weight: bold; margin-bottom: 5px; color: #0d6efd;">Task: ${taskId.substring(0, 8)}... (พบ ${taskResults.length} ครั้ง)</div>`;
+                
+                taskResults.forEach((result, index) => {
+                    html += `<div style="margin: 5px 0; padding: 8px; background: #f8f9fa; border-radius: 3px;">`;
+                    html += `<div style="font-size: 0.9em; color: #666; margin-bottom: 3px;">`;
+                    html += `⏱️ เวลา: ${formatTime(result.startTime)} - ${formatTime(result.endTime)}`;
+                    html += `</div>`;
+                    html += `<div style="font-size: 0.95em; color: #333;">`;
+                    
+                    // Highlight search query in text
+                    const highlightedText = highlightText(result.text, query);
+                    html += highlightedText;
+                    html += `</div>`;
+                    
+                    // Show original text if different
+                    if (result.originalText && result.originalText !== result.text) {
+                        html += `<div style="font-size: 0.85em; color: #856404; margin-top: 5px; font-style: italic;">`;
+                        html += `📝 Raw: ${result.originalText.substring(0, 100)}${result.originalText.length > 100 ? '...' : ''}`;
+                        html += `</div>`;
+                    }
+                    
+                    html += `</div>`;
+                });
+                
+                html += `</div>`;
+            }
+            
+            resultsList.innerHTML = html;
+        }
+        
+        // Highlight search text in result
+        function highlightText(text, query) {
+            if (!text || !query) return text;
+            
+            const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
+            return text.replace(regex, '<mark style="background: #ffc107; padding: 2px 4px; border-radius: 3px;">$1</mark>');
+        }
+        
+        // Escape regex special characters
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
         
     </script>
