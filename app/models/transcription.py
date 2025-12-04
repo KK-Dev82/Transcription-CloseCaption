@@ -1,5 +1,5 @@
 from pydantic import BaseModel, AnyHttpUrl, root_validator
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 class TranscriptionRequest(BaseModel):
@@ -52,4 +52,18 @@ class TranscriptionResponse(BaseModel):
     error_message: Optional[str] = None
     progress: Optional[int] = 0  # Progress percentage (0-100)
     updated_at: Optional[datetime] = None
-    time_used: Optional[float] = None  # เวลาที่ใช้ในการประมวลผล (วินาที) 
+    time_used: Optional[float] = None  # เวลาที่ใช้ในการประมวลผล (วินาที)
+    
+    # Progress tracking แบบ x/total
+    total_chunks: Optional[int] = None  # จำนวน chunks ทั้งหมด (ถ้าใช้ chunking)
+    completed_chunks: Optional[int] = None  # จำนวน chunks ที่เสร็จแล้ว
+    total_tasks: Optional[int] = None  # จำนวน tasks ทั้งหมด (1 audio extraction + N transcription chunks)
+    completed_tasks: Optional[int] = None  # จำนวน tasks ที่เสร็จแล้ว
+    
+    # Time tracking แยกตาม phase
+    audio_extraction_time: Optional[float] = None  # เวลาที่ใช้ extract audio (วินาที) - จะเป็น None ถ้าเป็น audio file โดยตรง (ไม่ต้อง extract)
+    transcription_time: Optional[float] = None  # เวลาที่ใช้ transcription (วินาที, ไม่รวม correction)
+    text_correction_time: Optional[float] = None  # เวลาที่ใช้ text correction (วินาที)
+    
+    # Task breakdown สำหรับแสดงรายละเอียด
+    task_breakdown: Optional[List[Dict]] = None  # รายละเอียดของ tasks: [{"type": "audio_extraction", "status": "completed", "time": 0.92}, ...] 

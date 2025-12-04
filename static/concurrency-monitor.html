@@ -862,6 +862,14 @@
                         <span class="timeline-label">เวลาที่ช้าที่สุด:</span>
                         <span class="timeline-value" id="timelineMax">-</span>
                     </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">Audio Extract เฉลี่ย:</span>
+                        <span class="timeline-value" id="timelineAvgAudioExtract">-</span>
+                    </div>
+                    <div class="timeline-item">
+                        <span class="timeline-label">Transcription เฉลี่ย:</span>
+                        <span class="timeline-value" id="timelineAvgTranscription">-</span>
+                    </div>
                 </div>
             </div>
             
@@ -919,17 +927,18 @@
                                 <th>#</th>
                                 <th>Task ID</th>
                                 <th>สถานะ</th>
-                                <th>Progress</th>
+                                <th>Progress (x/total)</th>
                                 <th>เริ่มต้น</th>
                                 <th>เสร็จสิ้น</th>
+                                <th>Audio Extract</th>
+                                <th>Transcription</th>
                                 <th>เวลารวม</th>
-                                <th>เวลาใช้</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="taskListTableBody">
                             <tr>
-                                <td colspan="9" style="text-align: center; padding: 20px; color: #666;">
+                                <td colspan="10" style="text-align: center; padding: 20px; color: #666;">
                                     กำลังโหลดข้อมูล...
                                 </td>
                             </tr>
@@ -1237,6 +1246,30 @@
                     document.getElementById('timelineMin').textContent = formatTime(minTime);
                     document.getElementById('timelineMax').textContent = formatTime(maxTime);
                 }
+                
+                // Calculate average audio extraction time
+                const audioExtractionTimes = completedTasks
+                    .map(t => t.audio_extraction_time)
+                    .filter(t => t !== null && t !== undefined && t > 0);
+                
+                if (audioExtractionTimes.length > 0) {
+                    const avgAudioExtract = audioExtractionTimes.reduce((a, b) => a + b, 0) / audioExtractionTimes.length;
+                    document.getElementById('timelineAvgAudioExtract').textContent = formatTime(avgAudioExtract);
+                } else {
+                    document.getElementById('timelineAvgAudioExtract').textContent = '-';
+                }
+                
+                // Calculate average transcription time
+                const transcriptionTimes = completedTasks
+                    .map(t => t.transcription_time)
+                    .filter(t => t !== null && t !== undefined && t > 0);
+                
+                if (transcriptionTimes.length > 0) {
+                    const avgTranscription = transcriptionTimes.reduce((a, b) => a + b, 0) / transcriptionTimes.length;
+                    document.getElementById('timelineAvgTranscription').textContent = formatTime(avgTranscription);
+                } else {
+                    document.getElementById('timelineAvgTranscription').textContent = '-';
+                }
             }
             
             // Update error summary
@@ -1350,7 +1383,7 @@
             if (!tbody) return;
             
             if (taskIds.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: #666;">ไม่มี Tasks</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 20px; color: #666;">ไม่มี Tasks</td></tr>';
                 return;
             }
             
@@ -1385,12 +1418,26 @@
                         <div class="progress-mini">
                             <div class="progress-mini-fill" style="width: ${progress}%"></div>
                         </div>
+                        ${task.completed_tasks !== undefined && task.total_tasks !== undefined ? 
+                            `<span style="font-size: 0.8em; color: #666; font-weight: bold;">${task.completed_tasks}/${task.total_tasks}</span><br>` : ''
+                        }
                         <span style="font-size: 0.8em; color: #666;">${progress}%</span>
                     </td>
                     <td>${createdAt ? formatDateTime(task.created_at) : '-'}</td>
                     <td>${completedAt ? formatDateTime(task.completed_at) : '-'}</td>
+                    <td>
+                        ${task.audio_extraction_time !== null && task.audio_extraction_time !== undefined ? 
+                            `<span style="font-size: 0.85em; color: #667eea; font-weight: 500;">${formatTime(task.audio_extraction_time)}</span>` : 
+                            '<span style="color: #999;">-</span>'
+                        }
+                    </td>
+                    <td>
+                        ${task.transcription_time !== null && task.transcription_time !== undefined ? 
+                            `<span style="font-size: 0.85em; color: #198754; font-weight: 500;">${formatTime(task.transcription_time)}</span>` : 
+                            '<span style="color: #999;">-</span>'
+                        }
+                    </td>
                     <td>${totalTime !== null ? formatTime(totalTime) : '-'}</td>
-                    <td>${timeUsed !== null && timeUsed !== undefined ? formatTime(timeUsed) : '-'}</td>
                     <td>
                         ${status === 'completed' ? 
                             `<button class="action-btn" onclick="viewTranscriptionText('${taskId}')">ดูคำแปล</button>` : 
@@ -1658,19 +1705,28 @@
                             ${progress}%
                         </div>
                     </div>
+                    ${task.completed_tasks !== undefined && task.total_tasks !== undefined ? 
+                        `<div style="margin-top: 5px; font-size: 0.9em; font-weight: bold; color: #667eea;">Tasks: ${task.completed_tasks}/${task.total_tasks}</div>` : ''
+                    }
                 </div>
                 
                 <div class="task-stats">
+                    ${task.audio_extraction_time !== null && task.audio_extraction_time !== undefined ? `
+                        <div class="task-stats-row">
+                            <span class="label">🎬 Audio Extract:</span>
+                            <span class="value">${formatTime(task.audio_extraction_time)}</span>
+                        </div>
+                    ` : ''}
+                    ${task.transcription_time !== null && task.transcription_time !== undefined ? `
+                        <div class="task-stats-row">
+                            <span class="label">🎯 Transcription:</span>
+                            <span class="value">${formatTime(task.transcription_time)}</span>
+                        </div>
+                    ` : ''}
                     ${totalTime !== null ? `
                         <div class="task-stats-row">
                             <span class="label">⏱️ เวลารวม:</span>
                             <span class="value">${formatTime(totalTime)}</span>
-                        </div>
-                    ` : ''}
-                    ${processingTime !== null ? `
-                        <div class="task-stats-row">
-                            <span class="label">⚙️ ประมวลผล:</span>
-                            <span class="value">${formatTime(processingTime)}</span>
                         </div>
                     ` : ''}
                     ${queueWaitTime !== null ? `
