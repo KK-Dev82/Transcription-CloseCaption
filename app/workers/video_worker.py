@@ -473,6 +473,32 @@ class VideoWorker:
             auto_ack=False
         )
         
+        # ============================================================
+        # 3-Queue Architecture Consumers (New)
+        # ============================================================
+        
+        # Set QoS for transcription_request_queue (prefetch=1)
+        self.channel.basic_qos(prefetch_count=1, prefetch_size=0, global_qos=False)
+        
+        # Transcription Request Queue Consumer (Download & Route)
+        # Consume from transcription_request_queue: Download file → Check type → Route
+        self.channel.basic_consume(
+            queue=self.transcription_request_queue,
+            on_message_callback=self._process_transcription_request_task,
+            auto_ack=False
+        )
+        
+        # Set QoS for audio_extraction_queue (prefetch=1)
+        self.channel.basic_qos(prefetch_count=1, prefetch_size=0, global_qos=False)
+        
+        # Audio Extraction Queue Consumer
+        # Consume from audio_extraction_queue: Extract audio → Send to transcription_queue
+        self.channel.basic_consume(
+            queue=self.audio_extraction_queue,
+            on_message_callback=self._process_audio_extraction_task,
+            auto_ack=False
+        )
+        
         logger.info("ตั้งค่า consumers เสร็จสิ้น")
         logger.info(f"📋 Listening to queues:")
         logger.info(f"   - {self.transcription_queue}")
@@ -482,6 +508,8 @@ class VideoWorker:
         logger.info(f"   - {self.convert_queue}")
         logger.info(f"   - {self.resize_queue}")
         logger.info(f"   - {self.audio_chunk_extracted_queue}")
+        logger.info(f"   - {self.transcription_request_queue} ⭐ (NEW)")
+        logger.info(f"   - {self.audio_extraction_queue} ⭐ (NEW)")
     
     def _process_trim_task(self, ch, method, properties, body):
         """ประมวลผล trim video task"""
@@ -1715,6 +1743,244 @@ class VideoWorker:
                 logger.warning(f"Error stopping maintenance thread: {e}")
             
             logger.info("Video Worker ปิดตัวลง")
+    
+    def _process_transcription_request_task(self, ch, method, properties, body):
+        """
+        ประมวลผล transcription request task (3-Queue Architecture: Stage 1)
+        
+        Logic:
+        1. Download file from file_url
+        2. Check file type (video/audio)
+        3. Route to appropriate queue:
+           - Video → audio_extraction_queue
+           - Audio → transcription_queue
+        """
+        def process_in_thread():
+            task_id = None
+            try:
+                task_data = json.loads(body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                file_url = task_data.get('file_url')
+                file_path = task_data.get('file_path')
+                file_name = task_data.get('file_name')
+                language = task_data.get('language', 'th')
+                model_size = task_data.get('model_size', 'base')
+                chunk_duration = task_data.get('chunk_duration', 30)
+                use_chunking = task_data.get('use_chunking', False)
+                callback_url = task_data.get('callback_url')
+                job_id = task_data.get('job_id')
+                user_id = task_data.get('user_id')
+                
+                logger.info("=" * 80)
+                logger.info(f"🎯 [Download & Route] Processing transcription request: {task_id}")
+                logger.info(f"   File URL: {file_url}")
+                logger.info(f"   File Path: {file_path}")
+                logger.info("=" * 80)
+                
+                # Update status
+                task_data['status'] = 'downloading'
+                task_data['progress'] = 5
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # Step 1: Download file (ถ้าไม่มี file_path หรือ file_path ไม่มีอยู่)
+                local_file_path = file_path
+                if file_url:
+                    if not local_file_path or not Path(local_file_path).exists():
+                        logger.info(f"📥 [Download & Route] Downloading file from URL: {file_url}")
+                        local_file_path, _ = asyncio.run(
+                            self.transcription_service._download_source_file(task_id, file_url, file_name)
+                        )
+                        logger.info(f"✅ [Download & Route] File downloaded: {local_file_path}")
+                    else:
+                        logger.info(f"✅ [Download & Route] Using existing file: {local_file_path}")
+                elif not local_file_path or not Path(local_file_path).exists():
+                    raise FileNotFoundError(f"ไฟล์ไม่พบและไม่มี file_url: {file_path}")
+                
+                # Update status
+                task_data['file_path'] = local_file_path
+                task_data['status'] = 'routing'
+                task_data['progress'] = 10
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # Step 2: Check file type
+                from app.services.file_service import FileService
+                file_service = FileService()
+                is_video = file_service.is_video_file(local_file_path)
+                is_audio = file_service.is_audio_file(local_file_path)
+                
+                logger.info(f"🔍 [Download & Route] File type: {'video' if is_video else 'audio' if is_audio else 'unknown'}")
+                
+                # Step 3: Route to appropriate queue
+                route_message = {
+                    "task_id": task_id,
+                    "file_path": local_file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "status": "pending",
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                if is_video:
+                    # Route to audio_extraction_queue
+                    logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue")
+                    self.channel.basic_publish(
+                        exchange='',
+                        routing_key=self.audio_extraction_queue,
+                        body=json.dumps(route_message),
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Persistent
+                            content_type='application/json'
+                        )
+                    )
+                    logger.info(f"✅ [Download & Route] Routed to audio_extraction_queue: {task_id}")
+                elif is_audio:
+                    # Route directly to transcription_queue
+                    logger.info(f"📤 [Download & Route] Routing audio file to transcription_queue")
+                    self.channel.basic_publish(
+                        exchange='',
+                        routing_key=self.transcription_queue,
+                        body=json.dumps(route_message),
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Persistent
+                            content_type='application/json'
+                        )
+                    )
+                    logger.info(f"✅ [Download & Route] Routed to transcription_queue: {task_id}")
+                else:
+                    # Unknown file type - try to route to extraction first
+                    logger.warning(f"⚠️ [Download & Route] Unknown file type - routing to audio_extraction_queue")
+                    self.channel.basic_publish(
+                        exchange='',
+                        routing_key=self.audio_extraction_queue,
+                        body=json.dumps(route_message),
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,
+                            content_type='application/json'
+                        )
+                    )
+                
+                # Acknowledge message
+                try:
+                    if ch and not ch.is_closed:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        logger.info(f"✅ [Download & Route] Acknowledged message: {task_id}")
+                except Exception as ack_error:
+                    logger.error(f"❌ [Download & Route] Failed to acknowledge: {ack_error}")
+                    
+            except Exception as e:
+                logger.error(f"❌ [Download & Route] Error processing request task {task_id}: {e}", exc_info=True)
+                try:
+                    if ch and not ch.is_closed:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                except Exception as nack_error:
+                    logger.error(f"❌ [Download & Route] Failed to nack message: {nack_error}")
+        
+        # Process in separate thread
+        thread = threading.Thread(target=process_in_thread, daemon=True)
+        thread.start()
+    
+    def _process_audio_extraction_task(self, ch, method, properties, body):
+        """
+        ประมวลผล audio extraction task (3-Queue Architecture: Stage 2)
+        
+        Logic:
+        1. Extract audio from video file
+        2. Send audio file to transcription_queue
+        """
+        def process_in_thread():
+            task_id = None
+            try:
+                task_data = json.loads(body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                video_file_path = task_data.get('file_path')
+                language = task_data.get('language', 'th')
+                model_size = task_data.get('model_size', 'base')
+                chunk_duration = task_data.get('chunk_duration', 30)
+                use_chunking = task_data.get('use_chunking', False)
+                callback_url = task_data.get('callback_url')
+                job_id = task_data.get('job_id')
+                user_id = task_data.get('user_id')
+                
+                logger.info("=" * 80)
+                logger.info(f"🎬 [Audio Extraction] Processing extraction task: {task_id}")
+                logger.info(f"   Video file: {video_file_path}")
+                logger.info("=" * 80)
+                
+                # Update status
+                task_data['status'] = 'extracting_audio'
+                task_data['progress'] = 15
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # Check file exists
+                if not video_file_path or not Path(video_file_path).exists():
+                    raise FileNotFoundError(f"Video file not found: {video_file_path}")
+                
+                # Extract audio using VideoService (uses Thread Pool)
+                logger.info(f"🎬 [Audio Extraction] Starting audio extraction...")
+                audio_path = self.video_service.extract_audio(video_file_path, task_id=task_id)
+                logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
+                
+                # Update status
+                task_data['status'] = 'routing_to_transcription'
+                task_data['progress'] = 25
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # Send to transcription_queue
+                transcription_message = {
+                    "task_id": task_id,
+                    "file_path": audio_path,  # Send audio file path
+                    "file_url": task_data.get('file_url'),  # Keep original URL
+                    "file_name": task_data.get('file_name'),
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "status": "pending",
+                    "created_at": datetime.now().isoformat(),
+                    "audio_extracted_from": video_file_path  # Track original video
+                }
+                
+                logger.info(f"📤 [Audio Extraction] Sending to transcription_queue: {task_id}")
+                self.channel.basic_publish(
+                    exchange='',
+                    routing_key=self.transcription_queue,
+                    body=json.dumps(transcription_message),
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Persistent
+                        content_type='application/json'
+                    )
+                )
+                logger.info(f"✅ [Audio Extraction] Sent to transcription_queue: {task_id}")
+                
+                # Acknowledge message
+                try:
+                    if ch and not ch.is_closed:
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        logger.info(f"✅ [Audio Extraction] Acknowledged message: {task_id}")
+                except Exception as ack_error:
+                    logger.error(f"❌ [Audio Extraction] Failed to acknowledge: {ack_error}")
+                    
+            except Exception as e:
+                logger.error(f"❌ [Audio Extraction] Error processing extraction task {task_id}: {e}", exc_info=True)
+                try:
+                    if ch and not ch.is_closed:
+                        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                except Exception as nack_error:
+                    logger.error(f"❌ [Audio Extraction] Failed to nack message: {nack_error}")
+        
+        # Process in separate thread
+        thread = threading.Thread(target=process_in_thread, daemon=True)
+        thread.start()
 
 def main():
     """Main function สำหรับรัน worker"""
