@@ -53,6 +53,10 @@ class VideoWorker:
         self.transcription_chunk_queue = 'transcription_chunk_queue'
         self.audio_chunk_extracted_queue = 'media.audio.chunk.extracted'
         
+        # 3-Queue Architecture (Final Design)
+        self.transcription_request_queue = 'transcription_request_queue'
+        self.audio_extraction_queue = 'audio_extraction_queue'
+        
         # Transcription exchange
         self.transcription_exchange = 'transcription.exchange'
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
@@ -222,7 +226,7 @@ class VideoWorker:
                     durable=True
                 )
                 
-                # สร้าง queues
+                # สร้าง queues เก่า (backward compatible)
                 self.channel.queue_declare(queue=self.trim_queue, durable=True)
                 self.channel.queue_declare(queue=self.merge_queue, durable=True)
                 self.channel.queue_declare(queue=self.convert_queue, durable=True)
@@ -240,6 +244,11 @@ class VideoWorker:
                     queue=self.audio_chunk_extracted_queue,
                     routing_key='media.audio.chunk.extracted'
                 )
+                
+                # ============================================================
+                # 3-Queue Architecture (Final Design) - Queue Declarations
+                # ============================================================
+                self._declare_quorum_queues()
                 
                 # ตั้งค่า QoS สำหรับ transcription_queue (full video tasks)
                 # prefetch_count=1 หมายความว่าแต่ละ worker จะรับได้แค่ 1 task ต่อครั้ง
@@ -266,6 +275,139 @@ class VideoWorker:
                     logger.error("   2. Check RABBITMQ_HOST and RABBITMQ_PORT environment variables")
                     logger.error("   3. For local testing, use SSH Tunnel: ssh -L 5672:localhost:5672 ...")
                     return False
+    
+    def _get_queue_arguments(
+        self,
+        queue_name: str,
+        max_length: int = 0,
+        enable_dlx: bool = True,
+        enable_quorum: bool = True
+    ) -> Dict[str, Any]:
+        """
+        สร้าง queue arguments สำหรับ quorum queue ตาม Final Architecture Design
+        
+        Args:
+            queue_name: ชื่อ queue
+            max_length: จำนวน messages สูงสุด (0 = no limit)
+            enable_dlx: เปิดใช้งาน Dead Letter Exchange
+            enable_quorum: ใช้ quorum queue type
+        
+        Returns:
+            Dictionary ของ queue arguments
+        """
+        arguments = {}
+        
+        # Quorum Queue Type
+        use_quorum = os.getenv('USE_QUORUM_QUEUES', 'true').lower() == 'true'
+        if enable_quorum and use_quorum:
+            arguments['x-queue-type'] = 'quorum'
+        
+        # Queue Max Length & Overflow
+        if max_length > 0:
+            arguments['x-max-length'] = max_length
+            arguments['x-overflow'] = 'reject-publish'
+        
+        # Dead Letter Exchange (DLX)
+        enable_dlx_flag = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
+        if enable_dlx and enable_dlx_flag:
+            dlx_exchange = f'{queue_name}.dlx'
+            dlx_queue = f'{queue_name}.dlq'
+            arguments['x-dead-letter-exchange'] = dlx_exchange
+            arguments['x-dead-letter-routing-key'] = dlx_queue
+        
+        return arguments
+    
+    def _setup_dlx_for_queue(self, queue_name: str):
+        """
+        สร้าง Dead Letter Exchange และ Queue สำหรับ queue ที่ระบุ
+        
+        Args:
+            queue_name: ชื่อ queue หลัก
+        """
+        try:
+            enable_dlx = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
+            if not enable_dlx:
+                return
+            
+            use_quorum = os.getenv('USE_QUORUM_QUEUES', 'true').lower() == 'true'
+            dlx_exchange = f'{queue_name}.dlx'
+            dlx_queue = f'{queue_name}.dlq'
+            
+            # สร้าง DLX Exchange
+            self.channel.exchange_declare(
+                exchange=dlx_exchange,
+                exchange_type='direct',
+                durable=True
+            )
+            
+            # สร้าง DLQ Queue
+            dlq_arguments = {}
+            if use_quorum:
+                dlq_arguments['x-queue-type'] = 'quorum'
+            
+            self.channel.queue_declare(
+                queue=dlx_queue,
+                durable=True,
+                arguments=dlq_arguments if dlq_arguments else None
+            )
+            
+            # Bind DLQ to DLX
+            self.channel.queue_bind(
+                exchange=dlx_exchange,
+                queue=dlx_queue,
+                routing_key=dlx_queue
+            )
+            
+            logger.debug(f"✅ DLX setup: {queue_name} -> {dlx_exchange} -> {dlx_queue}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to setup DLX for {queue_name}: {e}")
+    
+    def _declare_quorum_queues(self):
+        """
+        สร้าง Quorum Queues สำหรับ 3-Queue Architecture ตาม Final Design
+        """
+        try:
+            # 1. Transcription Request Queue (max 50)
+            max_request = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+            request_args = self._get_queue_arguments(
+                self.transcription_request_queue,
+                max_length=max_request,
+                enable_dlx=True,
+                enable_quorum=True
+            )
+            self.channel.queue_declare(
+                queue=self.transcription_request_queue,
+                durable=True,
+                arguments=request_args if request_args else None
+            )
+            self._setup_dlx_for_queue(self.transcription_request_queue)
+            logger.info(f"✅ Created {self.transcription_request_queue} (max: {max_request}, quorum: {request_args.get('x-queue-type', 'classic')})")
+            
+            # 2. Audio Extraction Queue (max 80)
+            max_extraction = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+            extraction_args = self._get_queue_arguments(
+                self.audio_extraction_queue,
+                max_length=max_extraction,
+                enable_dlx=True,
+                enable_quorum=True
+            )
+            self.channel.queue_declare(
+                queue=self.audio_extraction_queue,
+                durable=True,
+                arguments=extraction_args if extraction_args else None
+            )
+            self._setup_dlx_for_queue(self.audio_extraction_queue)
+            logger.info(f"✅ Created {self.audio_extraction_queue} (max: {max_extraction}, quorum: {extraction_args.get('x-queue-type', 'classic')})")
+            
+            # 3. Transcription Queue (max 20) - Note: ยังใช้ queue เดิม (backward compatible)
+            # Queue เดิมจะยังทำงาน แต่ถ้าต้องการ quorum จะต้องสร้าง queue ใหม่
+            
+            logger.info("📋 3-Queue Architecture: Queues declared successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to declare quorum queues: {e}", exc_info=True)
+            # Continue anyway - queues might already exist
     
     def setup_consumers(self):
         """ตั้งค่า consumers สำหรับแต่ละ queue"""

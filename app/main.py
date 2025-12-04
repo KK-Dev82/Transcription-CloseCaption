@@ -22,7 +22,7 @@ except Exception as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"⚠️  Failed to load .env.runpod: {e}")
 
-from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring, files, tasks
+from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring, files, tasks, cleanup
 # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
 # from .api import websocket
 # from .api.websocket import router as websocket_router
@@ -144,6 +144,9 @@ app.include_router(files.router)
 
 # 📋 Tasks API (ดึง tasks ตามวันที่)
 app.include_router(tasks.router)
+
+# 🧹 Cleanup API (Phase 5: Cleanup & Monitoring)
+app.include_router(cleanup.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -476,14 +479,21 @@ async def startup_event():
     """เริ่มต้น application"""
     logger.info("🚀 เริ่มต้น Transcription Service API...")
     
-    # 🧹 ลบ temp folders เก่า (เก่ากว่า 24 ชั่วโมง)
+    # ============================================================
+    # Phase 5: Cleanup Service - Startup Cleanup & Periodic Scheduler
+    # ============================================================
     try:
-        from .services.file_service import FileService
-        file_service = FileService()
-        file_service.cleanup_old_temp_folders(max_age_hours=24)
-        logger.info("✅ ลบ temp folders เก่าเสร็จสิ้น")
+        from .services.cleanup_service import cleanup_service
+        
+        # 1. Startup cleanup (run once on startup)
+        await cleanup_service.cleanup_on_startup()
+        
+        # 2. Start periodic cleanup scheduler
+        cleanup_service.start_periodic_cleanup()
+        
+        logger.info("✅ Cleanup Service initialized and started")
     except Exception as e:
-        logger.warning(f"⚠️ ไม่สามารถลบ temp folders เก่า: {e}")
+        logger.warning(f"⚠️ ไม่สามารถเริ่มต้น Cleanup Service: {e}")
     
     # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
     # 🔌 เริ่มต้น WebSocket Service
@@ -495,6 +505,20 @@ async def startup_event():
     #     logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
     
     logger.info("✅ API Server พร้อมใช้งาน")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup เมื่อ application shutdown"""
+    logger.info("🛑 Shutting down Transcription Service API...")
+    
+    try:
+        from .services.cleanup_service import cleanup_service
+        cleanup_service.stop_periodic_cleanup()
+        logger.info("✅ Cleanup Service stopped")
+    except Exception as e:
+        logger.warning(f"⚠️ Error stopping Cleanup Service: {e}")
+    
+    logger.info("✅ API Server shutdown complete")
 
 if __name__ == "__main__":
     import uvicorn

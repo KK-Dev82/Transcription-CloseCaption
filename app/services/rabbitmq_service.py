@@ -8,6 +8,7 @@ import os
 from typing import Dict, Any, Optional
 import pika
 from pika.exceptions import AMQPConnectionError, AMQPChannelError
+from fastapi import HTTPException
 import uuid
 from datetime import datetime
 import time
@@ -36,6 +37,11 @@ class RabbitMQService:
         self.transcription_queue = 'transcription_queue'
         self.transcription_chunk_queue = 'transcription_chunk_queue'
         self.resize_queue = 'video_resize_queue'
+        
+        # 3-Queue Architecture (Final Design)
+        self.transcription_request_queue = 'transcription_request_queue'
+        self.audio_extraction_queue = 'audio_extraction_queue'
+        # transcription_queue ใช้ queue เดิม (backward compatible)
     
     def _connect(self):
         """เชื่อมต่อกับ RabbitMQ"""
@@ -53,15 +59,60 @@ class RabbitMQService:
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
             
-            # สร้าง queues
+            # สร้าง queues เก่า (backward compatible)
             self.channel.queue_declare(queue=self.trim_queue, durable=True)
             self.channel.queue_declare(queue=self.merge_queue, durable=True)
             self.channel.queue_declare(queue=self.convert_queue, durable=True)
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
+            
+            # Transcription Queue (Legacy - ยังใช้อยู่)
             self.channel.queue_declare(queue=self.transcription_queue, durable=True)
             self.channel.queue_declare(queue=self.transcription_chunk_queue, durable=True)
             
+            # ============================================================
+            # 3-Queue Architecture (Final Design)
+            # ============================================================
+            
+            # 1. Transcription Request Queue (max 50)
+            max_request = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+            request_args = self._get_queue_arguments(
+                self.transcription_request_queue,
+                max_length=max_request,
+                enable_dlx=True,
+                enable_quorum=True
+            )
+            self.channel.queue_declare(
+                queue=self.transcription_request_queue,
+                durable=True,
+                arguments=request_args if request_args else None
+            )
+            self._setup_dlx_for_queue(self.transcription_request_queue)
+            logger.info(f"✅ Created {self.transcription_request_queue} (max: {max_request}, quorum: {request_args.get('x-queue-type', 'classic')})")
+            
+            # 2. Audio Extraction Queue (max 80)
+            max_extraction = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+            extraction_args = self._get_queue_arguments(
+                self.audio_extraction_queue,
+                max_length=max_extraction,
+                enable_dlx=True,
+                enable_quorum=True
+            )
+            self.channel.queue_declare(
+                queue=self.audio_extraction_queue,
+                durable=True,
+                arguments=extraction_args if extraction_args else None
+            )
+            self._setup_dlx_for_queue(self.audio_extraction_queue)
+            logger.info(f"✅ Created {self.audio_extraction_queue} (max: {max_extraction}, quorum: {extraction_args.get('x-queue-type', 'classic')})")
+            
+            # 3. Transcription Queue (max 20) - Update existing queue
+            max_transcribe = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
+            # Note: เราไม่สามารถเปลี่ยน queue type ของ queue ที่มีอยู่แล้วได้
+            # จะต้องสร้าง queue ใหม่หรือใช้ queue เดิม (backward compatible)
+            # สำหรับตอนนี้ ยังใช้ queue เดิมไว้ก่อน
+            
             logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
+            logger.info("📋 Queue Architecture: 3-Queue (request → extraction → transcription)")
             
         except AMQPConnectionError as e:
             logger.error(f"ไม่สามารถเชื่อมต่อ RabbitMQ: {e}")
@@ -88,6 +139,98 @@ class RabbitMQService:
         self.connection = None
         self.channel = None
         logger.info("รีเซ็ตการเชื่อมต่อ RabbitMQ")
+    
+    def _get_queue_arguments(
+        self,
+        queue_name: str,
+        max_length: int = 0,
+        enable_dlx: bool = True,
+        enable_quorum: bool = True
+    ) -> Dict[str, Any]:
+        """
+        สร้าง queue arguments สำหรับ quorum queue ตาม Final Architecture Design
+        
+        Args:
+            queue_name: ชื่อ queue
+            max_length: จำนวน messages สูงสุด (0 = no limit)
+            enable_dlx: เปิดใช้งาน Dead Letter Exchange
+            enable_quorum: ใช้ quorum queue type
+        
+        Returns:
+            Dictionary ของ queue arguments
+        """
+        arguments = {}
+        
+        # Quorum Queue Type
+        use_quorum = os.getenv('USE_QUORUM_QUEUES', 'true').lower() == 'true'
+        if enable_quorum and use_quorum:
+            arguments['x-queue-type'] = 'quorum'
+            logger.debug(f"✅ Quorum queue enabled for {queue_name}")
+        
+        # Queue Max Length & Overflow
+        if max_length > 0:
+            arguments['x-max-length'] = max_length
+            arguments['x-overflow'] = 'reject-publish'
+            logger.debug(f"✅ Max length set: {queue_name} = {max_length} messages")
+        
+        # Dead Letter Exchange (DLX)
+        enable_dlx_flag = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
+        if enable_dlx and enable_dlx_flag:
+            dlx_exchange = f'{queue_name}.dlx'
+            dlx_queue = f'{queue_name}.dlq'
+            arguments['x-dead-letter-exchange'] = dlx_exchange
+            arguments['x-dead-letter-routing-key'] = dlx_queue
+            logger.debug(f"✅ DLX enabled for {queue_name}: {dlx_exchange} -> {dlx_queue}")
+        
+        return arguments
+    
+    def _setup_dlx_for_queue(self, queue_name: str):
+        """
+        สร้าง Dead Letter Exchange และ Queue สำหรับ queue ที่ระบุ
+        
+        Args:
+            queue_name: ชื่อ queue หลัก
+        """
+        try:
+            enable_dlx = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
+            if not enable_dlx:
+                logger.debug(f"DLX disabled, skipping DLX setup for {queue_name}")
+                return
+            
+            use_quorum = os.getenv('USE_QUORUM_QUEUES', 'true').lower() == 'true'
+            dlx_exchange = f'{queue_name}.dlx'
+            dlx_queue = f'{queue_name}.dlq'
+            
+            # สร้าง DLX Exchange
+            self.channel.exchange_declare(
+                exchange=dlx_exchange,
+                exchange_type='direct',
+                durable=True
+            )
+            
+            # สร้าง DLQ Queue
+            dlq_arguments = {}
+            if use_quorum:
+                dlq_arguments['x-queue-type'] = 'quorum'
+            
+            self.channel.queue_declare(
+                queue=dlx_queue,
+                durable=True,
+                arguments=dlq_arguments if dlq_arguments else None
+            )
+            
+            # Bind DLQ to DLX
+            self.channel.queue_bind(
+                exchange=dlx_exchange,
+                queue=dlx_queue,
+                routing_key=dlx_queue
+            )
+            
+            logger.info(f"✅ DLX setup complete: {queue_name} -> {dlx_exchange} -> {dlx_queue}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to setup DLX for {queue_name}: {e}")
+            # Continue anyway - DLX is optional
     
     def send_trim_task(self, input_file: str, start_time: float, end_time: float, 
                       output_format: str = "mp4", quality: str = "medium", 
@@ -218,6 +361,101 @@ class RabbitMQService:
                             self.json_storage.save_transcription(task_id, task_data)
                         except Exception as save_error:
                             logger.error(f"ไม่สามารถบันทึก failed task: {save_error}")
+                    raise
+    
+    def send_transcription_request_task(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 30,
+        use_chunking: bool = False,
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None
+    ) -> str:
+        """
+        ส่งงาน transcription ไปยัง transcription_request_queue (3-Queue Architecture)
+        
+        ใช้ queue นี้แทน send_transcription_task() สำหรับ Final Architecture
+        """
+        max_retries = 3
+        retry_delay = 1
+        
+        task_id = None
+        for attempt in range(max_retries):
+            try:
+                self._ensure_connection()
+                
+                if task_id is None:
+                    task_id = str(uuid.uuid4())
+                
+                task_data = {
+                    "task_id": task_id,
+                    "task_type": "transcription_request",
+                    "file_path": file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "status": "pending",
+                    "created_at": time.time(),
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id
+                }
+                
+                # บันทึก task ลง storage
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # ส่งไปยัง transcription_request_queue
+                logger.info(f"📤 Publishing to {self.transcription_request_queue}: {task_id}")
+                
+                try:
+                    self.channel.basic_publish(
+                        exchange='',
+                        routing_key=self.transcription_request_queue,
+                        body=json.dumps(task_data),
+                        properties=pika.BasicProperties(
+                            delivery_mode=2,  # Persistent
+                            content_type='application/json'
+                        )
+                    )
+                    logger.info(f"✅ Sent to {self.transcription_request_queue}: {task_id}")
+                    return task_id
+                except Exception as publish_error:
+                    error_str = str(publish_error).lower()
+                    # ตรวจสอบว่าเป็น queue full error หรือไม่
+                    if 'resource_locked' in error_str or 'precondition_failed' in error_str:
+                        logger.warning(f"⚠️ Queue may be full or locked: {publish_error}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"Queue is full. Please try again later.",
+                            headers={"Retry-After": str(os.getenv('RETRY_AFTER_SECONDS', '30'))}
+                        ) from publish_error
+                    raise
+                
+            except HTTPException:
+                # Re-raise HTTPException (503)
+                raise
+            except Exception as e:
+                logger.error(f"❌ Attempt {attempt + 1}/{max_retries} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    self._reset_connection()
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    if task_id:
+                        try:
+                            task_data['status'] = 'failed'
+                            task_data['error_message'] = str(e)
+                            self.json_storage.save_transcription(task_id, task_data)
+                        except Exception:
+                            pass
                     raise
     
     def send_chunk_transcription_task(self, chunk_task: Dict[str, Any]) -> str:
@@ -423,15 +661,33 @@ class RabbitMQService:
             
             queue_info = {}
             
-            # ตรวจสอบแต่ละ queue
-            for queue_name in [self.trim_queue, self.merge_queue, 
-                             self.convert_queue, self.resize_queue, self.transcription_queue]:
-                method = self.channel.queue_declare(queue=queue_name, passive=True)
-                queue_info[queue_name] = {
-                    'name': queue_name,
-                    'message_count': method.method.message_count,
-                    'consumer_count': method.method.consumer_count
-                }
+            # ตรวจสอบแต่ละ queue (รวม queues ใหม่)
+            queue_names = [
+                self.trim_queue, 
+                self.merge_queue, 
+                self.convert_queue, 
+                self.resize_queue, 
+                self.transcription_queue,
+                self.transcription_request_queue,  # 3-Queue Architecture
+                self.audio_extraction_queue        # 3-Queue Architecture
+            ]
+            
+            for queue_name in queue_names:
+                try:
+                    method = self.channel.queue_declare(queue=queue_name, passive=True)
+                    queue_info[queue_name] = {
+                        'name': queue_name,
+                        'message_count': method.method.message_count,
+                        'consumer_count': method.method.consumer_count
+                    }
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not get info for queue {queue_name}: {e}")
+                    queue_info[queue_name] = {
+                        'name': queue_name,
+                        'message_count': 0,
+                        'consumer_count': 0,
+                        'error': str(e)
+                    }
             
             return queue_info
             

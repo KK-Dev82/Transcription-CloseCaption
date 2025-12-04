@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
+import threading
 import ffmpeg
 import json
 import os
@@ -30,6 +31,20 @@ class VideoService:
         max_workers = int(os.getenv('AUDIO_EXTRACTION_MAX_WORKERS', '3'))
         self.extraction_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="audio-extraction")
         logger.info(f"✅ Initialized Audio Extraction Thread Pool: max_workers={max_workers}")
+        
+        # ============================================================
+        # Process Semaphore สำหรับ FFmpeg (2-level control)
+        # ============================================================
+        # Level 1: Extraction Pool Semaphore (ควบคุม extraction tasks)
+        # Note: ไม่จำเป็นเพราะใช้ ThreadPoolExecutor อยู่แล้ว
+        # extract_pool_size = int(os.getenv('EXTRACT_POOL_SIZE', '4'))
+        # self.extraction_pool_semaphore = threading.Semaphore(extract_pool_size)
+        
+        # Level 2: FFmpeg Process Semaphore (ควบคุม FFmpeg processes)
+        # ใช้ threading.Semaphore เพราะทำงานใน thread pool
+        ffmpeg_proc_sem = int(os.getenv('FFMPEG_PROC_SEM', '3'))
+        self.ffmpeg_process_semaphore = threading.Semaphore(ffmpeg_proc_sem)
+        logger.info(f"✅ Initialized FFmpeg Process Semaphore: max_concurrent={ffmpeg_proc_sem}")
     
     async def trim_video(self, input_file: str, start_time: float, end_time: float,
                         output_format: str = "mp4", quality: str = "medium") -> str:
@@ -659,6 +674,10 @@ class VideoService:
         """
         Extract audio แบบ synchronous (ทำงานใน thread pool)
         
+        ใช้ 2-level semaphore control:
+        - Level 1: extraction_pool_semaphore (ควบคุม extraction tasks)
+        - Level 2: ffmpeg_process_semaphore (ควบคุม FFmpeg processes)
+        
         Args:
             video_path: Path ไปยังไฟล์ video
             output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
@@ -683,23 +702,39 @@ class VideoService:
         logger.info(f"   [Audio Extraction Thread] กำลัง extract audio: {video_path}")
         logger.info(f"   Output: {output_path}")
         
+        # ============================================================
+        # Process Semaphore Control สำหรับ FFmpeg
+        # ============================================================
+        # ใช้ threading.Semaphore เพื่อควบคุมจำนวน FFmpeg processes ที่ทำงานพร้อมกัน
+        # ช่วยป้องกัน I/O/CPU spike และควบคุม resource usage
+        
         try:
-            # Extract audio ทั้งไฟล์ (16kHz mono WAV)
-            (
-                ffmpeg
-                .input(video_path)
-                .output(
-                    output_path,
-                    acodec='pcm_s16le',
-                    ac=1,  # Mono
-                    ar=16000  # 16kHz
-                )
-                .overwrite_output()
-                .run(quiet=True)
-            )
+            # Acquire semaphore (blocking until available)
+            logger.debug(f"   [FFmpeg Process Semaphore] Waiting to acquire...")
+            self.ffmpeg_process_semaphore.acquire()
+            logger.debug(f"   [FFmpeg Process Semaphore] Acquired - Running FFmpeg for: {video_path}")
             
-            logger.info(f"   [Audio Extraction Thread] Extract audio สำเร็จ: {output_path}")
-            return output_path
+            try:
+                # Extract audio ทั้งไฟล์ (16kHz mono WAV)
+                (
+                    ffmpeg
+                    .input(video_path)
+                    .output(
+                        output_path,
+                        acodec='pcm_s16le',
+                        ac=1,  # Mono
+                        ar=16000  # 16kHz
+                    )
+                    .overwrite_output()
+                    .run(quiet=True)
+                )
+                
+                logger.info(f"   [Audio Extraction Thread] Extract audio สำเร็จ: {output_path}")
+                return output_path
+            finally:
+                # Always release semaphore
+                self.ffmpeg_process_semaphore.release()
+                logger.debug(f"   [FFmpeg Process Semaphore] Released")
             
         except ffmpeg.Error as e:
             error_message = e.stderr.decode() if e.stderr else str(e)
