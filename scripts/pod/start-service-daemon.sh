@@ -212,10 +212,98 @@ else
     exit 1
 fi
 
+# Start Video Worker
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🎬 Starting Video Worker..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+WORKER_LOG="/tmp/video-worker.log"
+WORKER_PID_FILE="/tmp/video-worker.pid"
+
+# Check if worker is already running
+if pgrep -f "python.*video_worker" > /dev/null; then
+    WORKER_PID=$(pgrep -f "python.*video_worker" | head -1)
+    echo "⚠️  Video Worker is already running (PID: $WORKER_PID)"
+    echo "   Keeping existing worker running"
+else
+    echo "🚀 Starting Video Worker..."
+    
+    # Setup LD_LIBRARY_PATH for CTranslate2 and cuDNN
+    CTRANSLATE2_LIBS="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+    CUDNN_DIR="/workspace/cudnn/lib"
+    LD_LIBRARY_PATH_VAL="${LD_LIBRARY_PATH:-}"
+    
+    if [ -d "$CTRANSLATE2_LIBS" ]; then
+        LD_LIBRARY_PATH_VAL="${CTRANSLATE2_LIBS}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added CTranslate2 libraries to LD_LIBRARY_PATH"
+    fi
+    
+    if [ -d "$CUDNN_DIR" ]; then
+        LD_LIBRARY_PATH_VAL="${CUDNN_DIR}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added cuDNN libraries to LD_LIBRARY_PATH"
+    fi
+    
+    # Start worker with nohup
+    nohup env TZ="${TZ:-Asia/Bangkok}" \
+             TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
+             PYTHONUSERBASE="/workspace/.local" \
+             PATH="/workspace/.local/bin:$PATH" \
+             PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+             RABBITMQ_HOST="${RABBITMQ_HOST:-178.128.105.100}" \
+             RABBITMQ_PORT="${RABBITMQ_PORT:-5672}" \
+             RABBITMQ_USER="${RABBITMQ_USER:-senate}" \
+             RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}" \
+             WHISPER_PROVIDER="${WHISPER_PROVIDER:-faster-whisper}" \
+             WHISPER_MODEL="${WHISPER_MODEL:-medium}" \
+             WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
+             LD_LIBRARY_PATH="${LD_LIBRARY_PATH_VAL}" \
+             python3 -m app.workers.video_worker \
+        > "$WORKER_LOG" 2>&1 &
+    
+    WORKER_PID=$!
+    echo $WORKER_PID > "$WORKER_PID_FILE"
+    
+    # Wait a moment for worker to start
+    sleep 3
+    
+    # Check if worker started successfully
+    if ps -p $WORKER_PID > /dev/null; then
+        echo "✅ Video Worker started successfully"
+        echo "   PID: $WORKER_PID"
+        echo "   PID File: $WORKER_PID_FILE"
+        echo "   Log: $WORKER_LOG"
+        echo ""
+        
+        # Wait a bit and check connection
+        sleep 2
+        if grep -q "Connected to RabbitMQ\|Starting consumer" "$WORKER_LOG" 2>/dev/null; then
+            echo "✅ Worker connected to RabbitMQ"
+        else
+            echo "⚠️  Worker started but connection status unknown (check log: $WORKER_LOG)"
+        fi
+    else
+        echo "❌ Failed to start Video Worker"
+        echo "   Check log: $WORKER_LOG"
+        tail -20 "$WORKER_LOG" 2>/dev/null || echo "   (Log file not found)"
+    fi
+fi
+echo ""
+
 echo "=============================="
 echo "✅ Setup Complete"
 echo ""
-echo "⚠️  Service is running in background (nohup)"
+echo "📊 Running Services:"
+echo "   • Transcription Service (API): PID $(cat $PID_FILE 2>/dev/null || echo 'N/A')"
+echo "   • Video Worker: PID $(cat $WORKER_PID_FILE 2>/dev/null || echo 'N/A')"
+echo ""
+echo "⚠️  Services are running in background (nohup)"
 echo "   You can safely exit this terminal"
+echo ""
+echo "💡 Useful Commands:"
+echo "   Stop API: kill \$(cat $PID_FILE)"
+echo "   Stop Worker: kill \$(cat $WORKER_PID_FILE)"
+echo "   View API Logs: tail -f $LOG_FILE"
+echo "   View Worker Logs: tail -f $WORKER_LOG"
 echo ""
 
