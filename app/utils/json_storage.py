@@ -58,6 +58,25 @@ class JSONStorage:
             except Exception:
                 processing_time = None
         
+        # ป้องกันการ overwrite status ที่เป็น completed/failed โดย status ที่ต่ำกว่า (pending/processing)
+        # ถ้า existing status เป็น completed/failed และ new status เป็น pending/processing ให้คง existing status
+        existing_status = existing_data.get("status", "")
+        new_status = transcription_data.get("status")
+        
+        if existing_status in ["completed", "failed"] and new_status in ["pending", "processing"]:
+            # ไม่ให้ overwrite completed/failed status ด้วย pending/processing
+            status = existing_status
+            logger.debug(f"⚠️ Preserving existing status '{existing_status}' (preventing overwrite with '{new_status}')")
+        elif new_status:
+            # ใช้ status ใหม่
+            status = new_status
+        elif existing_status:
+            # ใช้ status เดิม
+            status = existing_status
+        else:
+            # default
+            status = "pending"
+        
         data = {
             "task_id": task_id,
             "created_at": existing_data.get("created_at", datetime.now().isoformat()),
@@ -71,7 +90,7 @@ class JSONStorage:
             "partial_text": transcription_data.get("partial_text", existing_data.get("partial_text")),
             "chunks": transcription_data.get("chunks", existing_data.get("chunks", [])),
             "full_text": transcription_data.get("full_text", existing_data.get("full_text", "")),
-            "status": transcription_data.get("status", existing_data.get("status", "pending")),
+            "status": status,
             "progress": transcription_data.get("progress", existing_data.get("progress", 0)),
             "error_message": transcription_data.get("error_message", existing_data.get("error_message")),
             "completed_at": _ensure_iso(transcription_data.get("completed_at", existing_data.get("completed_at"))),
