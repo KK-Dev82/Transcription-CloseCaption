@@ -11,6 +11,7 @@ class TranscriptionRequest(BaseModel):
     chunk_duration: Optional[int] = 30  # ความยาวของ chunk (วินาที) - ใช้เมื่อ use_chunking=true
     use_chunking: Optional[bool] = False  # ใช้ chunking หรือไม่ (default: false - transcribe ทั้งไฟล์เลย)
     enable_timestamps: Optional[bool] = True
+    display_mode: Optional[str] = "full_text"  # "full_text" หรือ "realtime_chunks" - วิธีแสดงผลลัพธ์ (full_text = แสดง Full Text ทีเดียว, realtime_chunks = แสดงทีละ Chunk แบบ realtime)
     callback_url: Optional[str] = None  # URL สำหรับ callback เมื่อเสร็จ (จาก Backend)
     job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)
     user_id: Optional[str] = None  # User ID (ถ้ามี)
