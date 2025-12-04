@@ -877,7 +877,14 @@ class VideoWorker:
                 
                 # ประมวลผล transcription
                 logger.info(f"🚀 เริ่มประมวลผล transcription...")
-                asyncio.run(self._execute_transcription_task(task_data))
+                # สร้าง event loop ใหม่สำหรับ thread นี้ (ไม่ใช้ asyncio.run() เพราะอาจมี conflict)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self._execute_transcription_task(task_data))
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
                 
                 # Stop monitoring
                 monitor_running = False
@@ -1941,6 +1948,7 @@ class VideoWorker:
                 logger.info(f"🔍 [Download & Route] File type: {'video' if is_video else 'audio' if is_audio else 'unknown'}")
                 
                 # Step 3: Route to appropriate queue
+                # หมายเหตุ: ไม่ส่ง status ใน message เพราะจะถูก set โดย processors (audio extraction หรือ transcription)
                 route_message = {
                     "task_id": task_id,
                     "file_path": local_file_path,
@@ -1953,7 +1961,8 @@ class VideoWorker:
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,
-                    "status": "pending",
+                    # ไม่ส่ง status เพื่อป้องกันการ overwrite status ที่เป็น completed/failed
+                    # "status": "pending",  # ❌ ลบออกเพื่อป้องกันการ overwrite status
                     "created_at": datetime.now().isoformat()
                 }
                 
@@ -2066,6 +2075,7 @@ class VideoWorker:
                 self.json_storage.save_transcription(task_id, task_data)
                 
                 # Send to transcription_queue
+                # หมายเหตุ: ไม่ส่ง status ใน message เพราะจะถูก set โดย transcription processor
                 transcription_message = {
                     "task_id": task_id,
                     "file_path": audio_path,  # Send audio file path
@@ -2078,7 +2088,8 @@ class VideoWorker:
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,
-                    "status": "pending",
+                    # ไม่ส่ง status เพราะจะถูก set โดย transcription processor
+                    # "status": "pending",  # ❌ ลบออกเพื่อป้องกันการ overwrite status ที่เป็น completed
                     "created_at": datetime.now().isoformat(),
                     "audio_extracted_from": video_file_path  # Track original video
                 }
