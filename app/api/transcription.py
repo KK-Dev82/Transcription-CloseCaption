@@ -127,6 +127,8 @@ async def get_transcription_text(task_id: str):
     return {
         "task_id": task_id,
         "full_text": task.full_text,
+        "original_text": task.original_text,  # Raw text ก่อน correction
+        "corrected_text": task.corrected_text,  # Text หลัง correction
         "language": task.language,
         "total_duration": task.total_duration
     }
