@@ -23,6 +23,20 @@ import threading
 # เพิ่ม app directory เข้าไปใน Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+# Load .env.runpod if exists (ต้องทำก่อน import services ที่ใช้ environment variables)
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent.parent / ".env.runpod"
+    if env_file.exists():
+        load_dotenv(env_file)
+        logger_temp = logging.getLogger(__name__)
+        logger_temp.info(f"✅ Loaded environment from: {env_file}")
+except ImportError:
+    pass  # python-dotenv not installed, will use system env vars
+except Exception as e:
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.warning(f"⚠️  Failed to load .env.runpod: {e}")
+
 from app.services.video_service import VideoService
 from app.services.transcription_service import TranscriptionService
 from app.utils.json_storage import JSONStorage
