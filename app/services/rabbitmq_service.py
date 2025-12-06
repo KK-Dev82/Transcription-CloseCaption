@@ -419,6 +419,11 @@ class RabbitMQService:
                 # ส่งไปยัง transcription_request_queue
                 logger.info(f"📤 Publishing to {self.transcription_request_queue}: {task_id}")
                 
+                # กำหนด priority ตาม display_mode
+                # CloseCaption (realtime_chunks) → priority 10 (สูงสุด)
+                # Normal transcription → priority 5 (ปกติ)
+                priority = 10 if display_mode == "realtime_chunks" else 5
+                
                 try:
                     self.channel.basic_publish(
                         exchange='',
@@ -426,9 +431,11 @@ class RabbitMQService:
                         body=json.dumps(task_data),
                         properties=pika.BasicProperties(
                             delivery_mode=2,  # Persistent
-                            content_type='application/json'
+                            content_type='application/json',
+                            priority=priority  # Priority: 10 for CloseCaption, 5 for normal
                         )
                     )
+                    logger.info(f"📤 Published with priority={priority} (display_mode={display_mode})")
                     logger.info(f"✅ Sent to {self.transcription_request_queue}: {task_id}")
                     return task_id
                 except Exception as publish_error:
