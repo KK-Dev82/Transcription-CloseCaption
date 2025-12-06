@@ -3,9 +3,15 @@
 # ใช้สำหรับ restart หลังจากเพิ่ม consumers ใหม่
 #
 # วิธีใช้งาน:
-#   bash scripts/pod/restart-service-daemon.sh
+#   bash scripts/pod/restart-service-daemon.sh [INTERNAL_PORT]
+#
+# Parameters:
+#   INTERNAL_PORT  - Internal port (optional, default: 8010)
 
 set -e
+
+# Parse optional internal port parameter
+INTERNAL_PORT="${1:-8010}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -35,23 +41,23 @@ cd "$PROJECT_DIR" 2>/dev/null || cd "/workspace/transcription-close-caption-serv
 
 # Step 1: Stop API Service
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🛑 Step 1: Stopping API Service..."
+echo "🛑 Step 1: Stopping API Service (Port: ${INTERNAL_PORT})..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-API_PID=$(pgrep -f "uvicorn.*app.main.*8010" | head -1 || echo "")
+API_PID=$(pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" | head -1 || echo "")
 if [ -n "$API_PID" ]; then
     print_status "Stopping API Service (PID: $API_PID)..."
     kill $API_PID 2>/dev/null || true
     sleep 2
     
     # Force kill if still running
-    if pgrep -f "uvicorn.*app.main.*8010" > /dev/null; then
+    if pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" > /dev/null; then
         print_warning "Force killing API Service..."
-        pkill -9 -f "uvicorn.*app.main.*8010" 2>/dev/null || true
+        pkill -9 -f "uvicorn.*app.main.*${INTERNAL_PORT}" 2>/dev/null || true
         sleep 1
     fi
     
-    if ! pgrep -f "uvicorn.*app.main.*8010" > /dev/null; then
+    if ! pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" > /dev/null; then
         print_success "✅ API Service stopped"
     else
         print_error "❌ Failed to stop API Service"
@@ -104,8 +110,8 @@ if [ ! -f "scripts/pod/start-service-daemon.sh" ]; then
     exit 1
 fi
 
-# Start services
-bash scripts/pod/start-service-daemon.sh
+# Start services with the same port
+bash scripts/pod/start-service-daemon.sh "${INTERNAL_PORT}"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -119,9 +125,9 @@ echo "📊 Final Status Check"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-if pgrep -f "uvicorn.*app.main.*8010" > /dev/null; then
-    API_PID=$(pgrep -f "uvicorn.*app.main.*8010" | head -1)
-    print_success "✅ API Service: RUNNING (PID: $API_PID)"
+if pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" > /dev/null; then
+    API_PID=$(pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" | head -1)
+    print_success "✅ API Service: RUNNING (PID: $API_PID, Port: ${INTERNAL_PORT})"
 else
     print_error "❌ API Service: NOT RUNNING"
 fi
