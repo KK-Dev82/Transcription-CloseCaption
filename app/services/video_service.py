@@ -715,7 +715,9 @@ class VideoService:
             logger.debug(f"   [FFmpeg Process Semaphore] Acquired - Running FFmpeg for: {video_path}")
             
             try:
-                # Extract audio ทั้งไฟล์ (16kHz mono WAV)
+                # Extract audio ทั้งไฟล์ (48kHz mono WAV)
+                # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น
+                # Whisper จะ downsample เองตามที่ต้องการ (ดีกว่า FFmpeg downsample)
                 (
                     ffmpeg
                     .input(video_path)
@@ -723,7 +725,7 @@ class VideoService:
                         output_path,
                         acodec='pcm_s16le',
                         ac=1,  # Mono
-                        ar=16000  # 16kHz
+                        ar=48000  # 48kHz (เพิ่มจาก 16kHz เพื่อคุณภาพดีขึ้น)
                     )
                     .overwrite_output()
                     .run(quiet=True)
@@ -788,7 +790,7 @@ class VideoService:
             logger.warning(f"⚠️  ไม่สามารถบันทึก extraction metrics ได้: {e}")
     
     def extract_audio_from_video(self, video_path: str, output_path: str = None, 
-                                audio_format: str = "wav", sample_rate: int = 16000) -> str:
+                                audio_format: str = "wav", sample_rate: int = 48000) -> str:
         """แปลงวิดีโอเป็นไฟล์เสียง"""
         
         try:
@@ -808,10 +810,11 @@ class VideoService:
             logger.info(f"เริ่มแปลงวิดีโอเป็นเสียง: {video_path} → {output_path}")
             
             # ใช้ ffmpeg แปลงวิดีโอเป็นเสียงใน format ที่ Whisper รองรับ
+            # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น (Whisper จะ downsample เอง)
             stream = ffmpeg.input(str(video_path))
             stream = ffmpeg.output(stream, str(output_path), 
                                  acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
-                                 ar=16000,            # 16kHz sample rate (Whisper รองรับ)
+                                 ar=sample_rate,      # 48kHz sample rate (เพิ่มคุณภาพ)
                                  ac=1)                # Mono audio (Whisper รองรับ)
             
             ffmpeg.run(stream, overwrite_output=True, quiet=True)
@@ -825,7 +828,7 @@ class VideoService:
 
     def extract_audio_chunks(self, video_path: str, chunk_duration: int = 30, 
                            overlap: int = 5, audio_format: str = "wav", 
-                           sample_rate: int = 16000) -> List[str]:
+                           sample_rate: int = 48000) -> List[str]:
         """แปลงวิดีโอเป็น audio chunks"""
         
         try:
@@ -877,7 +880,7 @@ class VideoService:
                 stream = ffmpeg.input(str(video_path), ss=start_time, t=end_time-start_time)
                 stream = ffmpeg.output(stream, str(chunk_path),
                                      acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
-                                     ar=16000,            # 16kHz sample rate (Whisper รองรับ)
+                                     ar=sample_rate,      # 48kHz sample rate (เพิ่มจาก 16kHz เพื่อคุณภาพดีขึ้น)
                                      ac=1)                # Mono audio (Whisper รองรับ)
                 
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
