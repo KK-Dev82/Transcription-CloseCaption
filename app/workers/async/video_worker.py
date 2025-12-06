@@ -32,12 +32,12 @@ from app.services.video_service import VideoService
 from app.services.transcription_service import TranscriptionService
 from app.utils.json_storage import JSONStorage
 
-# Import async worker components
-from app.workers.async.connection import AsyncRabbitMQConnection
-from app.workers.async.consumers import AsyncConsumerManager
-from app.workers.async.handlers import AsyncMessageHandlers
-from app.workers.async.processors import AsyncTaskProcessors
-from app.workers.async.utils import AsyncWorkerUtils
+# Import async worker components (ใช้ relative import เพราะ 'async' เป็น keyword)
+from .connection import AsyncRabbitMQConnection
+from .consumers import AsyncConsumerManager
+from .handlers import AsyncMessageHandlers
+from .processors import AsyncTaskProcessors
+from .utils import AsyncWorkerUtils
 
 logger = logging.getLogger(__name__)
 
