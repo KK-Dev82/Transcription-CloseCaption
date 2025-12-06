@@ -38,6 +38,10 @@ backup_config() {
 write_authorized_keys(){
   info "ตรวจและเพิ่มคีย์เข้า ${AUTHORIZED_KEYS}"
 
+  # จัดการ permissions ของ /root (ตาม doc)
+  chown root:root "${SSH_HOME}"
+  chmod 700 "${SSH_HOME}"
+
   install -d -m 700 -o root -g root "${SSH_HOME}/.ssh"
 
   # ถ้าไฟล์ยังไม่มีให้สร้างว่าง
