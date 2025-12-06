@@ -97,8 +97,8 @@ class VideoWorkerAsync:
                     await asyncio.sleep(30)
                     continue
                 
-                # Initialize consumers with channel
-                self.consumers = AsyncConsumerManager(self.connection.channel, self._get_handlers_dict())
+                # Initialize consumers with channel and connection (for queue arguments)
+                self.consumers = AsyncConsumerManager(self.connection.channel, self._get_handlers_dict(), self.connection)
                 
                 # ตั้งค่า consumers
                 await self.consumers.setup_consumers()

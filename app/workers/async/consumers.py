@@ -5,7 +5,7 @@ Consumer Setup and Registration (aio-pika - Async)
 """
 import logging
 import os
-from typing import Dict, Callable, Awaitable
+from typing import Dict, Callable, Awaitable, Any
 import aio_pika
 from aio_pika import Queue
 
@@ -15,16 +15,18 @@ logger = logging.getLogger(__name__)
 class AsyncConsumerManager:
     """Manage async consumer setup and registration"""
     
-    def __init__(self, channel, handlers: Dict[str, Callable]):
+    def __init__(self, channel, handlers: Dict[str, Callable], connection=None):
         """
         Initialize AsyncConsumerManager
         
         Args:
             channel: aio-pika Channel instance
             handlers: Dictionary ของ async handler functions
+            connection: AsyncRabbitMQConnection instance (optional, for queue arguments)
         """
         self.channel = channel
         self.handlers = handlers
+        self.connection = connection  # For accessing queue arguments
         
         # Queue names (ต้อง match กับ connection.py)
         self.trim_queue_name = 'video_trim_queue'
@@ -77,6 +79,40 @@ class AsyncConsumerManager:
         for queue_name in self.queues.keys():
             logger.info(f"   - {queue_name}")
     
+    def _get_queue_arguments_for_consumer(self, queue_name: str) -> Dict[str, Any]:
+        """
+        Get queue arguments for consumer setup (ใช้ arguments เดียวกับ connection.py)
+        
+        Args:
+            queue_name: ชื่อ queue
+            
+        Returns:
+            Dictionary ของ queue arguments หรือ None
+        """
+        if not self.connection:
+            return None
+        
+        # ใช้ _get_queue_arguments จาก connection ถ้ามี
+        if hasattr(self.connection, '_get_queue_arguments'):
+            if queue_name == self.transcription_request_queue_name:
+                max_request = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+                return self.connection._get_queue_arguments(
+                    queue_name,
+                    max_length=max_request,
+                    enable_dlx=True,
+                    enable_quorum=True
+                )
+            elif queue_name == self.audio_extraction_queue_name:
+                max_extraction = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+                return self.connection._get_queue_arguments(
+                    queue_name,
+                    max_length=max_extraction,
+                    enable_dlx=True,
+                    enable_quorum=True
+                )
+        
+        return None
+    
     async def _setup_queue_consumer(self, queue_name: str, handler: Callable):
         """
         Setup consumer for a queue
@@ -90,13 +126,48 @@ class AsyncConsumerManager:
             return
         
         try:
-            # Declare queue (อาจมีอยู่แล้วแล้ว แต่ไม่เป็นไร)
-            queue = await self.channel.declare_queue(queue_name, durable=True)
-            self.queues[queue_name] = queue
+            # Get queue arguments สำหรับ quorum queues
+            queue_args = self._get_queue_arguments_for_consumer(queue_name)
             
-            # Setup consumer
-            await queue.consume(handler)
-            logger.debug(f"✅ Consumer registered for {queue_name}")
+            # พยายาม declare queue ด้วย arguments (ถ้ามี)
+            # ถ้า queue มีอยู่แล้วและ arguments ตรงกัน จะไม่เกิด error
+            # ถ้า queue มีอยู่แล้วแต่ arguments ไม่ตรงกัน จะเกิด PRECONDITION_FAILED
+            try:
+                if queue_args:
+                    # ใช้ arguments สำหรับ quorum queues
+                    queue = await self.channel.declare_queue(
+                        queue_name,
+                        durable=True,
+                        arguments=queue_args
+                    )
+                    logger.debug(f"✅ Declared/got queue with arguments: {queue_name}")
+                else:
+                    # Queue ธรรมดา (ไม่มี arguments)
+                    queue = await self.channel.declare_queue(queue_name, durable=True)
+                    logger.debug(f"✅ Declared/got queue: {queue_name}")
+                
+                self.queues[queue_name] = queue
+                
+                # Setup consumer
+                await queue.consume(handler)
+                logger.info(f"✅ Consumer registered for {queue_name}")
+                
+            except Exception as declare_error:
+                error_str = str(declare_error)
+                if 'PRECONDITION_FAILED' in error_str:
+                    # Queue มีอยู่แล้วแต่ arguments ไม่ตรงกัน
+                    # ใช้ get_queue() เพื่อ get queue ที่มีอยู่แล้วโดยไม่เปลี่ยน arguments
+                    logger.warning(f"⚠️ Queue {queue_name} exists with different arguments, using get_queue()...")
+                    try:
+                        queue = await self.channel.get_queue(queue_name, ensure=True)
+                        self.queues[queue_name] = queue
+                        await queue.consume(handler)
+                        logger.info(f"✅ Consumer registered for {queue_name} (using existing queue)")
+                    except Exception as get_error:
+                        logger.error(f"❌ Failed to get existing queue {queue_name}: {get_error}")
+                        raise
+                else:
+                    raise
             
         except Exception as e:
             logger.error(f"❌ Failed to setup consumer for {queue_name}: {e}", exc_info=True)
