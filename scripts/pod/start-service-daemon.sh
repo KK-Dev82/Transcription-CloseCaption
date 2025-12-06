@@ -4,9 +4,15 @@
 # วิธีใช้งาน:
 #   ssh pytorch-pod "bash -s" < scripts/pod/start-service-daemon.sh
 #   หรือ
-#   bash scripts/pod/start-service-daemon.sh (บน Pod)
+#   bash scripts/pod/start-service-daemon.sh [INTERNAL_PORT]
+#
+# Parameters:
+#   INTERNAL_PORT  - Internal port (optional, default: 8010)
 
 set -e
+
+# Parse optional internal port parameter
+INTERNAL_PORT="${1:-8010}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="/workspace/transcription-service"
@@ -24,9 +30,9 @@ fi
 cd "$PROJECT_DIR"
 
 # Check if service is already running
-if pgrep -f "uvicorn.*app.main:app.*8010" > /dev/null; then
+if pgrep -f "uvicorn.*app.main:app.*${INTERNAL_PORT}" > /dev/null; then
     echo "⚠️  Transcription Service is already running"
-    PID=$(pgrep -f "uvicorn.*app.main:app.*8010" | head -1)
+    PID=$(pgrep -f "uvicorn.*app.main:app.*${INTERNAL_PORT}" | head -1)
     echo "   PID: $PID"
     echo ""
     read -p "Do you want to stop and restart? (y/n): " -n 1 -r
@@ -147,7 +153,7 @@ PID_FILE="/tmp/transcription-service.pid"
 # Start service with nohup (ทำงานต่อได้แม้ออกจาก terminal)
 echo "🚀 Starting Transcription Service (with nohup)..."
 echo "   Host: 0.0.0.0"
-echo "   Port: 8010"
+echo "   Port: ${INTERNAL_PORT}"
 echo "   Log: $LOG_FILE"
 echo "   PID: $PID_FILE"
 echo ""
@@ -164,7 +170,7 @@ nohup env TZ="${TZ:-Asia/Bangkok}" \
          PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
          python3 -m uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port 8010 \
+    --port ${INTERNAL_PORT} \
     --workers 1 \
     > "$LOG_FILE" 2>&1 &
 
@@ -183,19 +189,20 @@ if ps -p $SERVICE_PID > /dev/null; then
     
     # Wait a bit and test
     sleep 2
-    if curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
+    if curl -s -f http://localhost:${INTERNAL_PORT}/health > /dev/null 2>&1; then
         echo "✅ Service is responding"
         echo ""
         echo "📊 Service Information:"
-        echo "   URL: http://0.0.0.0:8010"
-        echo "   Health: http://localhost:8010/health"
-        echo "   Docs: http://localhost:8010/docs"
+        echo "   URL: http://0.0.0.0:${INTERNAL_PORT}"
+        echo "   Health: http://localhost:${INTERNAL_PORT}/health"
+        echo "   Docs: http://localhost:${INTERNAL_PORT}/docs"
         echo "   Log: tail -f $LOG_FILE"
         echo "   PID: cat $PID_FILE"
         echo ""
+        EXTERNAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "80.15.7.37")
         echo "🌐 External Access:"
-        echo "   URL: http://80.15.7.37:8010"
-        echo "   Health: http://80.15.7.37:8010/health"
+        echo "   IP: ${EXTERNAL_IP}"
+        echo "   💡 Use RunPod port mapping to access externally"
         echo ""
         echo "💡 Useful Commands:"
         echo "   Stop: kill \$(cat $PID_FILE)"
@@ -203,7 +210,7 @@ if ps -p $SERVICE_PID > /dev/null; then
         echo "   Status: ps aux | grep uvicorn"
     else
         echo "⚠️  Service started but not responding yet (check log: $LOG_FILE)"
-        echo "   Wait a few seconds and check: curl http://localhost:8010/health"
+        echo "   Wait a few seconds and check: curl http://localhost:${INTERNAL_PORT}/health"
     fi
 else
     echo "❌ Failed to start service"

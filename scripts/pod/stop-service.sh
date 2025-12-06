@@ -1,11 +1,20 @@
 #!/bin/bash
 # Script สำหรับ Stop Transcription Service
+#
+# วิธีใช้งาน:
+#   bash scripts/pod/stop-service.sh [INTERNAL_PORT]
+#
+# Parameters:
+#   INTERNAL_PORT  - Internal port (optional, default: 8010)
 
 set -e
 
+# Parse optional internal port parameter
+INTERNAL_PORT="${1:-8010}"
+
 PID_FILE="/tmp/transcription-service.pid"
 
-echo "🛑 Stopping Transcription Service"
+echo "🛑 Stopping Transcription Service (Port: ${INTERNAL_PORT})"
 echo "=================================="
 echo ""
 
@@ -31,13 +40,13 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # Method 2: Find by process name
-PID=$(pgrep -f "uvicorn.*app.main:app.*8001" | head -1)
+PID=$(pgrep -f "uvicorn.*app.main:app.*${INTERNAL_PORT}" | head -1)
 if [ ! -z "$PID" ]; then
     echo "Found running service (PID: $PID)..."
     kill $PID 2>/dev/null || kill -9 $PID
     echo "✅ Service stopped"
 else
-    echo "✅ No service running"
+    echo "✅ No service running on port ${INTERNAL_PORT}"
 fi
 
 echo ""

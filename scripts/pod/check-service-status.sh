@@ -2,13 +2,20 @@
 # Script สำหรับตรวจสอบสถานะ Transcription Service บน Pod
 #
 # วิธีใช้งาน:
-#   bash scripts/pod/check-service-status.sh
+#   bash scripts/pod/check-service-status.sh [EXTERNAL_PORT]
+#
+# Parameters:
+#   EXTERNAL_PORT  - External port (optional, default: 41462)
 #
 # Port Configuration:
 #   - Internal Port: 8010 (บน Pod)
-#   - External Port: 41462 (จากภายนอก, forward ไปที่ 8010)
+#   - External Port: 41462 (default) หรือระบุเอง
 
 set -e
+
+# Parse optional external port parameter
+EXTERNAL_PORT="${1:-41462}"
+INTERNAL_PORT="8010"
 
 # Colors
 RED='\033[0;31m'
@@ -29,7 +36,7 @@ echo ""
 # Check 1: Process Status
 echo "1️⃣  Process Status"
 echo "─────────────────"
-PID=$(pgrep -f "uvicorn.*app.main:app.*8010" | head -1)
+PID=$(pgrep -f "uvicorn.*app.main:app.*${INTERNAL_PORT}" | head -1)
 if [ ! -z "$PID" ]; then
     echo -e "${GREEN}✅ Service is RUNNING${NC}"
     echo "   PID: $PID"
@@ -76,25 +83,25 @@ echo ""
 echo "2️⃣  Port Status"
 echo "──────────────"
 if command -v netstat > /dev/null; then
-    PORT_STATUS=$(netstat -tlnp 2>/dev/null | grep ":8010" || echo "")
+    PORT_STATUS=$(netstat -tlnp 2>/dev/null | grep ":${INTERNAL_PORT}" || echo "")
 elif command -v ss > /dev/null; then
-    PORT_STATUS=$(ss -tlnp 2>/dev/null | grep ":8010" || echo "")
+    PORT_STATUS=$(ss -tlnp 2>/dev/null | grep ":${INTERNAL_PORT}" || echo "")
 else
     PORT_STATUS=""
 fi
 
 if [ ! -z "$PORT_STATUS" ]; then
-    echo -e "${GREEN}✅ Port 8010 is LISTENING${NC}"
+    echo -e "${GREEN}✅ Port ${INTERNAL_PORT} is LISTENING${NC}"
     echo "$PORT_STATUS" | head -1 | sed 's/^/   /'
 else
-    echo -e "${RED}❌ Port 8010 is NOT listening${NC}"
+    echo -e "${RED}❌ Port ${INTERNAL_PORT} is NOT listening${NC}"
 fi
 echo ""
 
 # Check 3: Health Check
 echo "3️⃣  Health Check"
 echo "───────────────"
-HEALTH_RESPONSE=$(curl -s -m 5 http://localhost:8010/health 2>&1 || echo "ERROR")
+HEALTH_RESPONSE=$(curl -s -m 5 http://localhost:${INTERNAL_PORT}/health 2>&1 || echo "ERROR")
 if echo "$HEALTH_RESPONSE" | grep -q "healthy\|status"; then
     echo -e "${GREEN}✅ Health check PASSED${NC}"
     echo "   Response: $(echo "$HEALTH_RESPONSE" | head -1 | cut -c1-100)"
@@ -113,7 +120,7 @@ echo ""
 # Check 4: API Endpoint
 echo "4️⃣  API Endpoint"
 echo "───────────────"
-API_RESPONSE=$(curl -s -m 5 http://localhost:8010/ 2>&1 || echo "ERROR")
+API_RESPONSE=$(curl -s -m 5 http://localhost:${INTERNAL_PORT}/ 2>&1 || echo "ERROR")
 if echo "$API_RESPONSE" | grep -q "Transcription\|message"; then
     echo -e "${GREEN}✅ API is responding${NC}"
     MESSAGE=$(echo "$API_RESPONSE" | grep -o '\"message\":\"[^\"]*\"' | head -1 || echo "")
@@ -174,13 +181,12 @@ echo ""
 echo "7️⃣  External Access"
 echo "───────────────────"
 EXTERNAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || curl -s ifconfig.me 2>/dev/null || echo "80.15.7.37")
-EXTERNAL_PORT="41462"  # External port (mapped to internal 8010)
-INTERNAL_PORT="8010"   # Internal port
 EXTERNAL_URL="http://${EXTERNAL_IP}:${EXTERNAL_PORT}"
 INTERNAL_URL="http://localhost:${INTERNAL_PORT}"
 
 echo "   Internal URL: $INTERNAL_URL/health"
 echo "   External URL: $EXTERNAL_URL/health"
+echo "   Port mapping: ${EXTERNAL_PORT} -> ${INTERNAL_PORT}"
 echo ""
 
 # Check internal access
