@@ -276,7 +276,7 @@ class AsyncMessageHandlers:
                 logger.info(f"📤 [Audio Extraction] Sending to transcription_queue: {task_id}")
                 # ใช้ async_safe_publish สำหรับ async publishing
                 success = await self.worker.connection.async_safe_publish(
-                    exchange='',
+                    exchange_name='',
                     routing_key=self.worker.connection.transcription_queue_name,
                     body=json.dumps(transcription_message)
                 )
@@ -379,7 +379,7 @@ class AsyncMessageHandlers:
                     # Route to audio_extraction_queue
                     logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue")
                     success = await self.worker.connection.async_safe_publish(
-                        exchange='',
+                        exchange_name='',
                         routing_key=self.worker.connection.audio_extraction_queue_name,
                         body=json.dumps(route_message)
                     )
@@ -392,7 +392,7 @@ class AsyncMessageHandlers:
                     # Route directly to transcription_queue
                     logger.info(f"📤 [Download & Route] Routing audio file to transcription_queue")
                     success = await self.worker.connection.async_safe_publish(
-                        exchange='',
+                        exchange_name='',
                         routing_key=self.worker.connection.transcription_queue_name,
                         body=json.dumps(route_message)
                     )
