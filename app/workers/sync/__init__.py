@@ -1,7 +1,7 @@
 """
 Sync Workers - ใช้ pika (blocking) สำหรับ RabbitMQ
 """
-from .video_worker import VideoWorkerSync
+from .video_worker import VideoWorkerPika
 
-__all__ = ['VideoWorkerSync']
+__all__ = ['VideoWorkerPika']
 
