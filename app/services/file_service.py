@@ -108,7 +108,8 @@ class FileService:
         
         try:
             stream = ffmpeg.input(video_path)
-            stream = ffmpeg.output(stream, str(audio_path), acodec='pcm_s16le', ar=16000)
+            # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น (Whisper จะ downsample เอง)
+            stream = ffmpeg.output(stream, str(audio_path), acodec='pcm_s16le', ar=48000)
             ffmpeg.run(stream, overwrite_output=True, quiet=True)
             
             return str(audio_path)
