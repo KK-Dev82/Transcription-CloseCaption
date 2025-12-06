@@ -131,7 +131,8 @@ class ThaiTextProcessor:
         # ขั้นตอนที่ 2: แก้ไขการซ้ำคำที่มีช่องว่าง (เช่น "การ การ การ...")
         # ตรวจสอบว่ามีคำซ้ำติดกันมากเกินไปหรือไม่
         words = corrected.split()
-        if len(words) > 20:
+        # ลด threshold จาก 20 เป็น 3 เพื่อตรวจจับคำซ้ำได้เร็วขึ้น
+        if len(words) >= 3:
             consecutive_repeats = 0
             prev_word = None
             max_consecutive = 0
