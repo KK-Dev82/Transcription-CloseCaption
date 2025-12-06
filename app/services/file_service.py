@@ -85,7 +85,8 @@ class FileService:
             try:
                 # ใช้ FFmpeg ตัดไฟล์
                 stream = ffmpeg.input(file_path, ss=start_time, t=end_time-start_time)
-                stream = ffmpeg.output(stream, str(chunk_path), acodec='pcm_s16le', ar=16000)
+                # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น (Whisper จะ downsample เอง)
+                stream = ffmpeg.output(stream, str(chunk_path), acodec='pcm_s16le', ar=48000)
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
                 
                 chunks.append(str(chunk_path))
