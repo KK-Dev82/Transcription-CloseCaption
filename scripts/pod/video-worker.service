@@ -1,0 +1,31 @@
+[Unit]
+Description=Transcription Video Worker
+After=network.target rabbitmq-server.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/workspace/transcription-service
+ExecStart=/usr/bin/python3 -m app.workers.video_worker
+Restart=always
+RestartSec=10
+StartLimitInterval=0
+StartLimitBurst=0
+StandardOutput=append:/tmp/video-worker.log
+StandardError=append:/tmp/video-worker.log
+Environment="PYTHONPATH=/workspace/transcription-service"
+Environment="PYTHONUSERBASE=/workspace/.local"
+EnvironmentFile=/workspace/transcription-service/.env.runpod
+
+# Resource limits
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+# Security (optional)
+# NoNewPrivileges=true
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+
