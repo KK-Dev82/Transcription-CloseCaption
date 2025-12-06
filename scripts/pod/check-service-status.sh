@@ -5,16 +5,16 @@
 #   bash scripts/pod/check-service-status.sh [EXTERNAL_PORT]
 #
 # Parameters:
-#   EXTERNAL_PORT  - External port (optional, default: 41462)
+#   EXTERNAL_PORT  - External port (optional, default: 41301)
 #
 # Port Configuration:
 #   - Internal Port: 8010 (บน Pod)
-#   - External Port: 41462 (default) หรือระบุเอง
+#   - External Port: 41301 (default) หรือระบุเอง
 
 set -e
 
 # Parse optional external port parameter
-EXTERNAL_PORT="${1:-41462}"
+EXTERNAL_PORT="${1:-41301}"
 INTERNAL_PORT="8010"
 
 # Colors
