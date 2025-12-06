@@ -668,13 +668,14 @@ class TranscriptionService:
                         task_dict['total_tasks'] = total_tasks
                         task_dict['completed_tasks'] = completed_tasks
                         
-                        # สร้าง task_breakdown ถ้ายังไม่มี
-                        if 'task_breakdown' not in task_dict:
+                        # สร้าง task_breakdown ถ้ายังไม่มี หรือเป็น None
+                        if 'task_breakdown' not in task_dict or task_dict.get('task_breakdown') is None:
                             task_dict['task_breakdown'] = []
                         
                         # เพิ่ม transcription task ใน task_breakdown ถ้ายังไม่มี
+                        task_breakdown = task_dict.get('task_breakdown') or []
                         transcription_task_exists = any(
-                            t.get('type') == 'transcription' for t in task_dict.get('task_breakdown', [])
+                            t.get('type') == 'transcription' for t in task_breakdown if isinstance(t, dict)
                         )
                         if not transcription_task_exists:
                             task_dict['task_breakdown'].append({
