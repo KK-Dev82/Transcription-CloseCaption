@@ -333,7 +333,7 @@ class AsyncRabbitMQConnection:
         exchange_name: str,
         routing_key: str,
         body: str,
-        properties: Optional[aio_pika.BasicProperties] = None,
+        properties: Optional[Dict[str, Any]] = None,
         max_retries: int = 3
     ) -> bool:
         """
