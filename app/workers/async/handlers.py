@@ -405,7 +405,7 @@ class AsyncMessageHandlers:
                     # Unknown file type - try to route to extraction first
                     logger.warning(f"⚠️ [Download & Route] Unknown file type - routing to audio_extraction_queue")
                     success = await self.worker.connection.async_safe_publish(
-                        exchange='',
+                        exchange_name='',
                         routing_key=self.worker.connection.audio_extraction_queue_name,
                         body=json.dumps(route_message)
                     )
