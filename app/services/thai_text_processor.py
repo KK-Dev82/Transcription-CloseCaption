@@ -93,14 +93,15 @@ class ThaiTextProcessor:
         
         # ขั้นตอนที่ 1: แก้ไขการซ้ำคำที่ไม่มีช่องว่าง (เช่น "การการการการ...")
         # Pattern: จับคำไทย 1-6 ตัวอักษรที่ซ้ำกันติดกัน 4+ ครั้ง
-        pattern_no_space = r'([ก-ฮ]{1,6}?)\1{3,}'
+        # ใช้ greedy matching เพื่อจับคำที่ยาวที่สุดก่อน
+        pattern_no_space = r'([ก-ฮ]{1,6})\1{3,}'
         
         def replace_repetition_no_space(match):
             repeated_word = match.group(1)
             full_match = match.group(0)
             repeat_count = len(full_match) // len(repeated_word)
             
-            # ถ้าซ้ำมากกว่า 10 ครั้ง ถือว่าเป็นความผิดปกติจาก transcription
+            # ถ้าซ้ำมากกว่า 10 ครั้ง ถือว่าเป็นความผิดปกติจาก transcription → ลดเหลือ 1 ครั้ง
             if repeat_count > 10:
                 logger.warning(
                     f"⚠️ Detected abnormal word repetition (no spaces): "
@@ -119,7 +120,13 @@ class ThaiTextProcessor:
             else:
                 return full_match
         
-        corrected = re.sub(pattern_no_space, replace_repetition_no_space, corrected)
+        # รันหลายรอบเพื่อจับคำซ้ำที่อาจมีหลายกลุ่ม
+        max_iterations = 5
+        for i in range(max_iterations):
+            old_corrected = corrected
+            corrected = re.sub(pattern_no_space, replace_repetition_no_space, corrected)
+            if corrected == old_corrected:
+                break  # ไม่มีการเปลี่ยนแปลงแล้ว
         
         # ขั้นตอนที่ 2: แก้ไขการซ้ำคำที่มีช่องว่าง (เช่น "การ การ การ...")
         # ตรวจสอบว่ามีคำซ้ำติดกันมากเกินไปหรือไม่
