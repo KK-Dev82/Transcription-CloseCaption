@@ -793,9 +793,16 @@ class TranscriptionService:
             task_data = task.__dict__
             task_data['chunks'] = [None] * len(chunks)  # Ensure chunks array is initialized
             
-            self.json_storage.save_transcription(task_id, task_data)
-            
+            # Initialize progress tracking: total_chunks และ completed_chunks
             total_chunks = len(chunks)
+            task_data['total_chunks'] = total_chunks
+            task_data['completed_chunks'] = 0
+            # สำหรับ chunking mode: total_tasks = 1 (audio extraction, ถ้ามี) + total_chunks (transcription)
+            # แต่เราจะคำนวณเมื่อ audio extraction เสร็จแล้ว
+            task_data['total_tasks'] = None  # จะอัปเดตเมื่อรู้จำนวน chunks
+            task_data['completed_tasks'] = 0
+            
+            self.json_storage.save_transcription(task_id, task_data)
             
             # ส่งแต่ละ chunk ไปยัง queue
             for i, chunk_path in enumerate(chunks):

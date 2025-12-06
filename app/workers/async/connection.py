@@ -146,7 +146,8 @@ class AsyncRabbitMQConnection:
         queue_name: str,
         max_length: int = 0,
         enable_dlx: bool = True,
-        enable_quorum: bool = True
+        enable_quorum: bool = True,
+        enable_priority: bool = True
     ) -> Dict[str, Any]:
         """
         สร้าง queue arguments สำหรับ quorum queue ตาม Final Architecture Design
@@ -156,6 +157,7 @@ class AsyncRabbitMQConnection:
             max_length: จำนวน messages สูงสุด (0 = no limit)
             enable_dlx: เปิดใช้งาน Dead Letter Exchange
             enable_quorum: ใช้ quorum queue type
+            enable_priority: เปิดใช้งาน Priority Queue (0-10)
         
         Returns:
             Dictionary ของ queue arguments
@@ -171,6 +173,14 @@ class AsyncRabbitMQConnection:
         if max_length > 0:
             arguments['x-max-length'] = max_length
             arguments['x-overflow'] = 'reject-publish'
+        
+        # Priority Queue (รองรับ priority 0-10)
+        # CloseCaption (realtime_chunks) → priority 10
+        # Normal transcription → priority 5
+        if enable_priority:
+            max_priority = int(os.getenv('RABBITMQ_MAX_PRIORITY', '10'))
+            arguments['x-max-priority'] = max_priority
+            logger.debug(f"✅ Priority queue enabled for {queue_name}: max_priority={max_priority}")
         
         # Dead Letter Exchange (DLX)
         enable_dlx_flag = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
@@ -254,7 +264,8 @@ class AsyncRabbitMQConnection:
                 self.audio_extraction_queue_name,
                 max_length=max_extraction,
                 enable_dlx=True,
-                enable_quorum=True
+                enable_quorum=True,
+                enable_priority=True  # Enable priority for CloseCaption
             )
             await self.channel.declare_queue(
                 self.audio_extraction_queue_name,
@@ -308,12 +319,25 @@ class AsyncRabbitMQConnection:
                 logger.error(f"❌ Exchange {exchange} not found")
                 return False
             
-            # Create message
+            # Create message with priority support
+            message_properties = {
+                'delivery_mode': aio_pika.DeliveryMode.PERSISTENT,
+                'content_type': 'application/json'
+            }
+            
+            # Add priority if provided (0-10, higher = more priority)
+            if properties and 'priority' in properties:
+                message_properties['priority'] = properties['priority']
+            
+            # Add other properties if any
+            if properties:
+                for key, value in properties.items():
+                    if key != 'priority' and key not in message_properties:
+                        message_properties[key] = value
+            
             message = Message(
                 body,
-                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                content_type='application/json',
-                **(properties or {})
+                **message_properties
             )
             
             # Publish

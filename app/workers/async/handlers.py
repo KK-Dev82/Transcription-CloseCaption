@@ -274,11 +274,14 @@ class AsyncMessageHandlers:
                 }
                 
                 logger.info(f"📤 [Audio Extraction] Sending to transcription_queue: {task_id}")
+                # กำหนด priority ตาม display_mode (ต่อเนื่องจาก transcription_request_queue)
+                priority = 10 if display_mode == "realtime_chunks" else 5
                 # ใช้ async_safe_publish สำหรับ async publishing
                 success = await self.worker.connection.async_safe_publish(
                     exchange_name='',
                     routing_key=self.worker.connection.transcription_queue_name,
-                    body=json.dumps(transcription_message)
+                    body=json.dumps(transcription_message),
+                    properties={'priority': priority}
                 )
                 if success:
                     logger.info(f"✅ [Audio Extraction] Sent to transcription_queue: {task_id}")
@@ -377,11 +380,14 @@ class AsyncMessageHandlers:
                 
                 if is_video:
                     # Route to audio_extraction_queue
-                    logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue")
+                    # กำหนด priority ตาม display_mode (ต่อเนื่องจาก transcription_request_queue)
+                    priority = 10 if display_mode == "realtime_chunks" else 5
+                    logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue (priority={priority})")
                     success = await self.worker.connection.async_safe_publish(
                         exchange_name='',
                         routing_key=self.worker.connection.audio_extraction_queue_name,
-                        body=json.dumps(route_message)
+                        body=json.dumps(route_message),
+                        properties={'priority': priority}
                     )
                     if success:
                         logger.info(f"✅ [Download & Route] Routed to audio_extraction_queue: {task_id}")
@@ -390,11 +396,14 @@ class AsyncMessageHandlers:
                         raise RuntimeError(f"Failed to publish to audio_extraction_queue: {task_id}")
                 elif is_audio:
                     # Route directly to transcription_queue
-                    logger.info(f"📤 [Download & Route] Routing audio file to transcription_queue")
+                    # กำหนด priority ตาม display_mode (ต่อเนื่องจาก transcription_request_queue)
+                    priority = 10 if display_mode == "realtime_chunks" else 5
+                    logger.info(f"📤 [Download & Route] Routing audio file to transcription_queue (priority={priority})")
                     success = await self.worker.connection.async_safe_publish(
                         exchange_name='',
                         routing_key=self.worker.connection.transcription_queue_name,
-                        body=json.dumps(route_message)
+                        body=json.dumps(route_message),
+                        properties={'priority': priority}
                     )
                     if success:
                         logger.info(f"✅ [Download & Route] Routed to transcription_queue: {task_id}")
@@ -403,11 +412,14 @@ class AsyncMessageHandlers:
                         raise RuntimeError(f"Failed to publish to transcription_queue: {task_id}")
                 else:
                     # Unknown file type - try to route to extraction first
-                    logger.warning(f"⚠️ [Download & Route] Unknown file type - routing to audio_extraction_queue")
+                    # กำหนด priority ตาม display_mode (ต่อเนื่องจาก transcription_request_queue)
+                    priority = 10 if display_mode == "realtime_chunks" else 5
+                    logger.warning(f"⚠️ [Download & Route] Unknown file type - routing to audio_extraction_queue (priority={priority})")
                     success = await self.worker.connection.async_safe_publish(
                         exchange_name='',
                         routing_key=self.worker.connection.audio_extraction_queue_name,
-                        body=json.dumps(route_message)
+                        body=json.dumps(route_message),
+                        properties={'priority': priority}
                     )
                     if not success:
                         logger.error(f"❌ [Download & Route] Failed to route: {task_id}")
