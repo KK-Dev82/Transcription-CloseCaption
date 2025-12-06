@@ -173,6 +173,15 @@ env PYTHONUSERBASE="/workspace/.local" \
 env PYTHONUSERBASE="/workspace/.local" \
     PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
     python3 -c "from faster_whisper import WhisperModel; print('✅ faster-whisper: OK')" || echo "⚠️  faster-whisper not found"
+env PYTHONUSERBASE="/workspace/.local" \
+    PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+    python3 -c "import aio_pika; print('✅ aio-pika:', aio_pika.__version__)" || echo "⚠️  aio-pika not found"
+env PYTHONUSERBASE="/workspace/.local" \
+    PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+    python3 -c "import aiofiles; print('✅ aiofiles: OK')" || echo "⚠️  aiofiles not found"
+env PYTHONUSERBASE="/workspace/.local" \
+    PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+    python3 -c "import pika; print('✅ pika:', pika.__version__)" || echo "⚠️  pika not found"
 
 echo ""
 echo "=============================="
