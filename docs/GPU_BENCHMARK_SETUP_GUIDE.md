@@ -322,6 +322,26 @@ bash scripts/benchmark/compare-results.sh rtx4080 rtx4000 rtx5080
 3. **ใช้ Model เดียวกัน**: `medium` (หรือ `large-v3`)
 4. **ตรวจสอบ API Running**: `bash scripts/pod/check-pod.sh` ก่อนรัน benchmark
 
+### แก้ไขปัญหา "Port 8001 already in use"
+
+ถ้าเจอ error `[Errno 98] error while attempting to bind on address ('0.0.0.0', 8001): address already in use`:
+
+```bash
+# วิธีที่ 1: ใช้ fix script
+bash scripts/pod/fix-port-8001.sh
+
+# วิธีที่ 2: Stop services ทั้งหมด
+bash scripts/pod/stop-pod.sh
+
+# วิธีที่ 3: Kill process ที่ใช้ port 8001
+lsof -ti:8001 | xargs kill -9
+```
+
+**สาเหตุที่พบบ่อย:**
+- รัน `start-pod.sh` ไปแล้ว แล้วพยายามรัน `setup-pod.sh` อีกครั้ง
+- มี process เก่าค้างอยู่
+- มี service อื่นใช้ port 8001
+
 ---
 
 ## 📚 เอกสารที่เกี่ยวข้อง

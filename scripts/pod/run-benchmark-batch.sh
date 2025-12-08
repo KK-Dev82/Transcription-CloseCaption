@@ -77,12 +77,18 @@ print_status "GPU: $GPU_NAME"
 print_status "Total Videos: $TOTAL_VIDEOS"
 echo ""
 
-# Check if API is running
-if ! curl -f http://localhost:8001/health > /dev/null 2>&1; then
-    print_error "❌ Main API is not running"
-    print_status "💡 Start API first: bash scripts/pod/start-pod.sh"
+# Detect API port (8001 or 8010)
+API_PORT=""
+if curl -s -f http://localhost:8001/health > /dev/null 2>&1; then
+    API_PORT=8001
+elif curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
+    API_PORT=8010
+else
+    print_error "❌ API not found on port 8001 or 8010"
+    print_status "💡 Start API: bash scripts/pod/start-pod.sh"
     exit 1
 fi
+print_status "Using API port: $API_PORT"
 
 SUCCESS_COUNT=0
 FAILED_COUNT=0

@@ -28,6 +28,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# Check if services are already running
+print_status "Checking for running services..."
+SERVICES_RUNNING=false
+
+if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
+    print_warning "⚠️  Main API is already running (port 8001)"
+    SERVICES_RUNNING=true
+fi
+
+if pgrep -f "python.*video_worker" > /dev/null; then
+    print_warning "⚠️  Video Worker is already running"
+    SERVICES_RUNNING=true
+fi
+
+if pgrep -x "redis-server" > /dev/null; then
+    print_warning "⚠️  Redis is already running"
+    SERVICES_RUNNING=true
+fi
+
+if [ "$SERVICES_RUNNING" = true ]; then
+    echo ""
+    print_warning "⚠️  Some services are already running"
+    print_status "💡 If you encounter 'address already in use' error, stop services first:"
+    echo "   bash scripts/pod/stop-pod.sh"
+    echo ""
+    read -p "Continue with setup anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "Setup cancelled. Please stop services first if needed."
+        exit 0
+    fi
+    echo ""
+fi
+
 # Create directories
 print_status "Creating directories..."
 mkdir -p uploads storage/transcriptions storage/metadata storage/captions temp models test-files
