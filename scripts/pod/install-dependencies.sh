@@ -142,6 +142,98 @@ pip3 install --user --no-cache-dir \
 echo "✅ Whisper dependencies installed"
 echo ""
 
+# Install cuDNN (for CUDA 11.8)
+echo "📦 Installing cuDNN for CUDA 11.8..."
+CUDNN_DIR="/workspace/cudnn"
+CUDNN_LIB_DIR="$CUDNN_DIR/lib"
+CUDNN_INCLUDE_DIR="$CUDNN_DIR/include"
+
+# Check if cuDNN is already installed
+if [ -d "$CUDNN_LIB_DIR" ] && [ -f "$CUDNN_LIB_DIR/libcudnn.so" ]; then
+    echo "✅ cuDNN already installed at $CUDNN_DIR"
+    echo "   Library files found in $CUDNN_LIB_DIR"
+else
+    echo "📥 Downloading cuDNN 8.9.7 for CUDA 11.8..."
+    mkdir -p "$CUDNN_DIR"
+    cd "$CUDNN_DIR"
+    
+    # Download cuDNN (using NVIDIA's official method or pre-built binaries)
+    # Note: This requires NVIDIA Developer account or using pre-built packages
+    CUDNN_VERSION="8.9.7"
+    CUDA_VERSION="11.8"
+    
+    # Try to download from NVIDIA (requires authentication)
+    # Alternative: Use pre-built cuDNN from PyTorch or conda
+    echo "   Attempting to install cuDNN via conda/pip method..."
+    
+    # Method 1: Try installing via pip (if available)
+    if pip3 show nvidia-cudnn-cu11 > /dev/null 2>&1; then
+        echo "✅ cuDNN package already installed via pip"
+    else
+        echo "   Installing nvidia-cudnn-cu11 via pip..."
+        pip3 install --user --no-cache-dir nvidia-cudnn-cu11==8.9.7.29 || {
+            echo "⚠️  Failed to install via pip, trying alternative method..."
+            
+            # Method 2: Download and extract cuDNN manually
+            echo "   Downloading cuDNN from PyTorch repository..."
+            # Use wget or curl to download cuDNN
+            # For CUDA 11.8, we need cuDNN 8.9.x
+            
+            # Create symlink structure
+            mkdir -p "$CUDNN_LIB_DIR" "$CUDNN_INCLUDE_DIR"
+            
+            # Try to find cuDNN in system or PyTorch installation
+            PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/local/lib/python3.10/dist-packages")
+            
+            # Look for cuDNN in common locations
+            CUDNN_FOUND=false
+            for SEARCH_PATH in \
+                "/usr/local/cuda/lib64" \
+                "/usr/lib/x86_64-linux-gnu" \
+                "$PYTHON_SITE/nvidia_cudnn_cu11/lib" \
+                "/workspace/.local/lib/python3.10/site-packages/nvidia_cudnn_cu11/lib"; do
+                if [ -f "$SEARCH_PATH/libcudnn.so.8" ] || [ -f "$SEARCH_PATH/libcudnn.so" ]; then
+                    echo "   ✅ Found cuDNN at $SEARCH_PATH"
+                    # Create symlinks
+                    ln -sf "$SEARCH_PATH"/libcudnn*.so* "$CUDNN_LIB_DIR/" 2>/dev/null || true
+                    if [ -d "$SEARCH_PATH/../include" ]; then
+                        ln -sf "$SEARCH_PATH/../include"/cudnn*.h "$CUDNN_INCLUDE_DIR/" 2>/dev/null || true
+                    fi
+                    CUDNN_FOUND=true
+                    break
+                fi
+            done
+            
+            if [ "$CUDNN_FOUND" = false ]; then
+                echo "⚠️  cuDNN not found in system. Installing nvidia-cudnn-cu11 package..."
+                # Install via pip with retry
+                pip3 install --user --no-cache-dir --upgrade nvidia-cudnn-cu11 2>&1 | tail -5 || {
+                    echo "❌ Failed to install cuDNN"
+                    echo "   💡 Manual installation required:"
+                    echo "   1. Download cuDNN from https://developer.nvidia.com/cudnn"
+                    echo "   2. Extract to $CUDNN_DIR"
+                    echo "   3. Ensure libcudnn.so* files are in $CUDNN_LIB_DIR"
+                }
+            fi
+        }
+    fi
+    
+    # Verify installation
+    if [ -d "$CUDNN_LIB_DIR" ] && (ls "$CUDNN_LIB_DIR"/libcudnn*.so* > /dev/null 2>&1 || python3 -c "import nvidia.cudnn; print('✅ cuDNN available via Python package')" 2>/dev/null); then
+        echo "✅ cuDNN installed successfully"
+        echo "   Location: $CUDNN_DIR"
+        if [ -d "$CUDNN_LIB_DIR" ]; then
+            echo "   Libraries: $(ls -1 $CUDNN_LIB_DIR/libcudnn*.so* 2>/dev/null | wc -l) files"
+        fi
+    else
+        echo "⚠️  cuDNN installation may be incomplete"
+        echo "   Service may work but with reduced performance"
+    fi
+    
+    cd "$PROJECT_DIR"
+fi
+echo ""
+
 # Install remaining dependencies from requirements.txt
 echo "📦 Installing remaining dependencies..."
 echo "   (This may take a while...)"
