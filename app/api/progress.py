@@ -36,6 +36,10 @@ async def get_transcription_progress(task_id: str):
             "file_path": task_dict.get("file_path"),
             "language": task_dict.get("language"),
             "total_duration": task_dict.get("total_duration"),
+            # Detailed Stage Information
+            "current_stage": task_dict.get("current_stage"),
+            "current_stage_description": task_dict.get("current_stage_description"),
+            "stage_progress": task_dict.get("stage_progress"),
         }
         
         # เพิ่มข้อมูล progress stage

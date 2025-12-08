@@ -125,7 +125,8 @@ class WhisperService:
     
     def transcribe_file(self, audio_path: str, model_size: str = "base", 
                        language: str = "th", output_format: str = "json", 
-                       use_thai_processor: bool = True) -> Dict:
+                       use_thai_processor: bool = True,
+                       initial_prompt: Optional[str] = None) -> Dict:
         """
         แปลงเสียงเป็นข้อความ - ใช้ Provider Pattern
         
@@ -150,7 +151,7 @@ class WhisperService:
             # ⚠️ ใช้ _run_async_transcribe เสมอ (ใช้ asyncio.run()) เพื่อป้องกัน event loop conflict
             # ไม่ต้องตรวจสอบ event loop เพราะ _run_async_transcribe จะจัดการเอง
             logger.info(f"🔍 DEBUG: Calling _run_async_transcribe()...")
-            result: TranscriptionResult = self._run_async_transcribe(audio_path, language, model_size)
+            result: TranscriptionResult = self._run_async_transcribe(audio_path, language, model_size, initial_prompt)
             logger.info(f"🔍 DEBUG: _run_async_transcribe() completed, result type: {type(result)}")
             
             # Convert to dict format (backward compatible)
@@ -172,7 +173,7 @@ class WhisperService:
             logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง: {e}")
             raise
     
-    def _run_async_transcribe(self, audio_path: str, language: str, model_size: str) -> TranscriptionResult:
+    def _run_async_transcribe(self, audio_path: str, language: str, model_size: str, initial_prompt: Optional[str] = None) -> TranscriptionResult:
         """
         Helper method to run async transcribe
         ⚠️ ต้องไม่ถูกเรียกจาก async function โดยตรง - ใช้ await provider.transcribe() แทน
@@ -187,20 +188,20 @@ class WhisperService:
             # ใช้ ThreadPoolExecutor เพื่อรัน async function ใน thread แยก (ไม่มี event loop)
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(self._run_async_transcribe_in_new_loop, audio_path, language, model_size)
+                future = executor.submit(self._run_async_transcribe_in_new_loop, audio_path, language, model_size, initial_prompt)
                 return future.result()
         except RuntimeError:
             # ไม่มี event loop อยู่แล้ว - สร้าง event loop ใหม่
-            return self._run_async_transcribe_in_new_loop(audio_path, language, model_size)
+            return self._run_async_transcribe_in_new_loop(audio_path, language, model_size, initial_prompt)
     
-    def _run_async_transcribe_in_new_loop(self, audio_path: str, language: str, model_size: str) -> TranscriptionResult:
+    def _run_async_transcribe_in_new_loop(self, audio_path: str, language: str, model_size: str, initial_prompt: Optional[str] = None) -> TranscriptionResult:
         """Helper method to run async transcribe in a completely new event loop (for thread execution)"""
         # สร้าง event loop ใหม่สำหรับ thread นี้
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             return loop.run_until_complete(
-                self.provider.transcribe(audio_path, language, model_size)
+                self.provider.transcribe(audio_path, language, model_size, initial_prompt)
             )
         finally:
             loop.close()

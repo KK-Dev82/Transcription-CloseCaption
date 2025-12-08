@@ -192,7 +192,8 @@ class FasterWhisperProvider(WhisperProvider):
         self, 
         audio_path: str, 
         language: str = "th",
-        model_size: str = None
+        model_size: str = None,
+        initial_prompt: Optional[str] = None
     ) -> TranscriptionResult:
         """
         Transcribe audio using faster-whisper with retry logic and GPU concurrency control
@@ -218,10 +219,10 @@ class FasterWhisperProvider(WhisperProvider):
             # Wrap threading.Semaphore ด้วย async context manager
             async with _async_semaphore_wrapper(thread_semaphore):
                 logger.debug(f"[Faster Whisper] GPU Concurrency Semaphore acquired - Starting transcription")
-                return await self._transcribe_with_retry(audio_path, language, model_size)
+                return await self._transcribe_with_retry(audio_path, language, model_size, initial_prompt)
         else:
             # CPU mode ไม่ต้องใช้ semaphore
-            return await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
+            return await self._transcribe_gpu_single_attempt(audio_path, language, model_size, initial_prompt)
     
     def _get_gpu_thread_semaphore(self) -> threading.Semaphore:
         """
@@ -246,7 +247,8 @@ class FasterWhisperProvider(WhisperProvider):
         self,
         audio_path: str,
         language: str = "th",
-        model_size: str = None
+        model_size: str = None,
+        initial_prompt: Optional[str] = None
     ) -> TranscriptionResult:
         """
         Transcribe with retry logic for GPU mode
@@ -263,7 +265,7 @@ class FasterWhisperProvider(WhisperProvider):
                 logger.info(f"[Faster Whisper] 🔄 Attempt {attempt + 1}/{MAX_RETRY_ATTEMPTS} - GPU transcription")
                 
                 # ลอง GPU mode
-                result = await self._transcribe_gpu_single_attempt(audio_path, language, model_size)
+                result = await self._transcribe_gpu_single_attempt(audio_path, language, model_size, initial_prompt)
                 
                 if attempt > 0:
                     logger.info(f"[Faster Whisper] ✅ GPU transcription succeeded on retry attempt {attempt + 1}")
@@ -313,7 +315,7 @@ class FasterWhisperProvider(WhisperProvider):
             # Fallback to CPU mode after all retries failed
             logger.warning(f"[Faster Whisper] 🔄 Falling back to CPU mode after {MAX_RETRY_ATTEMPTS} GPU retry attempts")
             try:
-                return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+                return await self._transcribe_cpu_fallback(audio_path, language, model_size, initial_prompt)
             except Exception as cpu_error:
                 logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
                 raise RuntimeError(f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries, and CPU fallback also failed: {cpu_error}") from last_error
@@ -329,7 +331,8 @@ class FasterWhisperProvider(WhisperProvider):
         self,
         audio_path: str,
         language: str = "th",
-        model_size: str = None
+        model_size: str = None,
+        initial_prompt: Optional[str] = None
     ) -> TranscriptionResult:
         """
         Single attempt GPU transcription (original transcribe logic)
@@ -404,7 +407,7 @@ class FasterWhisperProvider(WhisperProvider):
                     threshold=0.5
                 ) if vad_filter else None,
                 word_timestamps=False,  # ไม่ใช้ word-level timestamps (ลด overhead)
-                initial_prompt=None,  # ไม่ใช้ initial prompt
+                initial_prompt=initial_prompt,  # ใช้ initial_prompt ถ้ามี
                 no_speech_threshold=0.6,
                 without_timestamps=True,  # ให้คืน list แทน generator → ลดโอกาสค้าง
             )
@@ -610,6 +613,7 @@ class FasterWhisperProvider(WhisperProvider):
             without_timestamps=True,
             beam_size=1,
             temperature=0.0,
+            initial_prompt=initial_prompt,  # ใช้ initial_prompt ถ้ามี
         )
         
         processing_time = time.time() - start_time

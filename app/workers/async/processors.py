@@ -314,6 +314,7 @@ class AsyncTaskProcessors:
             model_size = chunk_task.get('model_size', 'base')
             language = chunk_task.get('language', 'th')
             chunk_duration = chunk_task.get('chunk_duration', 30)
+            initial_prompt = chunk_task.get('initial_prompt')  # ดึง initial_prompt
             
             # ตรวจสอบไฟล์ chunk
             chunk_file = Path(chunk_path)
@@ -322,10 +323,13 @@ class AsyncTaskProcessors:
             
             # Transcribe chunk
             logger.info(f"📝 Transcribing chunk {chunk_index+1}/{total_chunks}...")
+            if initial_prompt:
+                logger.debug(f"   Using initial_prompt: {initial_prompt[:100]}..." if len(initial_prompt) > 100 else f"   Using initial_prompt: {initial_prompt}")
             transcription_result = await self.worker.transcription_service.whisper_service.provider.transcribe(
                 str(chunk_path),
                 language,
-                model_size
+                model_size,
+                initial_prompt=initial_prompt  # ส่ง initial_prompt ไปยัง Whisper
             )
             
             # Convert TranscriptionResult to dict format
@@ -459,9 +463,12 @@ class AsyncTaskProcessors:
             model_size = task_data.get('model_size', 'base')
             chunk_duration = task_data.get('chunk_duration', 30)
             use_chunking = task_data.get('use_chunking', False)  # Default: false
+            initial_prompt = task_data.get('initial_prompt')  # ดึง initial_prompt
             
             logger.info(f"📂 เริ่ม transcription: {file_path}")
             logger.info(f"   Model: {model_size}, Language: {language}, Chunk Duration: {chunk_duration}s, Use Chunking: {use_chunking}")
+            if initial_prompt:
+                logger.info(f"   Initial Prompt: {initial_prompt[:100]}..." if len(initial_prompt) > 100 else f"   Initial Prompt: {initial_prompt}")
             
             # สร้าง task object สำหรับ transcription service
             from app.models.transcription import TranscriptionResponse
@@ -498,7 +505,8 @@ class AsyncTaskProcessors:
                     chunk_duration,
                     use_chunking=use_chunking,
                     file_url=task_data.get('file_url'),
-                    file_name=task_data.get('file_name')
+                    file_name=task_data.get('file_name'),
+                    initial_prompt=initial_prompt  # ส่ง initial_prompt
                 )
                 logger.info(f"✅ transcription_service._process_transcription completed")
             except Exception as e:
@@ -554,6 +562,9 @@ class AsyncTaskProcessors:
                 task_data['status'] = 'completed'
                 task_data['completed_at'] = datetime.now().isoformat()
                 task_data['progress'] = 100
+                task_data['current_stage'] = 'finalizing'
+                task_data['current_stage_description'] = 'การแปลงเสียงเสร็จสมบูรณ์'
+                task_data['stage_progress'] = 100
                 task_data['full_text'] = full_text
                 task_data['chunks'] = chunks
                 task_data['total_duration'] = existing_transcription.get('total_duration', task_data.get('total_duration'))
