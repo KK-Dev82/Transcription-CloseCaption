@@ -121,10 +121,13 @@ echo ""
 
 # Detect API port (8001 or 8010)
 API_PORT=""
-if curl -s -f http://localhost:8001/health > /dev/null 2>&1; then
+# Check port 8001 - verify it returns JSON (not HTML from nginx)
+HEALTH_8001=$(curl -s http://localhost:8001/health 2>&1)
+if echo "$HEALTH_8001" | grep -q '"status"\|"healthy"'; then
     API_PORT=8001
     print_success "✅ API found on port 8001"
-elif curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
+# Check port 8010 - verify it returns JSON
+elif HEALTH_8010=$(curl -s http://localhost:8010/health 2>&1) && echo "$HEALTH_8010" | grep -q '"status"\|"healthy"'; then
     API_PORT=8010
     print_success "✅ API found on port 8010"
 else
