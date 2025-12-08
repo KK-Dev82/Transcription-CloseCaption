@@ -117,12 +117,21 @@ echo ""
 
 START_TIME=$(date +%s.%N)
 
-# Check if API is running
-if ! curl -f http://localhost:8001/health > /dev/null 2>&1; then
-    print_error "❌ Main API is not running"
-    print_status "💡 Start API first: bash scripts/pod/start-pod.sh"
+# Detect API port (8001 or 8010)
+API_PORT=""
+if curl -s -f http://localhost:8001/health > /dev/null 2>&1; then
+    API_PORT=8001
+    print_success "✅ API found on port 8001"
+elif curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
+    API_PORT=8010
+    print_success "✅ API found on port 8010"
+else
+    print_error "❌ API not found on port 8001 or 8010"
+    print_status "💡 Start API: bash scripts/pod/start-pod.sh"
     exit 1
 fi
+print_status "Using API port: $API_PORT"
+echo ""
 
 # Submit transcription task
 print_status "Submitting transcription task..."
@@ -133,7 +142,7 @@ FILE_NAME=$(basename "$VIDEO_PATH")
 ABSOLUTE_VIDEO_PATH=$(cd "$(dirname "$VIDEO_PATH")" && pwd)/$(basename "$VIDEO_PATH")
 
 # Submit transcription using file_path
-TASK_RESPONSE=$(curl -s -X POST "http://localhost:8001/transcribe/" \
+TASK_RESPONSE=$(curl -s -X POST "http://localhost:${API_PORT}/transcribe/" \
     -H "Content-Type: application/json" \
     -d "{
         \"file_path\": \"$ABSOLUTE_VIDEO_PATH\",
@@ -165,7 +174,7 @@ LAST_PROGRESS=0
 while [ "$STATUS" != "completed" ] && [ "$STATUS" != "failed" ]; do
     sleep 2
     
-    TASK_STATUS=$(curl -s "http://localhost:8001/transcribe/$TASK_ID" 2>/dev/null || echo "")
+    TASK_STATUS=$(curl -s "http://localhost:${API_PORT}/transcribe/$TASK_ID" 2>/dev/null || echo "")
     
     if [ -z "$TASK_STATUS" ]; then
         print_warning "⚠️  Failed to get task status"
@@ -190,7 +199,17 @@ while [ "$STATUS" != "completed" ] && [ "$STATUS" != "failed" ]; do
 done
 
 END_TIME=$(date +%s.%N)
-ELAPSED=$(echo "$END_TIME - $START_TIME" | bc)
+# Calculate elapsed time without bc
+if command -v python3 > /dev/null 2>&1; then
+    ELAPSED=$(python3 -c "print($END_TIME - $START_TIME)")
+elif command -v awk > /dev/null 2>&1; then
+    ELAPSED=$(awk "BEGIN {print $END_TIME - $START_TIME}")
+else
+    # Fallback: use integer seconds
+    END_INT=$(echo "$END_TIME" | cut -d. -f1)
+    START_INT=$(echo "$START_TIME" | cut -d. -f1)
+    ELAPSED=$((END_INT - START_INT))
+fi
 
 # Get VRAM after
 if command -v nvidia-smi &> /dev/null; then
@@ -213,16 +232,37 @@ if [ "$STATUS" = "completed" ]; then
     # Get result (already have it from status check)
     RESULT="$TASK_STATUS"
     
-    # Calculate metrics
-    ELAPSED_INT=$(echo "$ELAPSED" | cut -d. -f1)
-    ELAPSED_MS=$(echo "$ELAPSED * 1000" | bc | cut -d. -f1)
-    
-    if [ "$DURATION_INT" -gt 0 ]; then
-        SPEEDUP=$(echo "scale=2; $DURATION_INT / $ELAPSED" | bc)
-        REALTIME_RATIO=$(echo "scale=2; $ELAPSED / $DURATION_INT" | bc)
+    # Calculate metrics without bc
+    if command -v python3 > /dev/null 2>&1; then
+        ELAPSED_INT=$(python3 -c "print(int($ELAPSED))")
+        ELAPSED_MS=$(python3 -c "print(int($ELAPSED * 1000))")
+        if [ "$DURATION_INT" -gt 0 ]; then
+            SPEEDUP=$(python3 -c "print(f'{($DURATION_INT / $ELAPSED):.2f}')")
+            REALTIME_RATIO=$(python3 -c "print(f'{($ELAPSED / $DURATION_INT):.2f}')")
+            THROUGHPUT=$(python3 -c "print(f'{(3600 / $ELAPSED):.2f}')")
+        else
+            SPEEDUP="N/A"
+            REALTIME_RATIO="N/A"
+            THROUGHPUT="N/A"
+        fi
+    elif command -v awk > /dev/null 2>&1; then
+        ELAPSED_INT=$(awk "BEGIN {print int($ELAPSED)}")
+        ELAPSED_MS=$(awk "BEGIN {print int($ELAPSED * 1000)}")
+        if [ "$DURATION_INT" -gt 0 ]; then
+            SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $DURATION_INT / $ELAPSED}")
+            REALTIME_RATIO=$(awk "BEGIN {printf \"%.2f\", $ELAPSED / $DURATION_INT}")
+            THROUGHPUT=$(awk "BEGIN {printf \"%.2f\", 3600 / $ELAPSED}")
+        else
+            SPEEDUP="N/A"
+            REALTIME_RATIO="N/A"
+            THROUGHPUT="N/A"
+        fi
     else
+        ELAPSED_INT=${ELAPSED%.*}
+        ELAPSED_MS=$((ELAPSED_INT * 1000))
         SPEEDUP="N/A"
         REALTIME_RATIO="N/A"
+        THROUGHPUT="N/A"
     fi
     
     # Save results to JSON
@@ -238,10 +278,10 @@ if [ "$STATUS" = "completed" ]; then
   },
   "performance": {
     "elapsed_time_seconds": $ELAPSED,
-    "elapsed_time_ms": $ELAPSED_MS,
+    "elapsed_time_ms": ${ELAPSED_MS:-0},
     "speedup": "$SPEEDUP",
     "realtime_ratio": "$REALTIME_RATIO",
-    "throughput_videos_per_hour": "$(echo "scale=2; 3600 / $ELAPSED" | bc)"
+    "throughput_videos_per_hour": "$THROUGHPUT"
   },
   "resources": {
     "vram_before_mb": $VRAM_BEFORE,

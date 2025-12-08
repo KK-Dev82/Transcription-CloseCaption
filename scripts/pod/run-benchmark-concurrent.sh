@@ -81,7 +81,14 @@ echo ""
 if command -v ffprobe &> /dev/null; then
     DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$VIDEO_PATH" 2>/dev/null || echo "0")
     DURATION_INT=$(echo "$DURATION" | cut -d. -f1)
-    print_status "Video Duration: ${DURATION_INT}s ($(echo "scale=2; $DURATION_INT/60" | bc) minutes)"
+    # Calculate minutes without bc
+    if [ "$DURATION_INT" -gt 0 ]; then
+        MINUTES=$((DURATION_INT / 60))
+        SECONDS=$((DURATION_INT % 60))
+        print_status "Video Duration: ${DURATION_INT}s (${MINUTES}m ${SECONDS}s)"
+    else
+        print_status "Video Duration: ${DURATION_INT}s"
+    fi
 else
     print_warning "⚠️  ffprobe not found, cannot get video duration"
     DURATION_INT=0
@@ -112,12 +119,40 @@ print_status "Result file: $RESULT_FILE"
 print_status "Log file: $RESULT_LOG"
 echo ""
 
-# Check if API is running
-if ! curl -f http://localhost:8001/health > /dev/null 2>&1; then
-    print_error "❌ Main API is not running"
-    print_status "💡 Start API first: bash scripts/pod/start-pod.sh"
-    exit 1
+# Detect API port (8001 or 8010)
+API_PORT=""
+if curl -s -f http://localhost:8001/health > /dev/null 2>&1; then
+    API_PORT=8001
+    print_success "✅ API found on port 8001"
+elif curl -s -f http://localhost:8010/health > /dev/null 2>&1; then
+    API_PORT=8010
+    print_success "✅ API found on port 8010"
+else
+    print_error "❌ API not found on port 8001 or 8010"
+    print_status "💡 Checking which port is in use..."
+    
+    # Check which port has uvicorn process
+    if pgrep -f "uvicorn.*app.main.*8001" > /dev/null; then
+        API_PORT=8001
+        print_warning "⚠️  uvicorn process found for port 8001 but not responding"
+    elif pgrep -f "uvicorn.*app.main.*8010" > /dev/null; then
+        API_PORT=8010
+        print_warning "⚠️  uvicorn process found for port 8010 but not responding"
+    elif pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
+        print_warning "⚠️  uvicorn process found but port unknown"
+        print_status "💡 Try: bash scripts/pod/restart-pod.sh"
+    else
+        print_error "❌ No uvicorn process found"
+        print_status "💡 Start API: bash scripts/pod/start-pod.sh"
+    fi
+    
+    if [ -z "$API_PORT" ]; then
+        exit 1
+    fi
 fi
+
+print_status "Using API port: $API_PORT"
+echo ""
 
 # Get absolute video path
 FILE_NAME=$(basename "$VIDEO_PATH")
@@ -138,7 +173,8 @@ FAILED_TASKS=0
 for i in $(seq 1 $NUM_TASKS); do
     print_status "[$i/$NUM_TASKS] Submitting task..."
     
-    TASK_RESPONSE=$(curl -s -X POST "http://localhost:8001/transcribe/" \
+    # Check for nginx error in response
+    TASK_RESPONSE=$(curl -s -X POST "http://localhost:${API_PORT}/transcribe/" \
         -H "Content-Type: application/json" \
         -d "{
             \"file_path\": \"$ABSOLUTE_VIDEO_PATH\",
@@ -146,6 +182,24 @@ for i in $(seq 1 $NUM_TASKS); do
             \"language\": \"th\",
             \"model_size\": \"$MODEL\"
         }" 2>&1 | tee -a "$RESULT_LOG")
+    
+    # Check for nginx 405 error
+    if echo "$TASK_RESPONSE" | grep -q "405\|Not Allowed\|nginx"; then
+        FAILED_TASKS=$((FAILED_TASKS + 1))
+        print_error "   ❌ Task $i: API endpoint error (405 Not Allowed)"
+        print_warning "   ⚠️  This usually means API is not running or endpoint is wrong"
+        if [ $i -eq 1 ]; then
+            print_status "   💡 Checking API status..."
+            if ! pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
+                print_error "   ❌ API process not found. Please start: bash scripts/pod/start-pod.sh"
+                exit 1
+            else
+                print_warning "   ⚠️  API process exists but endpoint not working"
+                print_status "   💡 Try: bash scripts/pod/restart-pod.sh"
+            fi
+        fi
+        continue
+    fi
     
     TASK_ID=$(echo "$TASK_RESPONSE" | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4 || echo "")
     
@@ -155,7 +209,9 @@ for i in $(seq 1 $NUM_TASKS); do
     else
         FAILED_TASKS=$((FAILED_TASKS + 1))
         print_error "   ❌ Task $i: Failed to submit"
-        echo "   Response: $TASK_RESPONSE" | tee -a "$RESULT_LOG"
+        # Show first 200 chars of response for debugging
+        RESPONSE_PREVIEW=$(echo "$TASK_RESPONSE" | head -c 200)
+        print_status "   Response preview: $RESPONSE_PREVIEW..."
     fi
     
     # Small delay to avoid overwhelming the API
@@ -185,7 +241,7 @@ TASK_RESULTS=()
 # Function to check task status
 check_task_status() {
     local task_id=$1
-    curl -s "http://localhost:8001/transcribe/$task_id" 2>/dev/null || echo ""
+    curl -s "http://localhost:${API_PORT}/transcribe/$task_id" 2>/dev/null || echo ""
 }
 
 # Monitor loop
@@ -241,7 +297,17 @@ while [ $COMPLETED_TASKS -lt ${#TASK_IDS[@]} ]; do
 done
 
 END_TIME=$(date +%s.%N)
-ELAPSED=$(echo "$END_TIME - $START_TIME" | bc)
+# Calculate elapsed time without bc
+if command -v python3 > /dev/null 2>&1; then
+    ELAPSED=$(python3 -c "print($END_TIME - $START_TIME)")
+elif command -v awk > /dev/null 2>&1; then
+    ELAPSED=$(awk "BEGIN {print $END_TIME - $START_TIME}")
+else
+    # Fallback: use integer seconds
+    END_INT=$(echo "$END_TIME" | cut -d. -f1)
+    START_INT=$(echo "$START_TIME" | cut -d. -f1)
+    ELAPSED=$((END_INT - START_INT))
+fi
 
 # Get VRAM after
 if command -v nvidia-smi &> /dev/null; then
@@ -288,15 +354,36 @@ for task_id in "${TASK_IDS[@]}"; do
 done
 
 # Calculate metrics
-ELAPSED_INT=$(echo "$ELAPSED" | cut -d. -f1)
-ELAPSED_MS=$(echo "$ELAPSED * 1000" | bc | cut -d. -f1)
+if command -v python3 > /dev/null 2>&1; then
+    ELAPSED_INT=$(python3 -c "print(int($ELAPSED))")
+    ELAPSED_MS=$(python3 -c "print(int($ELAPSED * 1000))")
+elif command -v awk > /dev/null 2>&1; then
+    ELAPSED_INT=$(awk "BEGIN {print int($ELAPSED)}")
+    ELAPSED_MS=$(awk "BEGIN {print int($ELAPSED * 1000)}")
+else
+    ELAPSED_INT=${ELAPSED%.*}
+    ELAPSED_MS=$((ELAPSED_INT * 1000))
+fi
 
+# Calculate metrics without bc (using awk or python)
 if [ "$DURATION_INT" -gt 0 ] && [ $SUCCESSFUL_TASKS -gt 0 ]; then
-    # Average throughput per task
-    AVG_TASK_TIME=$(echo "scale=2; $ELAPSED / $SUCCESSFUL_TASKS" | bc)
-    TOTAL_PROCESSED_TIME=$(echo "scale=2; $DURATION_INT * $SUCCESSFUL_TASKS" | bc)
-    OVERALL_SPEEDUP=$(echo "scale=2; $TOTAL_PROCESSED_TIME / $ELAPSED" | bc)
-    TASKS_PER_HOUR=$(echo "scale=2; 3600 / $AVG_TASK_TIME" | bc)
+    # Use python for calculations if available, otherwise use awk
+    if command -v python3 > /dev/null 2>&1; then
+        AVG_TASK_TIME=$(python3 -c "print(f'{($ELAPSED / $SUCCESSFUL_TASKS):.2f}')")
+        TOTAL_PROCESSED_TIME=$(python3 -c "print(f'{($DURATION_INT * $SUCCESSFUL_TASKS):.2f}')")
+        OVERALL_SPEEDUP=$(python3 -c "print(f'{($TOTAL_PROCESSED_TIME / $ELAPSED):.2f}')" 2>/dev/null || echo "N/A")
+        TASKS_PER_HOUR=$(python3 -c "print(f'{(3600 / ($ELAPSED / $SUCCESSFUL_TASKS)):.2f}')" 2>/dev/null || echo "N/A")
+    elif command -v awk > /dev/null 2>&1; then
+        AVG_TASK_TIME=$(awk "BEGIN {printf \"%.2f\", $ELAPSED / $SUCCESSFUL_TASKS}")
+        TOTAL_PROCESSED_TIME=$(awk "BEGIN {printf \"%.2f\", $DURATION_INT * $SUCCESSFUL_TASKS}")
+        OVERALL_SPEEDUP=$(awk "BEGIN {printf \"%.2f\", $TOTAL_PROCESSED_TIME / $ELAPSED}" 2>/dev/null || echo "N/A")
+        TASKS_PER_HOUR=$(awk "BEGIN {printf \"%.2f\", 3600 / ($ELAPSED / $SUCCESSFUL_TASKS)}" 2>/dev/null || echo "N/A")
+    else
+        # Fallback: simple integer division
+        AVG_TASK_TIME=$((ELAPSED_INT / SUCCESSFUL_TASKS))
+        OVERALL_SPEEDUP="N/A"
+        TASKS_PER_HOUR="N/A"
+    fi
 else
     AVG_TASK_TIME="N/A"
     OVERALL_SPEEDUP="N/A"
@@ -319,7 +406,7 @@ cat > "$RESULT_FILE" << EOF
   },
   "performance": {
     "total_elapsed_time_seconds": $ELAPSED,
-    "total_elapsed_time_ms": $ELAPSED_MS,
+    "total_elapsed_time_ms": ${ELAPSED_MS:-0},
     "avg_task_time_seconds": "$AVG_TASK_TIME",
     "overall_speedup": "$OVERALL_SPEEDUP",
     "tasks_per_hour": "$TASKS_PER_HOUR",
