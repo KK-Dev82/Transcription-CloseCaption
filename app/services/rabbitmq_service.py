@@ -377,7 +377,8 @@ class RabbitMQService:
         display_mode: str = "full_text",
         callback_url: Optional[str] = None,
         job_id: Optional[int] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        initial_prompt: Optional[str] = None
     ) -> str:
         """
         ส่งงาน transcription ไปยัง transcription_request_queue (3-Queue Architecture)
@@ -410,7 +411,8 @@ class RabbitMQService:
                     "created_at": time.time(),
                     "callback_url": callback_url,
                     "job_id": job_id,
-                    "user_id": user_id
+                    "user_id": user_id,
+                    "initial_prompt": initial_prompt  # เพิ่ม initial_prompt
                 }
                 
                 # บันทึก task ลง storage

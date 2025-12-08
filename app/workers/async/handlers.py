@@ -207,9 +207,12 @@ class AsyncMessageHandlers:
                 logger.info(f"   Video file: {video_file_path}")
                 logger.info("=" * 80)
                 
-                # Update status
+                # Update status with detailed stage information
                 task_data['status'] = 'extracting_audio'
                 task_data['progress'] = 15
+                task_data['current_stage'] = 'extracting_audio'
+                task_data['current_stage_description'] = 'กำลังแยกเสียงจากวิดีโอ'
+                task_data['stage_progress'] = 0
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
                 # Check file exists
@@ -234,6 +237,10 @@ class AsyncMessageHandlers:
                 # บันทึก audio_extraction_time ใน task metadata
                 task_data['audio_extraction_time'] = extraction_time
                 
+                # Update stage progress to 100% (completed)
+                task_data['stage_progress'] = 100
+                task_data['current_stage_description'] = 'แยกเสียงเสร็จสิ้น'
+                
                 # Initialize task_breakdown ถ้ายังไม่มี
                 if 'task_breakdown' not in task_data:
                     task_data['task_breakdown'] = []
@@ -250,9 +257,12 @@ class AsyncMessageHandlers:
                 task_data['total_tasks'] = task_data.get('total_tasks', 0) + 1  # Audio extraction task
                 task_data['completed_tasks'] = task_data.get('completed_tasks', 0) + 1
                 
-                # Update status
+                # Update status - routing to transcription
                 task_data['status'] = 'routing_to_transcription'
                 task_data['progress'] = 25
+                task_data['current_stage'] = 'transcribing'
+                task_data['current_stage_description'] = 'กำลังเตรียมแปลงเสียง'
+                task_data['stage_progress'] = 0
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
                 # Send to transcription_queue
@@ -269,6 +279,7 @@ class AsyncMessageHandlers:
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,
+                    "initial_prompt": task_data.get('initial_prompt'),  # ส่ง initial_prompt ต่อไป
                     "created_at": datetime.now().isoformat(),
                     "audio_extracted_from": video_file_path  # Track original video
                 }
@@ -321,11 +332,14 @@ class AsyncMessageHandlers:
                 callback_url = task_data.get('callback_url')
                 job_id = task_data.get('job_id')
                 user_id = task_data.get('user_id')
+                initial_prompt = task_data.get('initial_prompt')  # ดึง initial_prompt
                 
                 logger.info("=" * 80)
                 logger.info(f"🎯 [Download & Route] Processing transcription request: {task_id}")
                 logger.info(f"   File URL: {file_url}")
                 logger.info(f"   File Path: {file_path}")
+                if initial_prompt:
+                    logger.info(f"   Initial Prompt: {initial_prompt[:100]}..." if len(initial_prompt) > 100 else f"   Initial Prompt: {initial_prompt}")
                 logger.info("=" * 80)
                 
                 # Update status
@@ -347,10 +361,13 @@ class AsyncMessageHandlers:
                 elif not local_file_path or not Path(local_file_path).exists():
                     raise FileNotFoundError(f"ไฟล์ไม่พบและไม่มี file_url: {file_path}")
                 
-                # Update status
+                # Update status - routing
                 task_data['file_path'] = local_file_path
                 task_data['status'] = 'routing'
                 task_data['progress'] = 10
+                task_data['current_stage'] = 'routing'
+                task_data['current_stage_description'] = 'กำลังตรวจสอบประเภทไฟล์'
+                task_data['stage_progress'] = 50
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
                 # Step 2: Check file type (run in thread pool because it's synchronous)
@@ -375,6 +392,7 @@ class AsyncMessageHandlers:
                     "callback_url": callback_url,
                     "job_id": job_id,
                     "user_id": user_id,
+                    "initial_prompt": initial_prompt,  # ส่ง initial_prompt ต่อไป
                     "created_at": datetime.now().isoformat()
                 }
                 
@@ -454,6 +472,7 @@ class AsyncMessageHandlers:
                 model_size = task_data.get('model_size', 'base')
                 language = task_data.get('language', 'th')
                 use_chunking = task_data.get('use_chunking', False)  # Default: false
+                initial_prompt = task_data.get('initial_prompt')  # ดึง initial_prompt
                 
                 logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 logger.info(f"🎬 เริ่มประมวลผล transcription task: {task_id}")
@@ -474,6 +493,9 @@ class AsyncMessageHandlers:
                 task_data['status'] = 'processing'
                 task_data['started_at'] = datetime.now().isoformat()
                 task_data['progress'] = 0
+                task_data['current_stage'] = 'transcribing'
+                task_data['current_stage_description'] = 'กำลังแปลงเสียงเป็นข้อความ'
+                task_data['stage_progress'] = 0
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 logger.info(f"📝 อัปเดตสถานะเป็น 'processing' (Progress: 0%)")
                 

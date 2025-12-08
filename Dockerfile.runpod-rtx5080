@@ -1,0 +1,121 @@
+# Base Image สำหรับ RTX 5080 (Blackwell) - ใช้ CUDA 12.x
+# 
+# RTX 5080 ต้องการ CUDA 12.8+ เพื่อประสิทธิภาพเต็มที่
+# Base Image: runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+#
+# ⚠️ หมายเหตุ: Dockerfile นี้ไม่จำเป็นถ้าใช้ Git pull ตรงๆ
+#    สำหรับ Git pull workflow: แค่เปลี่ยน base image ใน RunPod Template
+#    และใช้ scripts/pod/install-dependencies-cuda12.sh
+#
+# ใช้ Dockerfile นี้เมื่อ:
+# - ต้องการ build custom image ที่มี dependencies ติดตั้งไว้แล้ว
+# - ต้องการ push ไป ACR และใช้ใน RunPod Template
+#
+# Build:
+#   docker build -f Dockerfile.runpod-rtx5080 -t kk-transcription-rtx5080:latest .
+#
+# Usage:
+#   docker run --gpus all -it kk-transcription-rtx5080:latest
+
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    build-essential \
+    cmake \
+    git \
+    git-lfs \
+    wget \
+    curl \
+    # Redis (สำหรับ local Redis service ใน Direct mode)
+    redis-server \
+    # Utilities
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    # Audio/Video processing
+    ffmpeg \
+    # Network tools
+    netcat \
+    telnet \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Initialize git-lfs
+RUN git lfs install
+
+# Base image มี PyTorch 2.4.0+cu124 อยู่แล้ว
+# ตรวจสอบ PyTorch version
+RUN python3 -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}')" || true
+
+# Install faster-whisper with compatible versions (CUDA 12.4)
+# ตรวจสอบ compatibility: ctranslate2 และ faster-whisper รองรับ CUDA 12.x
+RUN pip3 install --no-cache-dir \
+    numpy==1.26.4 \
+    "ctranslate2>=4.4.0" \
+    "faster-whisper>=1.0.2" \
+    || {
+    echo "⚠️  Warning: Some Whisper dependencies may need adjustment"
+    pip3 install --no-cache-dir \
+        numpy==1.26.4 \
+        "ctranslate2" \
+        "faster-whisper"
+}
+
+# Install Python dependencies (พื้นฐาน)
+RUN pip3 install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    pydantic \
+    requests \
+    aiohttp \
+    aiofiles \
+    redis \
+    pika \
+    python-dotenv \
+    tzdata \
+    ffmpeg-python
+
+# Create working directory
+WORKDIR /workspace
+
+# Create directories structure (สำหรับ workspace)
+RUN mkdir -p /workspace
+
+# Setup Hugging Face cache (ช่วยลด re-download ในแต่ละ Pod)
+ENV HF_HOME=/workspace/.cache/huggingface
+RUN mkdir -p $HF_HOME && chmod -R 777 /workspace
+
+# ⚠️ ไม่ copy setup scripts - ให้ user clone repo และ run scripts เอง
+# ⚠️ ไม่มี CMD - ให้ user start services แบบ Direct mode เอง
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_VISIBLE_DEVICES=0
+# ป้องกัน freeze ของ CTranslate2/CUDA
+ENV CT2_USE_CUDA_GRAPH=0
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+# Default provider: faster-whisper (สามารถ override ได้)
+ENV WHISPER_PROVIDER=faster-whisper
+ENV WHISPER_MODEL=medium
+ENV WHISPER_DEVICE=auto
+# เริ่มด้วย VAD=false (ผ่านแล้วค่อยเปิด true)
+ENV WHISPER_VAD_FILTER=false
+
+# Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
+EXPOSE 8001 8002 6379
+
+# ⚠️ ไม่มี CMD - Image นี้เป็น minimal base
+# User ต้อง:
+# 1. Clone repository: git clone <repo> /workspace/transcription-service
+# 2. Start services: bash scripts/pod/start-services-direct.sh
+# หรือ
+# 3. Use restart script: bash scripts/pod/restart-pod-services.sh
+
+# Default: Keep container running (wait for user to start services)
+CMD ["/bin/bash", "-c", "echo '🚀 RTX 5080 Base Image Ready (CUDA 12.4.1)'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/start-pod.sh'; echo ''; tail -f /dev/null"]
+

@@ -39,7 +39,13 @@ async def start_transcription(request: TranscriptionRequest):
             callback_url=request.callback_url,
             job_id=request.job_id,
             user_id=request.user_id,
-            idempotency_key=request.idempotency_key if hasattr(request, 'idempotency_key') else None
+            idempotency_key=request.idempotency_key if hasattr(request, 'idempotency_key') else None,
+            # Initial Prompt parameters
+            enable_initial_prompt=request.enable_initial_prompt if hasattr(request, 'enable_initial_prompt') else False,
+            initial_prompt=request.initial_prompt if hasattr(request, 'initial_prompt') else None,
+            use_backend_dictionary=request.use_backend_dictionary if hasattr(request, 'use_backend_dictionary') else True,
+            dictionary_scope=request.dictionary_scope if hasattr(request, 'dictionary_scope') else "Global",
+            dictionary_max_words=request.dictionary_max_words if hasattr(request, 'dictionary_max_words') else 50
         )
         
         # ดึง task status

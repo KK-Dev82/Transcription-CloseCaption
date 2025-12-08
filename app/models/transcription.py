@@ -16,6 +16,13 @@ class TranscriptionRequest(BaseModel):
     job_id: Optional[int] = None  # Job ID จาก Backend (ถ้ามี)
     user_id: Optional[str] = None  # User ID (ถ้ามี)
     idempotency_key: Optional[str] = None  # Idempotency key สำหรับป้องกัน duplicate requests
+    
+    # Initial Prompt Configuration (สำหรับเพิ่มความแม่นยำ)
+    enable_initial_prompt: Optional[bool] = False  # เปิดใช้ initial_prompt จาก Dictionary (default: false เพื่อป้องกันความช้า)
+    initial_prompt: Optional[str] = None  # initial_prompt โดยตรง (ถ้ามีจะใช้แทน Dictionary)
+    use_backend_dictionary: Optional[bool] = True  # ใช้ Dictionary จาก Backend API (default: true เมื่อ enable_initial_prompt=true)
+    dictionary_scope: Optional[str] = "Global"  # "Global" หรือ "Personal" (default: "Global")
+    dictionary_max_words: Optional[int] = 50  # จำนวนคำสูงสุดจาก Dictionary (default: 50)
 
     @root_validator(skip_on_failure=True)
     def validate_source(cls, values):
@@ -66,4 +73,9 @@ class TranscriptionResponse(BaseModel):
     text_correction_time: Optional[float] = None  # เวลาที่ใช้ text correction (วินาที)
     
     # Task breakdown สำหรับแสดงรายละเอียด
-    task_breakdown: Optional[List[Dict]] = None  # รายละเอียดของ tasks: [{"type": "audio_extraction", "status": "completed", "time": 0.92}, ...] 
+    task_breakdown: Optional[List[Dict]] = None  # รายละเอียดของ tasks: [{"type": "audio_extraction", "status": "completed", "time": 0.92}, ...]
+    
+    # Detailed Stage Information
+    current_stage: Optional[str] = None  # ขั้นตอนปัจจุบัน: "downloading", "extracting_audio", "transcribing", "merging", "finalizing"
+    current_stage_description: Optional[str] = None  # คำอธิบายขั้นตอนปัจจุบัน (เช่น "กำลังแยกเสียงจากวิดีโอ")
+    stage_progress: Optional[int] = None  # Progress ของ stage ปัจจุบัน (0-100) 

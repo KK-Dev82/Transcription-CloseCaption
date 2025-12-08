@@ -93,6 +93,13 @@ class AsyncWorkerUtils:
             parent_task['progress'] = progress
             parent_task['status'] = f"processing_chunk_{completed_chunks}_of_{total_chunks}"
             
+            # Update detailed stage information
+            parent_task['current_stage'] = 'transcribing'
+            parent_task['current_stage_description'] = f'กำลังแปลงเสียง chunk {completed_chunks}/{total_chunks}'
+            # คำนวณ stage_progress จาก chunks ที่เสร็จแล้ว
+            stage_progress = int((completed_chunks / total_chunks) * 100) if total_chunks > 0 else 0
+            parent_task['stage_progress'] = stage_progress
+            
             # Save to storage
             self.worker.json_storage.save_transcription(parent_task_id, parent_task)
             
@@ -103,6 +110,9 @@ class AsyncWorkerUtils:
                 logger.info(f"🎉 All chunks completed for task {parent_task_id}!")
                 parent_task['status'] = 'merging_results'
                 parent_task['progress'] = 90
+                parent_task['current_stage'] = 'merging'
+                parent_task['current_stage_description'] = 'กำลังรวมผลลัพธ์จากทุกส่วน'
+                parent_task['stage_progress'] = 0  # เริ่ม merging
                 self.worker.json_storage.save_transcription(parent_task_id, parent_task)
                 
         except Exception as e:

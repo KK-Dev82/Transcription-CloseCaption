@@ -18,6 +18,8 @@ from .video_service import VideoService
 from .rabbitmq_service import RabbitMQService
 from .webhook_service import webhook_service
 from .websocket_service import websocket_manager
+from .dictionary_service import DictionaryService
+from .prompt_builder import PromptBuilder
 from ..models.transcription import TranscriptionChunk, TranscriptionResponse
 from ..utils.json_storage import JSONStorage
 
@@ -31,6 +33,10 @@ class TranscriptionService:
         self.rabbitmq_service = RabbitMQService()
         self.webhook_service = webhook_service
         self.json_storage = JSONStorage()
+        
+        # Dictionary และ Prompt services สำหรับ initial_prompt
+        self.dictionary_service = DictionaryService()
+        self.prompt_builder = PromptBuilder()
         
         self.tasks: Dict[str, TranscriptionResponse] = {}
         self.task_contexts: Dict[str, Dict[str, Optional[str]]] = {}
@@ -89,6 +95,82 @@ class TranscriptionService:
                 return datetime.fromtimestamp(float(value))
             except Exception:
                 return None
+    
+    async def _build_initial_prompt(
+        self,
+        enable_initial_prompt: bool,
+        initial_prompt: Optional[str],
+        use_backend_dictionary: bool,
+        dictionary_scope: str,
+        dictionary_max_words: int,
+        user_id: Optional[str],
+        language: str
+    ) -> Optional[str]:
+        """
+        สร้าง initial_prompt จาก Dictionary หรือใช้ prompt ที่ส่งมา
+        
+        Args:
+            enable_initial_prompt: เปิดใช้ initial_prompt หรือไม่
+            initial_prompt: initial_prompt โดยตรง (ถ้ามีจะใช้แทน Dictionary)
+            use_backend_dictionary: ใช้ Dictionary จาก Backend API หรือไม่
+            dictionary_scope: "Global" หรือ "Personal"
+            dictionary_max_words: จำนวนคำสูงสุดจาก Dictionary
+            user_id: User ID (สำหรับ Personal scope)
+            language: ภาษา (สำหรับ filter Dictionary)
+        
+        Returns:
+            Optional[str]: initial_prompt string หรือ None
+        """
+        # ถ้าไม่เปิดใช้ initial_prompt
+        if not enable_initial_prompt:
+            return None
+        
+        # ถ้ามี initial_prompt โดยตรง ให้ใช้ทันที
+        if initial_prompt:
+            logger.info(f"📝 Using provided initial_prompt (length: {len(initial_prompt)} chars)")
+            return initial_prompt.strip() if initial_prompt.strip() else None
+        
+        # ถ้าไม่ใช้ Backend Dictionary
+        if not use_backend_dictionary:
+            logger.debug("⚠️ initial_prompt enabled but use_backend_dictionary=False, returning None")
+            return None
+        
+        # ดึง Dictionary words จาก Backend
+        try:
+            logger.info(
+                f"📚 Fetching dictionary words from Backend "
+                f"(scope={dictionary_scope}, user_id={user_id or 'None'}, max_words={dictionary_max_words})"
+            )
+            
+            dictionary_words = await self.dictionary_service.fetch_dictionary_words(
+                user_id=user_id if dictionary_scope == "Personal" else None,
+                scope=dictionary_scope,
+                language="thai" if language == "th" else language,
+                limit=dictionary_max_words
+            )
+            
+            if not dictionary_words:
+                logger.warning("⚠️ No dictionary words fetched from Backend, returning None")
+                return None
+            
+            # สร้าง initial_prompt จาก Dictionary words
+            prompt = self.prompt_builder.build_initial_prompt(
+                dictionary_words=dictionary_words,
+                context=None,
+                max_words=dictionary_max_words,
+                include_common_phrases=True
+            )
+            
+            if prompt:
+                logger.info(f"✅ Built initial_prompt from Dictionary ({len(dictionary_words)} words → {len(prompt.split())} words in prompt)")
+            else:
+                logger.warning("⚠️ Failed to build initial_prompt from Dictionary words")
+            
+            return prompt
+            
+        except Exception as e:
+            logger.error(f"❌ Error building initial_prompt from Dictionary: {e}", exc_info=True)
+            return None
     
     def _build_task_from_storage(self, task_id: str, data: Dict, existing: Optional[TranscriptionResponse] = None) -> Optional[TranscriptionResponse]:
         try:
@@ -199,6 +281,11 @@ class TranscriptionService:
             # Task breakdown
             response.task_breakdown = data.get("task_breakdown")
             
+            # Detailed Stage Information
+            response.current_stage = data.get("current_stage")
+            response.current_stage_description = data.get("current_stage_description")
+            response.stage_progress = data.get("stage_progress")
+            
             return response
         except Exception as error:
             logger.error(f"ไม่สามารถสร้าง TranscriptionResponse จาก storage สำหรับ task {task_id}: {error}")
@@ -217,7 +304,13 @@ class TranscriptionService:
         callback_url: str = None,
         job_id: int = None,
         user_id: str = None,
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
+        # Initial Prompt parameters
+        enable_initial_prompt: bool = False,
+        initial_prompt: Optional[str] = None,
+        use_backend_dictionary: bool = True,
+        dictionary_scope: str = "Global",
+        dictionary_max_words: int = 50
     ) -> str:
         """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
@@ -327,6 +420,21 @@ class TranscriptionService:
             # Log error but continue (don't block if queue check fails)
             logger.warning(f"⚠️ Queue size check failed (continuing anyway): {e}")
         
+        # ============================================================
+        # Build initial_prompt (ถ้าเปิดใช้งาน)
+        # ============================================================
+        built_initial_prompt = None
+        if enable_initial_prompt:
+            built_initial_prompt = await self._build_initial_prompt(
+                enable_initial_prompt=enable_initial_prompt,
+                initial_prompt=initial_prompt,
+                use_backend_dictionary=use_backend_dictionary,
+                dictionary_scope=dictionary_scope,
+                dictionary_max_words=dictionary_max_words,
+                user_id=user_id,
+                language=language
+            )
+        
         # ส่งไปยัง RabbitMQ queue และรับ task_id
         try:
             send_kwargs = dict(
@@ -341,6 +449,11 @@ class TranscriptionService:
                 job_id=job_id,
                 user_id=user_id,
             )
+            
+            # เพิ่ม initial_prompt ถ้ามี
+            if built_initial_prompt:
+                send_kwargs["initial_prompt"] = built_initial_prompt
+                logger.info(f"📝 Adding initial_prompt to task (length: {len(built_initial_prompt)} chars)")
 
             # ============================================================
             # Routing: ส่งไปยัง queue ตาม Architecture ที่เลือก
@@ -476,7 +589,8 @@ class TranscriptionService:
         chunk_duration: int,
         use_chunking: bool = False,
         file_url: Optional[str] = None,
-        file_name: Optional[str] = None
+        file_name: Optional[str] = None,
+        initial_prompt: Optional[str] = None
     ):
         """ประมวลผลการแปลงเสียง"""
         logger.info(f"🎬 Starting _process_transcription: task_id={task_id}, file_path={file_path}, model={model_size}, language={language}")
@@ -602,11 +716,14 @@ class TranscriptionService:
                     # เรียกใช้ whisper service โดยตรง (ไม่ผ่าน queue)
                     # ⚠️ transcribe_file ไม่ใช่ async function แต่ใช้ asyncio.run() ภายใน
                     logger.info(f"🔍 [Transcription] Calling whisper_service.transcribe_file()...")
+                    if initial_prompt:
+                        logger.debug(f"   Using initial_prompt: {initial_prompt[:100]}..." if len(initial_prompt) > 100 else f"   Using initial_prompt: {initial_prompt}")
                     try:
                         result = self.whisper_service.transcribe_file(
                             audio_path,
                             language=language,
-                            model_size=model_size
+                            model_size=model_size,
+                            initial_prompt=initial_prompt  # ส่ง initial_prompt
                         )
                         logger.info(f"✅ [Transcription] whisper_service.transcribe_file() returned, result type: {type(result)}")
                     except Exception as transcribe_error:
@@ -817,6 +934,7 @@ class TranscriptionService:
                     "language": language,
                     "file_path": local_file_path,
                     "file_name": file_name,
+                    "initial_prompt": initial_prompt,  # ส่ง initial_prompt ไปยัง chunk tasks
                     "created_at": datetime.now().isoformat()
                 }
                 
@@ -1171,7 +1289,8 @@ class TranscriptionService:
             
             # รวมข้อมูล progress tracking จาก existing_data ถ้ามี
             if existing_data:
-                for key in ['total_tasks', 'completed_tasks', 'total_chunks', 'completed_chunks', 'task_breakdown']:
+                for key in ['total_tasks', 'completed_tasks', 'total_chunks', 'completed_chunks', 'task_breakdown', 
+                           'current_stage', 'current_stage_description', 'stage_progress']:
                     if key in existing_data:
                         final_data[key] = existing_data[key]
             
