@@ -78,19 +78,16 @@ bash scripts/pod/check-pod.sh
 
 ---
 
-## 📥 Download Videos (ทำครั้งเดียว)
+## 📥 Download Video (ทำครั้งเดียว)
 
-### Download Video เดียว
+### Download Video เดียว (v10-1.mp4) ⭐
 ```bash
 bash scripts/pod/download-video.sh https://korrakang.com/video/v10-1.mp4
 ```
 
-### Download 10 Videos (v10-1.mp4 ถึง v10-10.mp4)
-```bash
-bash scripts/pod/download-multiple-videos.sh https://korrakang.com/video/v10- 1 10 .mp4
-```
+**ผลลัพธ์**: Video จะถูกเก็บไว้ที่ `uploads/v10-1.mp4`
 
-**ผลลัพธ์**: Videos จะถูกเก็บไว้ที่ `uploads/v10-1.mp4` ถึง `uploads/v10-10.mp4`
+**หมายเหตุ**: สำหรับ Concurrent Benchmark ใช้ video เดียว (v10-1.mp4) แต่ส่ง 10 tasks พร้อมกัน
 
 ---
 
@@ -109,7 +106,7 @@ Model จะถูกเก็บไว้ที่: `~/.cache/huggingface/hub/`
 
 ## 🧪 Run Benchmark
 
-### Benchmark Video เดียว
+### Benchmark Video เดียว (Sequential)
 ```bash
 # RTX 4080 Super
 bash scripts/benchmark/run-benchmark.sh uploads/v10-1.mp4 medium rtx4080
@@ -121,7 +118,23 @@ bash scripts/benchmark/run-benchmark.sh uploads/v10-1.mp4 medium rtx4000
 bash scripts/benchmark/run-benchmark.sh uploads/v10-1.mp4 medium rtx5080
 ```
 
-### Benchmark 10 Videos (Batch)
+### Benchmark Concurrent (10 Tasks พร้อมกัน) ⭐ แนะนำ
+**ใช้ Video เดียว (v10-1.mp4) แต่ส่ง 10 Tasks พร้อมกัน**
+
+```bash
+# RTX 4080 Super
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx4080
+
+# RTX 4000 Ada
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx4000
+
+# RTX 5080
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx5080
+```
+
+**หมายเหตุ**: Script นี้จะส่ง transcription tasks 10 ตัวพร้อมกันโดยใช้ video เดียวกัน เพื่อทดสอบ performance ภายใต้ concurrent load
+
+### Benchmark 10 Videos (Batch - ถ้าต้องการ)
 ```bash
 # RTX 4080 Super
 bash scripts/pod/run-benchmark-batch.sh uploads/v10-{1..10}.mp4 medium rtx4080
@@ -154,17 +167,21 @@ bash scripts/benchmark/compare-results.sh rtx4080 rtx4000 rtx5080
 ### Benchmark Results
 - **Directory**: `benchmark-results/`
 - **Format**: JSON files
-- **Naming**: `benchmark-<gpu-name>-<model>-<timestamp>.json`
+- **Naming**: 
+  - Sequential: `benchmark-<gpu-name>-<model>-<timestamp>.json`
+  - Concurrent: `concurrent-benchmark-<gpu-name>-<model>-<num-tasks>tasks-<timestamp>.json`
 
 **ตัวอย่าง:**
 ```
 benchmark-results/
 ├── benchmark-rtx4080-medium-20250115-120000.json
 ├── benchmark-rtx4080-medium-20250115-120000.log
-├── benchmark-rtx4000-medium-20250115-130000.json
-├── benchmark-rtx4000-medium-20250115-130000.log
-├── benchmark-rtx5080-medium-20250115-140000.json
-└── benchmark-rtx5080-medium-20250115-140000.log
+├── concurrent-benchmark-rtx4080-medium-10tasks-20250115-120000.json
+├── concurrent-benchmark-rtx4080-medium-10tasks-20250115-120000.log
+├── concurrent-benchmark-rtx4000-medium-10tasks-20250115-130000.json
+├── concurrent-benchmark-rtx4000-medium-10tasks-20250115-130000.log
+├── concurrent-benchmark-rtx5080-medium-10tasks-20250115-140000.json
+└── concurrent-benchmark-rtx5080-medium-10tasks-20250115-140000.log
 ```
 
 ### วิธี Export ผลลัพธ์
@@ -237,15 +254,15 @@ bash scripts/pod/start-pod.sh
 
 ---
 
-## 🎯 สรุปคำสั่งสำหรับ Benchmark 10 Videos
+## 🎯 สรุปคำสั่งสำหรับ Concurrent Benchmark (10 Tasks)
 
 ### สำหรับ RTX 4080 Super
 ```bash
-# 1. Download videos
-bash scripts/pod/download-multiple-videos.sh https://korrakang.com/video/v10- 1 10 .mp4
+# 1. Download video (v10-1.mp4)
+bash scripts/pod/download-video.sh https://korrakang.com/video/v10-1.mp4
 
-# 2. Run benchmark
-bash scripts/pod/run-benchmark-batch.sh uploads/v10-{1..10}.mp4 medium rtx4080
+# 2. Run concurrent benchmark (10 tasks พร้อมกัน)
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx4080
 
 # 3. Export results
 scp -r <pod-host>:/workspace/transcription-service/benchmark-results ./benchmark-results-rtx4080
@@ -253,11 +270,11 @@ scp -r <pod-host>:/workspace/transcription-service/benchmark-results ./benchmark
 
 ### สำหรับ RTX 4000 Ada
 ```bash
-# 1. Download videos (ถ้ายังไม่มี)
-bash scripts/pod/download-multiple-videos.sh https://korrakang.com/video/v10- 1 10 .mp4
+# 1. Download video (v10-1.mp4 - ถ้ายังไม่มี)
+bash scripts/pod/download-video.sh https://korrakang.com/video/v10-1.mp4
 
-# 2. Run benchmark
-bash scripts/pod/run-benchmark-batch.sh uploads/v10-{1..10}.mp4 medium rtx4000
+# 2. Run concurrent benchmark (10 tasks พร้อมกัน)
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx4000
 
 # 3. Export results
 scp -r <pod-host>:/workspace/transcription-service/benchmark-results ./benchmark-results-rtx4000
@@ -265,15 +282,17 @@ scp -r <pod-host>:/workspace/transcription-service/benchmark-results ./benchmark
 
 ### สำหรับ RTX 5080
 ```bash
-# 1. Download videos (ถ้ายังไม่มี)
-bash scripts/pod/download-multiple-videos.sh https://korrakang.com/video/v10- 1 10 .mp4
+# 1. Download video (v10-1.mp4 - ถ้ายังไม่มี)
+bash scripts/pod/download-video.sh https://korrakang.com/video/v10-1.mp4
 
-# 2. Run benchmark
-bash scripts/pod/run-benchmark-batch.sh uploads/v10-{1..10}.mp4 medium rtx5080
+# 2. Run concurrent benchmark (10 tasks พร้อมกัน)
+bash scripts/pod/run-benchmark-concurrent.sh uploads/v10-1.mp4 10 medium rtx5080
 
 # 3. Export results
 scp -r <pod-host>:/workspace/transcription-service/benchmark-results ./benchmark-results-rtx5080
 ```
+
+**หมายเหตุ**: Concurrent benchmark จะส่ง 10 transcription tasks พร้อมกันโดยใช้ video เดียว (v10-1.mp4) เพื่อทดสอบ performance ภายใต้ concurrent load
 
 ---
 
