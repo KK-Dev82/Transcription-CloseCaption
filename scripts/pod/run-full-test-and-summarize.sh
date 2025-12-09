@@ -322,28 +322,37 @@ generate_summary() {
         local s2_fail=$(grep -o '"fail_count": [0-9]*' "$file2" | grep -o '[0-9]*' || echo "0")
     fi
     
+    # Helper function for calculation (defined here for use in generate_summary)
+    if command -v python3 > /dev/null 2>&1; then
+        calc() { python3 -c "print('%.2f' % ($1))" 2>/dev/null || echo "0"; }
+    elif command -v bc > /dev/null 2>&1; then
+        calc() { echo "scale=2; $1" | bc -l 2>/dev/null || echo "0"; }
+    else
+        calc() { awk "BEGIN {printf \"%.2f\", $1}" 2>/dev/null || echo "0"; }
+    fi
+    
     # Calculate averages
     local s1_avg=0
     local s2_avg=0
-    if [ "$s1_success" -gt 0 ] && command -v bc > /dev/null 2>&1; then
+    if [ "$s1_success" -gt 0 ]; then
         local s1_durations=($(echo "$s1_tasks" | cut -d'|' -f2 | grep -E '^[0-9]+$' || echo ""))
         if [ ${#s1_durations[@]} -gt 0 ]; then
             local s1_sum=0
             for d in "${s1_durations[@]}"; do
                 s1_sum=$((s1_sum + d))
             done
-            s1_avg=$(echo "scale=2; $s1_sum / ${#s1_durations[@]}" | bc)
+            s1_avg=$(calc "$s1_sum / ${#s1_durations[@]}")
         fi
     fi
     
-    if [ "$s2_success" -gt 0 ] && command -v bc > /dev/null 2>&1; then
+    if [ "$s2_success" -gt 0 ]; then
         local s2_durations=($(echo "$s2_tasks" | cut -d'|' -f2 | grep -E '^[0-9]+$' || echo ""))
         if [ ${#s2_durations[@]} -gt 0 ]; then
             local s2_sum=0
             for d in "${s2_durations[@]}"; do
                 s2_sum=$((s2_sum + d))
             done
-            s2_avg=$(echo "scale=2; $s2_sum / ${#s2_durations[@]}" | bc)
+            s2_avg=$(calc "$s2_sum / ${#s2_durations[@]}")
         fi
     fi
     
@@ -495,11 +504,12 @@ EOF
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     
-    # Show winner (use Python for comparison)
+    # Show winner (use calc-compatible comparison)
     if [ "$s1_fail" = "0" ] && [ "$s2_fail" = "0" ]; then
+        # Use Python or awk for comparison
         if command -v python3 > /dev/null 2>&1; then
-            local s1_lt_s2=$(python3 -c "print(1 if $s1_avg < $s2_avg else 0)" 2>/dev/null || echo "0")
-            local s2_lt_s1=$(python3 -c "print(1 if $s2_avg < $s1_avg else 0)" 2>/dev/null || echo "0")
+            local s1_lt_s2=$(python3 -c "print(1 if float('$s1_avg') < float('$s2_avg') else 0)" 2>/dev/null || echo "0")
+            local s2_lt_s1=$(python3 -c "print(1 if float('$s2_avg') < float('$s1_avg') else 0)" 2>/dev/null || echo "0")
         else
             local s1_lt_s2=$(awk "BEGIN {print ($s1_avg < $s2_avg) ? 1 : 0}")
             local s2_lt_s1=$(awk "BEGIN {print ($s2_avg < $s1_avg) ? 1 : 0}")
