@@ -3,7 +3,11 @@
 # รันบน remote servers ผ่าน SSH และสรุปผลลัพธ์ทั้งหมด
 #
 # วิธีใช้งาน:
-#   bash scripts/pod/run-full-test-and-summarize.sh [video_file]
+#   bash scripts/pod/run-full-test-and-summarize.sh [video_file] [task_count]
+#
+# ตัวอย่าง:
+#   bash scripts/pod/run-full-test-and-summarize.sh v10-1.mp4 2
+#   bash scripts/pod/run-full-test-and-summarize.sh v10-1.mp4 10
 
 set -e
 
@@ -22,7 +26,7 @@ SERVER2="4000-ada"
 SERVER1_URL="http://80.15.7.37:41314"
 SERVER2_URL="http://87.197.119.40:41314"
 VIDEO_FILE="${1:-v10-1.mp4}"
-TASK_COUNT=10
+TASK_COUNT="${2:-2}"  # Default to 2 tasks, can be overridden
 PROJECT_DIR="/workspace/transcription-service"
 
 # Results storage
@@ -31,7 +35,7 @@ RESULTS_DIR="/tmp/transcription-full-test-${TIMESTAMP}"
 mkdir -p "$RESULTS_DIR"
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  🧪 Full Transcription Test: 10 Concurrency                  ║"
+echo "║  🧪 Full Transcription Test: $TASK_COUNT Concurrency                    ║"
 echo "║  Testing both 4080s and 4000-ada servers                     ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
