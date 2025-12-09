@@ -365,7 +365,7 @@ generate_summary() {
 | **Success Count** | $s1_success/$TASK_COUNT | $s2_success/$TASK_COUNT |
 | **Fail Count** | $s1_fail | $s2_fail |
 | **Average Time per Task** | ${s1_avg}s | ${s2_avg}s |
-| **Success Rate** | $(echo "scale=1; $s1_success * 100 / $TASK_COUNT" | bc)% | $(echo "scale=1; $s2_success * 100 / $TASK_COUNT" | bc)% |
+| **Success Rate** | $(calc "$s1_success * 100 / $TASK_COUNT")% | $(calc "$s2_success * 100 / $TASK_COUNT")% |
 
 ---
 
@@ -495,11 +495,19 @@ EOF
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
     
-    # Show winner
+    # Show winner (use Python for comparison)
     if [ "$s1_fail" = "0" ] && [ "$s2_fail" = "0" ]; then
-        if (( $(echo "$s1_avg < $s2_avg" | bc -l 2>/dev/null || echo "0") )); then
+        if command -v python3 > /dev/null 2>&1; then
+            local s1_lt_s2=$(python3 -c "print(1 if $s1_avg < $s2_avg else 0)" 2>/dev/null || echo "0")
+            local s2_lt_s1=$(python3 -c "print(1 if $s2_avg < $s1_avg else 0)" 2>/dev/null || echo "0")
+        else
+            local s1_lt_s2=$(awk "BEGIN {print ($s1_avg < $s2_avg) ? 1 : 0}")
+            local s2_lt_s1=$(awk "BEGIN {print ($s2_avg < $s1_avg) ? 1 : 0}")
+        fi
+        
+        if [ "$s1_lt_s2" = "1" ]; then
             echo -e "${GREEN}🏆 Winner: $SERVER1 (Faster: ${s1_avg}s vs ${s2_avg}s)${NC}"
-        elif (( $(echo "$s2_avg < $s1_avg" | bc -l 2>/dev/null || echo "0") )); then
+        elif [ "$s2_lt_s1" = "1" ]; then
             echo -e "${GREEN}🏆 Winner: $SERVER2 (Faster: ${s2_avg}s vs ${s1_avg}s)${NC}"
         else
             echo -e "${GREEN}🤝 Perfect Tie! Both servers completed all tasks.${NC}"
@@ -518,15 +526,25 @@ EOF
 
 # Main execution
 main() {
-    # Check dependencies
+    # Check dependencies - use Python for calculations if bc is not available
     if ! command -v bc > /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  bc not found. Installing...${NC}"
-        if command -v apt-get > /dev/null 2>&1; then
-            sudo apt-get update -qq > /dev/null 2>&1 && sudo apt-get install -y -qq bc > /dev/null 2>&1 || {
-                echo -e "${RED}❌ Cannot install bc. Please install manually${NC}"
-                exit 1
+        if command -v python3 > /dev/null 2>&1; then
+            echo -e "${CYAN}📊 Using Python for calculations (bc not found)${NC}"
+            # Define a simple calc function using Python
+            calc() {
+                python3 -c "print($1)" 2>/dev/null || echo "0"
+            }
+        else
+            echo -e "${YELLOW}⚠️  bc not found, calculations may be limited${NC}"
+            # Fallback: simple shell arithmetic (limited)
+            calc() {
+                echo "$1" | awk '{print $1}'
             }
         fi
+    else
+        calc() {
+            echo "$1" | bc -l 2>/dev/null || echo "0"
+        }
     fi
     
     echo -e "${YELLOW}⚠️  Running transcription tests on both servers${NC}"
