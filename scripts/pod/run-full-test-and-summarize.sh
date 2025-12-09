@@ -157,9 +157,14 @@ run_test_on_server() {
             fi
             
             # Check status (use correct endpoint)
-            local status_response=$(curl -s "$API_URL/transcribe/$task_id" 2>/dev/null || echo "{}")
+            # Try /api/progress/transcription/{task_id} first (preferred endpoint)
+            local status_response=$(curl -s "$API_URL/api/progress/transcription/$task_id" 2>/dev/null || echo "{}")
             # Try alternative endpoints if main one fails
-            if [ "$status_response" = "{}" ] || [ -z "$status_response" ]; then
+            if [ "$status_response" = "{}" ] || [ -z "$status_response" ] || echo "$status_response" | grep -q '"detail"\|"Not Found"'; then
+                status_response=$(curl -s "$API_URL/transcribe/$task_id" 2>/dev/null || echo "{}")
+            fi
+            # Final fallback
+            if [ "$status_response" = "{}" ] || [ -z "$status_response" ] || echo "$status_response" | grep -q '"detail"\|"Not Found"'; then
                 status_response=$(curl -s "$API_URL/api/progress/$task_id" 2>/dev/null || echo "{}")
             fi
             local status=$(echo "$status_response" | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
