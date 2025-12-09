@@ -154,8 +154,8 @@ for NUM_TASKS in "${TEST_CONFIGS[@]}"; do
     done
     
     END_SUBMIT_TIME=$(date +%s.%N)
-    SUBMIT_ELAPSED=$(python3 -c "print($END_SUBMIT_TIME - $START_SUBMIT_TIME)")
-    print_success "✅ All $NUM_TASKS task(s) submitted in ${SUBMIT_ELAPSED:.2f} seconds."
+    SUBMIT_ELAPSED=$(python3 -c "print('%.2f' % ($END_SUBMIT_TIME - $START_SUBMIT_TIME))")
+    print_success "✅ All $NUM_TASKS task(s) submitted in ${SUBMIT_ELAPSED} seconds."
     echo ""
     
     # Monitor tasks
