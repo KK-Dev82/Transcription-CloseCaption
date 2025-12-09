@@ -26,7 +26,7 @@ SERVER2="4000-ada"
 SERVER1_URL="http://80.15.7.37:41314"
 SERVER2_URL="http://87.197.119.40:41314"
 VIDEO_FILE="${1:-v10-1.mp4}"
-TASK_COUNT="${2:-2}"  # Default to 2 tasks, can be overridden
+TASK_COUNT="${2:-10}"  # Default to 10 tasks, can be overridden
 PROJECT_DIR="/workspace/transcription-service"
 
 # Results storage
