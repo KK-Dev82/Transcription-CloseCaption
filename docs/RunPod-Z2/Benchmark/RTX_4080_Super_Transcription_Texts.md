@@ -1,4 +1,4 @@
-# RTX 4080 Super - Transcription Texts with Correction
+# RTX 4080 Super - Transcription Full Text
 **Date**: 2025-12-09
 **GPU**: NVIDIA RTX 4080 Super (16GB VRAM)
 **Model**: Whisper Medium
@@ -9,10 +9,8 @@
 
 ## Summary: 5/10 tasks completed
 
-- **Tasks with corrected_text**: 4/5
-- **Tasks with full_text**: 4/5
-- **Average corrected_text length**: 3113 chars
-- **Average full_text length**: 3821 chars
+- **Tasks with text**: 4/5
+- **Average text length**: 3113 chars (2932 Thai chars)
 
 ---
 
@@ -20,8 +18,7 @@
 - **Status**: pending
 - **Created At**: 2025-12-09T00:14:41
 - **Completed At**: N/A
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
@@ -31,10 +28,10 @@
 - **Status**: completed
 - **Created At**: 2025-12-09T00:14:44
 - **Completed At**: 2025-12-09T00:15:18
-- **Corrected Text Length**: 3113 chars
-- **Full Text Length**: 3821 chars
+- **Text Type**: corrected_text
+- **Text Length**: 3113 chars
 
-**Corrected Text (corrected_text):**
+**Full Text (corrected_text):**
 
 
 ---
@@ -43,8 +40,7 @@
 - **Status**: pending
 - **Created At**: 2025-12-09T00:14:46
 - **Completed At**: N/A
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
@@ -54,10 +50,10 @@
 - **Status**: completed
 - **Created At**: 2025-12-09T00:14:48
 - **Completed At**: 2025-12-09T00:16:14
-- **Corrected Text Length**: 3113 chars
-- **Full Text Length**: 3821 chars
+- **Text Type**: corrected_text
+- **Text Length**: 3113 chars
 
-**Corrected Text (corrected_text):**
+**Full Text (corrected_text):**
 
 
 ---
@@ -66,10 +62,10 @@
 - **Status**: completed
 - **Created At**: 2025-12-09T00:14:51
 - **Completed At**: 2025-12-09T00:15:46
-- **Corrected Text Length**: 3113 chars
-- **Full Text Length**: 3821 chars
+- **Text Type**: corrected_text
+- **Text Length**: 3113 chars
 
-**Corrected Text (corrected_text):**
+**Full Text (corrected_text):**
 
 
 ---
@@ -78,8 +74,7 @@
 - **Status**: pending
 - **Created At**: 2025-12-09T00:14:53
 - **Completed At**: N/A
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
@@ -89,8 +84,7 @@
 - **Status**: routing
 - **Created At**: 2025-12-09T00:14:56
 - **Completed At**: N/A
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
@@ -100,10 +94,10 @@
 - **Status**: completed
 - **Created At**: 2025-12-09T00:14:58
 - **Completed At**: 2025-12-09T00:16:42
-- **Corrected Text Length**: 3113 chars
-- **Full Text Length**: 3821 chars
+- **Text Type**: corrected_text
+- **Text Length**: 3113 chars
 
-**Corrected Text (corrected_text):**
+**Full Text (corrected_text):**
 
 
 ---
@@ -112,8 +106,7 @@
 - **Status**: pending
 - **Created At**: 2025-12-09T00:15:00
 - **Completed At**: N/A
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
@@ -123,8 +116,7 @@
 - **Status**: completed
 - **Created At**: 2025-12-09T00:15:02
 - **Completed At**: 2025-12-09T00:16:47
-- **Corrected Text Length**: 0 chars
-- **Full Text Length**: 0 chars
+- **Text Length**: 0 chars
 
 ⚠️ No text available
 
