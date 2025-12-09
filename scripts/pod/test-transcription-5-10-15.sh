@@ -205,7 +205,8 @@ for NUM_TASKS in "${TEST_CONFIGS[@]}"; do
                 COMPLETED_COUNT=$((COMPLETED_COUNT + 1))
             fi
         done
-        print_status "Progress: Completed=$COMPLETED_COUNT/$NUM_TASKS (Elapsed: ${ELAPSED_TIME:.0f}s)"
+        ELAPSED_TIME_INT=$(python3 -c "print(int($ELAPSED_TIME))")
+        print_status "Progress: Completed=$COMPLETED_COUNT/$NUM_TASKS (Elapsed: ${ELAPSED_TIME_INT}s)"
     done
     
     MONITOR_END_TIME=$(date +%s.%N)
