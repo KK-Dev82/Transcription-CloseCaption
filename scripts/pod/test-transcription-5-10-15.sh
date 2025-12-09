@@ -166,11 +166,18 @@ for NUM_TASKS in "${TEST_CONFIGS[@]}"; do
     MAX_WAIT_TIME=1800  # 30 minutes max wait
     ELAPSED_TIME=0
     
-    while [ $COMPLETED_COUNT -lt $NUM_TASKS ] && [ $ELAPSED_TIME -lt $MAX_WAIT_TIME ]; do
+    while [ $COMPLETED_COUNT -lt $NUM_TASKS ]; do
         sleep 3
         COMPLETED_COUNT=0
         CURRENT_TIME=$(date +%s.%N)
         ELAPSED_TIME=$(python3 -c "print($CURRENT_TIME - $MONITOR_START_TIME)")
+        ELAPSED_TIME_INT=$(python3 -c "print(int($ELAPSED_TIME))")
+        
+        # Check timeout
+        if [ $ELAPSED_TIME_INT -ge $MAX_WAIT_TIME ]; then
+            print_warning "⏱️ Timeout reached (${MAX_WAIT_TIME}s)"
+            break
+        fi
         
         for i in "${!TASK_IDS[@]}"; do
             task_id="${TASK_IDS[$i]}"
@@ -237,20 +244,22 @@ for NUM_TASKS in "${TEST_CONFIGS[@]}"; do
     done
     
     if [ $VALID_TASKS -gt 0 ]; then
-        AVG_QUEUE_TIME=$(python3 -c "print($TOTAL_QUEUE_TIME / $VALID_TASKS)")
-        AVG_PROCESSING_TIME=$(python3 -c "print($TOTAL_PROCESSING_TIME / $VALID_TASKS)")
-        AVG_TASK_TIME=$(python3 -c "print($TOTAL_TASK_TIME / $VALID_TASKS)")
+        AVG_QUEUE_TIME=$(python3 -c "print('%.2f' % ($TOTAL_QUEUE_TIME / $VALID_TASKS))")
+        AVG_PROCESSING_TIME=$(python3 -c "print('%.2f' % ($TOTAL_PROCESSING_TIME / $VALID_TASKS))")
+        AVG_TASK_TIME=$(python3 -c "print('%.2f' % ($TOTAL_TASK_TIME / $VALID_TASKS))")
     else
-        AVG_QUEUE_TIME=0
-        AVG_PROCESSING_TIME=0
-        AVG_TASK_TIME=0
+        AVG_QUEUE_TIME="0.00"
+        AVG_PROCESSING_TIME="0.00"
+        AVG_TASK_TIME="0.00"
     fi
+    
+    MONITOR_ELAPSED_FORMATTED=$(python3 -c "print('%.2f' % $MONITOR_ELAPSED)")
     
     # Determine status
     if [ $COMPLETED_COUNT -eq $NUM_TASKS ]; then
         STATUS_ICON="✅"
         STATUS_TEXT="PASS"
-    elif [ $ELAPSED_TIME -ge $MAX_WAIT_TIME ]; then
+    elif [ $ELAPSED_TIME_INT -ge $MAX_WAIT_TIME ]; then
         STATUS_ICON="⏱️"
         STATUS_TEXT="TIMEOUT"
     else
@@ -262,17 +271,17 @@ for NUM_TASKS in "${TEST_CONFIGS[@]}"; do
     print_status "Summary for $NUM_TASKS task(s):"
     print_status "  Submitted: $NUM_TASKS"
     print_status "  Completed: $COMPLETED_COUNT"
-    print_status "  Average Queue Time: ${AVG_QUEUE_TIME:.2f}s"
-    print_status "  Average Processing Time: ${AVG_PROCESSING_TIME:.2f}s"
-    print_status "  Average Total Time: ${AVG_TASK_TIME:.2f}s"
-    print_status "  Total Elapsed: ${MONITOR_ELAPSED:.2f}s"
+    print_status "  Average Queue Time: ${AVG_QUEUE_TIME}s"
+    print_status "  Average Processing Time: ${AVG_PROCESSING_TIME}s"
+    print_status "  Average Total Time: ${AVG_TASK_TIME}s"
+    print_status "  Total Elapsed: ${MONITOR_ELAPSED_FORMATTED}s"
     print_status "  Status: $STATUS_ICON $STATUS_TEXT"
     print_header "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
     # Append to result file
     {
-        echo "| $NUM_TASKS | $NUM_TASKS | $COMPLETED_COUNT | ${AVG_QUEUE_TIME:.2f}s | ${AVG_PROCESSING_TIME:.2f}s | ${MONITOR_ELAPSED:.2f}s | $STATUS_ICON $STATUS_TEXT |"
+        echo "| $NUM_TASKS | $NUM_TASKS | $COMPLETED_COUNT | ${AVG_QUEUE_TIME}s | ${AVG_PROCESSING_TIME}s | ${MONITOR_ELAPSED_FORMATTED}s | $STATUS_ICON $STATUS_TEXT |"
     } >> "$RESULT_FILE"
     
     # Append fulltext to fulltext file
