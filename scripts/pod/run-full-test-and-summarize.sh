@@ -57,19 +57,20 @@ run_test_on_server() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
-    # Check if we should run locally or via SSH
-    if [ "$server" = "local" ] || [ -z "$SSH_CONNECTION" ]; then
-        # Run locally (if we're already on the server)
-        echo -e "${CYAN}📡 Running test locally...${NC}"
-        API_URL="$server_url"
+    # Determine API URL - if running on the server itself, use localhost
+    # Otherwise use the public URL
+    if [ "$server" = "4080s" ] && [ "$(hostname 2>/dev/null || echo '')" != "" ]; then
+        # We're on 4080s server, use localhost
+        API_URL="http://localhost:8010"
+        echo -e "${CYAN}📡 Using localhost API (running on 4080s)${NC}"
+    elif [ "$server" = "4000-ada" ] && [ "$(hostname 2>/dev/null || echo '')" != "" ]; then
+        # We're on 4000-ada server, use localhost
+        API_URL="http://localhost:8010"
+        echo -e "${CYAN}📡 Using localhost API (running on 4000-ada)${NC}"
     else
-        # Run via SSH
-        echo -e "${CYAN}📡 Connecting to $server via SSH...${NC}"
-        if ! ssh -o ConnectTimeout=5 "$server" "echo 'Connection OK'" > /dev/null 2>&1; then
-            echo -e "${RED}   ❌ Cannot connect to $server${NC}"
-            return 1
-        fi
+        # Use public URL
         API_URL="$server_url"
+        echo -e "${CYAN}📡 Using API URL: $API_URL${NC}"
     fi
     
     # Pre-flight check
