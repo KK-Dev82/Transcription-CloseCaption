@@ -70,7 +70,10 @@ class AsyncConsumerManager:
         await self._setup_queue_consumer(self.audio_chunk_extracted_queue_name, self.handlers.get('audio_chunk_extracted'))
         
         # 3-Queue Architecture
-        await self.channel.set_qos(prefetch_count=1)  # Prefetch=1 สำหรับ request queue
+        # เพิ่ม prefetch_count สำหรับ request queue เพื่อให้รับได้หลาย tasks พร้อมกัน
+        # ใช้ค่าเดียวกับ max_workers เพื่อให้รับได้เท่ากับจำนวน workers
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '10'))
+        await self.channel.set_qos(prefetch_count=request_prefetch)  # Prefetch=10 สำหรับ request queue
         await self._setup_queue_consumer(self.transcription_request_queue_name, self.handlers.get('transcription_request'))
         await self._setup_queue_consumer(self.audio_extraction_queue_name, self.handlers.get('audio_extraction'))
         
