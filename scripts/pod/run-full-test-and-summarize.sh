@@ -458,11 +458,20 @@ EOF
 
 EOF
     
-    # Determine winner
+    # Determine winner (use calc-compatible comparison)
     if [ "$s1_fail" = "0" ] && [ "$s2_fail" = "0" ]; then
-        if (( $(echo "$s1_avg < $s2_avg" | bc -l 2>/dev/null || echo "0") )); then
+        # Use Python or awk for comparison
+        if command -v python3 > /dev/null 2>&1; then
+            local s1_lt_s2=$(python3 -c "print(1 if float('$s1_avg') < float('$s2_avg') else 0)" 2>/dev/null || echo "0")
+            local s2_lt_s1=$(python3 -c "print(1 if float('$s2_avg') < float('$s1_avg') else 0)" 2>/dev/null || echo "0")
+        else
+            local s1_lt_s2=$(awk "BEGIN {print ($s1_avg < $s2_avg) ? 1 : 0}")
+            local s2_lt_s1=$(awk "BEGIN {print ($s2_avg < $s1_avg) ? 1 : 0}")
+        fi
+        
+        if [ "$s1_lt_s2" = "1" ]; then
             echo "**🏆 Winner: $SERVER1** (Faster average time: ${s1_avg}s vs ${s2_avg}s)" >> "$summary_file"
-        elif (( $(echo "$s2_avg < $s1_avg" | bc -l 2>/dev/null || echo "0") )); then
+        elif [ "$s2_lt_s1" = "1" ]; then
             echo "**🏆 Winner: $SERVER2** (Faster average time: ${s2_avg}s vs ${s1_avg}s)" >> "$summary_file"
         else
             echo "**🤝 Perfect Tie!** Both servers completed all tasks with similar performance." >> "$summary_file"
