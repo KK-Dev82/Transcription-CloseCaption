@@ -57,7 +57,7 @@ class AsyncConsumerManager:
         # ใช้ค่าสูงสุดระหว่าง chunk_prefetch และ request_prefetch เพื่อให้รองรับทั้งสอง queue
         max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '5'))
         chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', str(max_workers)))
-        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '10'))
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '2'))  # Default=2 สำหรับ production
         # ใช้ค่าสูงสุดเพื่อให้รองรับทั้ง transcription_chunk_queue และ transcription_request_queue
         global_prefetch = max(chunk_prefetch, request_prefetch)
         await self.channel.set_qos(prefetch_count=global_prefetch)
