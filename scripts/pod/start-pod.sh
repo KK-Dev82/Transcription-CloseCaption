@@ -246,11 +246,11 @@ else
              WHISPER_DEVICE="${WHISPER_DEVICE}" \
              TZ="${TZ}" \
              TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
-             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8001 > /tmp/main-api.log 2>&1 & disown
+             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 > /tmp/main-api.log 2>&1 & disown
     sleep 5
     # Check if process is still running (not crashed)
     if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
-        if curl -f http://localhost:8001/health > /dev/null 2>&1; then
+        if curl -f http://localhost:8010/health > /dev/null 2>&1; then
             print_success "✅ Main API started"
         else
             print_warning "⚠️  Main API started but health check failed - check logs"
