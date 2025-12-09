@@ -52,11 +52,16 @@ class AsyncConsumerManager:
             logger.error("❌ Channel not available or closed!")
             return
         
-        # ตั้งค่า QoS สำหรับ transcription_chunk_queue
+        # ตั้งค่า QoS สำหรับ channel (global setting สำหรับทุก queue)
+        # ⚠️ ใน aio-pika, set_qos() เป็น global สำหรับ channel ทั้งหมด ไม่ใช่ per-queue
+        # ใช้ค่าสูงสุดระหว่าง chunk_prefetch และ request_prefetch เพื่อให้รองรับทั้งสอง queue
         max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '5'))
         chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', str(max_workers)))
-        await self.channel.set_qos(prefetch_count=chunk_prefetch)
-        logger.info(f"✅ Set QoS: prefetch_count={chunk_prefetch} for transcription_chunk_queue (max_workers={max_workers})")
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '10'))
+        # ใช้ค่าสูงสุดเพื่อให้รองรับทั้ง transcription_chunk_queue และ transcription_request_queue
+        global_prefetch = max(chunk_prefetch, request_prefetch)
+        await self.channel.set_qos(prefetch_count=global_prefetch)
+        logger.info(f"✅ Set QoS: prefetch_count={global_prefetch} (chunk={chunk_prefetch}, request={request_prefetch})")
         
         # Video processing queues
         await self._setup_queue_consumer(self.trim_queue_name, self.handlers.get('trim'))
@@ -70,10 +75,6 @@ class AsyncConsumerManager:
         await self._setup_queue_consumer(self.audio_chunk_extracted_queue_name, self.handlers.get('audio_chunk_extracted'))
         
         # 3-Queue Architecture
-        # เพิ่ม prefetch_count สำหรับ request queue เพื่อให้รับได้หลาย tasks พร้อมกัน
-        # ใช้ค่าเดียวกับ max_workers เพื่อให้รับได้เท่ากับจำนวน workers
-        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '10'))
-        await self.channel.set_qos(prefetch_count=request_prefetch)  # Prefetch=10 สำหรับ request queue
         await self._setup_queue_consumer(self.transcription_request_queue_name, self.handlers.get('transcription_request'))
         await self._setup_queue_consumer(self.audio_extraction_queue_name, self.handlers.get('audio_extraction'))
         
