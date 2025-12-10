@@ -148,13 +148,25 @@ async function refreshOverviewServer(serverName) {
                 }
             }
             
+            // Show stop button for processing or pending tasks
+            let stopButton = '';
+            if (status === 'processing' || status === 'pending' || status === 'transcribing') {
+                stopButton = `<button 
+                    class="btn-stop-task" 
+                    onclick="stopTask('${serverName}', '${taskId}')"
+                    style="margin-top: 6px; padding: 4px 12px; font-size: 11px; background: var(--apple-red); color: white; border: none; border-radius: 4px; cursor: pointer;"
+                    title="Stop this task"
+                >⏹️ Stop</button>`;
+            }
+            
             return `
                 <div class="log-item">
                     <div class="log-item-info">
                         <div class="log-item-id">${taskId.substring(0, 32)}...</div>
-                        <div>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
                             <span class="log-item-status ${status}">${status}</span>
-                            <span style="margin-left: 8px; font-size: 12px; color: var(--apple-gray-3);">${progress}%</span>
+                            <span style="font-size: 12px; color: var(--apple-gray-3);">${progress}%</span>
+                            ${stopButton}
                         </div>
                         <div style="font-size: 12px; color: var(--apple-gray-3); margin-top: 4px;">
                             ${fileName.length > 40 ? fileName.substring(0, 40) + '...' : fileName}${durationInfo}
