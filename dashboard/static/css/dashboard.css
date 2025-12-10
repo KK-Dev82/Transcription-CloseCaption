@@ -797,6 +797,27 @@ a:hover {
     margin-top: 4px;
 }
 
+.btn-stop-task {
+    padding: 4px 12px;
+    font-size: 11px;
+    background: #ff3b30;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-stop-task:hover {
+    background: #d70015;
+    transform: scale(1.05);
+}
+
+.btn-stop-task:active {
+    transform: scale(0.95);
+}
+
 /* Test Tab */
 .test-container {
     display: flex;
