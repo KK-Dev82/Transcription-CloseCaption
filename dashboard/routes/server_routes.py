@@ -198,52 +198,77 @@ async def get_server_videos(server_name: str):
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{api_url}/api/control/videos", timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    videos = []
-                    if isinstance(data, list):
-                        videos = data
-                    elif isinstance(data, dict) and "videos" in data:
-                        videos = data["videos"]
+            # Try /api/control/videos first, fallback to /videos/list or /videos
+            video_endpoints = [
+                f"{api_url}/api/control/videos",
+                f"{api_url}/videos/list",
+                f"{api_url}/videos"
+            ]
+            
+            videos = []
+            response_status = None
+            
+            for endpoint in video_endpoints:
+                try:
+                    async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        response_status = response.status
+                        if response.status == 200:
+                            data = await response.json()
+                            if isinstance(data, list):
+                                videos = data
+                            elif isinstance(data, dict):
+                                if "videos" in data:
+                                    videos = data["videos"]
+                                elif "files" in data:
+                                    videos = data["files"]
+                            break
+                except Exception as e:
+                    logger.debug(f"Failed to get videos from {endpoint}: {e}")
+                    continue
+            
+            if not videos:
+                # If all endpoints failed, return error
+                return {"error": f"Could not fetch videos from server (last status: {response_status})", "videos": []}
+            
+            # Process videos - ensure each video has duration and file_name info
+            try:
+                for video in videos:
+                    # Ensure file_name exists
+                    if "file_name" not in video:
+                        if "filename" in video:
+                            video["file_name"] = video["filename"]
+                        elif "file_path" in video:
+                            video["file_name"] = video["file_path"].split("/")[-1]
                     
-                    # Ensure each video has duration and file_name info
-                    for video in videos:
-                        # Ensure file_name exists
-                        if "file_name" not in video:
-                            if "filename" in video:
-                                video["file_name"] = video["filename"]
-                            elif "file_path" in video:
-                                video["file_name"] = video["file_path"].split("/")[-1]
-                        
-                        duration = 0
-                        if "duration" in video:
-                            duration = video["duration"]
-                        elif "duration_seconds" in video:
-                            duration = video["duration_seconds"]
-                        elif "video_info" in video and isinstance(video["video_info"], dict):
-                            duration = video["video_info"].get("duration", 0)
-                        elif "video_info" in video and isinstance(video["video_info"], str):
-                            try:
-                                import json
-                                video_info = json.loads(video["video_info"])
-                                duration = video_info.get("duration", 0)
-                            except:
-                                pass
-                        
-                        video["duration"] = float(duration) if duration else 0
-                        if video["duration"] > 0:
-                            minutes = int(video["duration"] // 60)
-                            seconds = int(video["duration"] % 60)
-                            video["duration_formatted"] = f"{minutes}:{seconds:02d}"
-                        else:
-                            video["duration_formatted"] = "Unknown"
+                    duration = 0
+                    if "duration" in video:
+                        duration = video["duration"]
+                    elif "duration_seconds" in video:
+                        duration = video["duration_seconds"]
+                    elif "video_info" in video and isinstance(video["video_info"], dict):
+                        duration = video["video_info"].get("duration", 0)
+                    elif "video_info" in video and isinstance(video["video_info"], str):
+                        try:
+                            import json
+                            video_info = json.loads(video["video_info"])
+                            duration = video_info.get("duration", 0)
+                        except:
+                            pass
                     
-                    return {"videos": videos}
-                else:
-                    return {"error": f"Server returned status {response.status}", "videos": []}
+                    video["duration"] = float(duration) if duration else 0
+                    if video["duration"] > 0:
+                        minutes = int(video["duration"] // 60)
+                        seconds = int(video["duration"] % 60)
+                        video["duration_formatted"] = f"{minutes}:{seconds:02d}"
+                    else:
+                        video["duration_formatted"] = "Unknown"
+                
+                return {"videos": videos}
+            except Exception as e:
+                logger.error(f"Error processing videos: {e}", exc_info=True)
+                return {"error": f"Error processing videos: {str(e)}", "videos": []}
     except Exception as e:
-        logger.error(f"Error getting videos from {server_name}: {e}")
+        logger.error(f"Error getting videos from {server_name}: {e}", exc_info=True)(f"Error getting videos from {server_name}: {e}")
         return {"error": str(e), "videos": []}
 
 

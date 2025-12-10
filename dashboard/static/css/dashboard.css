@@ -964,6 +964,43 @@ a:hover {
     display: block;
 }
 
+.test-task-error {
+    margin-top: 12px;
+    padding: 12px;
+    background: #fff3f3;
+    border-left: 4px solid #ff3b30;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #d70015;
+}
+
+.test-task-item.processing {
+    border-left: 4px solid #007aff;
+    background: #f0f7ff;
+}
+
+.test-task-item.completed {
+    border-left: 4px solid var(--apple-green);
+    background: #f0fff4;
+}
+
+.test-task-item.failed {
+    border-left: 4px solid #ff3b30;
+    background: #fff3f3;
+}
+
+.test-task-item.pending {
+    border-left: 4px solid #ff9500;
+    background: #fffbf0;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--apple-gray-3);
+    font-size: 16px;
+}
+
 @media (max-width: 768px) {
     .container {
         padding: 40px 20px;
