@@ -60,6 +60,7 @@ class TranscriptionResponse(BaseModel):
     progress: Optional[int] = 0  # Progress percentage (0-100)
     updated_at: Optional[datetime] = None
     time_used: Optional[float] = None  # เวลาที่ใช้ในการประมวลผล (วินาที)
+    processing_time: Optional[float] = None  # Alias for time_used (for backward compatibility and frontend fallback)
     
     # Progress tracking แบบ x/total
     total_chunks: Optional[int] = None  # จำนวน chunks ทั้งหมด (ถ้าใช้ chunking)
