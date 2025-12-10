@@ -238,15 +238,35 @@ else
     
     # Setup LD_LIBRARY_PATH for CTranslate2 and cuDNN
     PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/local/lib/python3.10/dist-packages")
+    PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.10")
+    WORKSPACE_LOCAL="/workspace/.local/lib/python${PYTHON_VERSION}/site-packages"
+    
     CTRANSLATE2_LIBS="${PYTHON_SITE}/ctranslate2.libs"
+    TORCH_LIB_DIR="${PYTHON_SITE}/torch/lib"
+    WORKSPACE_TORCH_LIB_DIR="${WORKSPACE_LOCAL}/torch/lib"
     CUDNN_LIB_DIR="${PYTHON_SITE}/nvidia/cudnn/lib"
+    WORKSPACE_CUDNN_LIB_DIR="${WORKSPACE_LOCAL}/nvidia/cudnn/lib"
     CUDA_LIB_DIRS="/usr/local/cuda/lib64:/usr/local/cuda-11.8/lib64"
     LD_LIBRARY_PATH_VAL="${LD_LIBRARY_PATH:-}"
     
-    # Add cuDNN libraries (most important for GPU support)
+    # Priority 1: Add PyTorch torch/lib (contains cuDNN v8 libraries - most important!)
+    if [ -d "$WORKSPACE_TORCH_LIB_DIR" ]; then
+        LD_LIBRARY_PATH_VAL="${WORKSPACE_TORCH_LIB_DIR}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added PyTorch cuDNN libraries (persistent) to LD_LIBRARY_PATH: $WORKSPACE_TORCH_LIB_DIR"
+    fi
+    if [ -d "$TORCH_LIB_DIR" ]; then
+        LD_LIBRARY_PATH_VAL="${TORCH_LIB_DIR}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added PyTorch cuDNN libraries (system) to LD_LIBRARY_PATH: $TORCH_LIB_DIR"
+    fi
+    
+    # Priority 2: Add nvidia/cudnn/lib (contains cuDNN v9 libraries)
+    if [ -d "$WORKSPACE_CUDNN_LIB_DIR" ]; then
+        LD_LIBRARY_PATH_VAL="${WORKSPACE_CUDNN_LIB_DIR}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added nvidia cuDNN libraries (persistent) to LD_LIBRARY_PATH: $WORKSPACE_CUDNN_LIB_DIR"
+    fi
     if [ -d "$CUDNN_LIB_DIR" ]; then
         LD_LIBRARY_PATH_VAL="${CUDNN_LIB_DIR}:${LD_LIBRARY_PATH_VAL}"
-        echo "   ✅ Added cuDNN libraries to LD_LIBRARY_PATH: $CUDNN_LIB_DIR"
+        echo "   ✅ Added nvidia cuDNN libraries (system) to LD_LIBRARY_PATH: $CUDNN_LIB_DIR"
     fi
     
     # Add CUDA libraries
