@@ -1559,11 +1559,11 @@ class TranscriptionService:
                     self.tasks[task_id].status = new_status
                     self.tasks[task_id].completed_at = datetime.now()
                 
-                logger.info(f"✅ Task {task_id} cancelled successfully")
+                logger.info(f"✅ Task {task_id} {'stopped' if new_status == 'stopped' else 'cancelled'} successfully")
                 return True
-            elif current_status == "cancelled":
-                logger.info(f"⚠️  Task {task_id} is already cancelled")
-                return True  # ถ้ายกเลิกแล้วก็ถือว่าสำเร็จ
+            elif current_status in ["cancelled", "stopped"]:
+                logger.info(f"⚠️  Task {task_id} is already {current_status}")
+                return True  # ถ้ายกเลิกหรือหยุดแล้วก็ถือว่าสำเร็จ
             else:
                 logger.warning(f"⚠️  Cannot cancel task {task_id} with status: {current_status}")
                 return False
