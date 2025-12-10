@@ -25,6 +25,23 @@ function formatDate(dateString) {
     }
 }
 
+// Format time duration in seconds to human-readable format (e.g., "1m 30s", "45s")
+function formatTimeDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return 'N/A';
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
+}
+
 function formatDuration(seconds) {
     if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return 'N/A';
     const minutes = Math.floor(seconds / 60);
@@ -343,6 +360,24 @@ function updateTestTaskList(tasks) {
                         <div class="test-task-info-label">🕐 Updated</div>
                         <div class="test-task-info-value">${formatDate(task.updated_at || task.created_at)}</div>
                     </div>
+                    ${status === 'completed' ? (() => {
+                        const times = [];
+                        if (task.audio_extraction_time && task.audio_extraction_time > 0) {
+                            times.push(`🎵 Extract: ${formatTimeDuration(task.audio_extraction_time)}`);
+                        }
+                        if (task.transcription_time && task.transcription_time > 0) {
+                            times.push(`🎤 Transcribe: ${formatTimeDuration(task.transcription_time)}`);
+                        }
+                        if (task.processing_time && task.processing_time > 0 && times.length === 0) {
+                            times.push(`⏱️ Total: ${formatTimeDuration(task.processing_time)}`);
+                        }
+                        return times.length > 0 ? `
+                    <div class="test-task-info-item">
+                        <div class="test-task-info-label">⏱️ Time Used</div>
+                        <div class="test-task-info-value" style="display: flex; gap: 12px; flex-wrap: wrap;">${times.join(' • ')}</div>
+                    </div>
+                        ` : '';
+                    })() : ''}
                 </div>
                 ${isCompleted && fullText ? `
                     <div class="test-task-text visible">

@@ -29,6 +29,23 @@ function formatDate(dateString) {
     }
 }
 
+// Format time duration in seconds to human-readable format (e.g., "1m 30s", "45s")
+function formatTimeDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return 'N/A';
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    } else {
+        return `${secs}s`;
+    }
+}
+
 function formatDuration(seconds) {
     if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return 'N/A';
     const minutes = Math.floor(seconds / 60);
@@ -181,6 +198,19 @@ async function refreshOverviewServer(serverName) {
                         </div>
                         <div class="log-item-time">${formatDate(updatedAt)}</div>
                         ${stepInfo !== 'N/A' ? `<div style="font-size: 11px; color: var(--apple-gray-3); margin-top: 4px;">Step: ${stepInfo}</div>` : ''}
+                        ${status === 'completed' ? (() => {
+                            const times = [];
+                            if (task.audio_extraction_time && task.audio_extraction_time > 0) {
+                                times.push(`🎵 Extract: ${formatTimeDuration(task.audio_extraction_time)}`);
+                            }
+                            if (task.transcription_time && task.transcription_time > 0) {
+                                times.push(`🎤 Transcribe: ${formatTimeDuration(task.transcription_time)}`);
+                            }
+                            if (task.processing_time && task.processing_time > 0 && times.length === 0) {
+                                times.push(`⏱️ Total: ${formatTimeDuration(task.processing_time)}`);
+                            }
+                            return times.length > 0 ? `<div style="font-size: 11px; color: var(--apple-blue); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">${times.join(' • ')}</div>` : '';
+                        })() : ''}
                         ${textPreview}
                     </div>
                 </div>

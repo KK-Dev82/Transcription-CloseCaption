@@ -101,6 +101,9 @@ class JSONStorage:
             "end_time": transcription_data.get("end_time") or _ensure_iso(transcription_data.get("completed_at", existing_data.get("completed_at"))),  # Alias
             "processing_time": processing_time or existing_data.get("processing_time") or existing_data.get("result_time"),  # เวลาที่ใช้ในการประมวลผล (วินาที)
             "result_time": processing_time or existing_data.get("result_time") or existing_data.get("processing_time"),  # Alias
+            "transcription_time": transcription_data.get("transcription_time", existing_data.get("transcription_time")),  # เวลาที่ใช้ในการ transcription โดยเฉพาะ (วินาที)
+            "audio_extraction_time": transcription_data.get("audio_extraction_time", existing_data.get("audio_extraction_time")),  # เวลาที่ใช้ในการ extract audio (วินาที), None ถ้าเป็น audio file โดยตรง
+            "text_correction_time": transcription_data.get("text_correction_time", existing_data.get("text_correction_time")),  # เวลาที่ใช้ในการแก้ไขข้อความ (วินาที)
             "job_id": transcription_data.get("job_id", existing_data.get("job_id")),
             "user_id": transcription_data.get("user_id", existing_data.get("user_id")),
             "callback_url": transcription_data.get("callback_url", existing_data.get("callback_url"))
