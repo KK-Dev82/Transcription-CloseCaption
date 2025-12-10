@@ -214,6 +214,9 @@ class TranscriptionService:
                 except Exception:
                     time_used = None
             
+            # เก็บ processing_time ไว้ใน response เพื่อให้ frontend ใช้ได้ (fallback)
+            processing_time_value = time_used
+            
             # สร้าง original_text และ corrected_text จาก chunks
             original_text_parts = []
             corrected_text_parts = []
@@ -254,7 +257,8 @@ class TranscriptionService:
                 error_message=data.get("error_message"),
                 progress=progress_value,
                 updated_at=updated_at,
-                time_used=time_used
+                time_used=time_used,
+                processing_time=processing_time_value  # Set processing_time for frontend fallback
             )
             
             # เติมข้อมูลที่เก็บไว้เพิ่มเติม
