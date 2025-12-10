@@ -297,10 +297,48 @@ async def stop_task(server_name: str, task_id: str):
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            async with session.delete(
+            # Try /transcribe/{task_id} first, then /api/transcribe/{task_id}
+            endpoints = [
                 f"{api_url}/transcribe/{task_id}",
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
+                f"{api_url}/api/transcribe/{task_id}"
+            ]
+            
+            last_error = None
+            for endpoint in endpoints:
+                try:
+                    async with session.delete(
+                        endpoint,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            logger.info(f"✅ Stopped task {task_id} on {server_name} via {endpoint}")
+                            return {
+                                "success": True,
+                                "message": result.get("message", "Task stopped successfully"),
+                                "task_id": task_id
+                            }
+                        elif response.status == 404:
+                            # Try next endpoint
+                            error_text = await response.text()
+                            last_error = f"HTTP {response.status}: {error_text}"
+                            continue
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"❌ Failed to stop task {task_id} on {server_name} via {endpoint}: HTTP {response.status}: {error_text}")
+                            last_error = f"HTTP {response.status}: {error_text}"
+                            continue
+                except Exception as e:
+                    last_error = f"Exception: {str(e)}"
+                    continue
+            
+            # All endpoints failed
+            logger.error(f"❌ Failed to stop task {task_id} on {server_name}: All endpoints failed. Last error: {last_error}")
+            return {
+                "success": False,
+                "error": f"Failed to stop task. {last_error}",
+                "task_id": task_id
+            }
                 if response.status == 200:
                     result = await response.json()
                     logger.info(f"✅ Stopped task {task_id} on {server_name}")

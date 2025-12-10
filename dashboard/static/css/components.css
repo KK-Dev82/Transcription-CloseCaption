@@ -154,3 +154,90 @@
     margin-top: 4px;
 }
 
+/* Modal Tabs */
+.modal-tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--apple-gray-2);
+    margin-bottom: 16px;
+}
+
+.modal-tab {
+    padding: 12px 24px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--apple-gray-3);
+    transition: all 0.2s;
+}
+
+.modal-tab:hover {
+    color: var(--apple-gray-4);
+    background: var(--apple-gray-1);
+}
+
+.modal-tab.active {
+    color: var(--apple-blue);
+    border-bottom-color: var(--apple-blue);
+}
+
+.modal-tab-content {
+    display: none;
+}
+
+.modal-tab-content.active {
+    display: block;
+}
+
+/* Chunk Items */
+.chunk-item {
+    padding: 12px;
+    margin-bottom: 12px;
+    background: var(--apple-gray-1);
+    border-radius: 8px;
+    border-left: 3px solid var(--apple-blue);
+}
+
+.chunk-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--apple-gray-3);
+}
+
+.chunk-item-time {
+    font-weight: 500;
+}
+
+.chunk-item-text {
+    white-space: pre-wrap;
+    line-height: 1.6;
+    color: var(--apple-gray-4);
+}
+
+.btn-view-text {
+    padding: 4px 12px;
+    font-size: 11px;
+    background: var(--apple-blue);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-view-text:hover {
+    background: #0051d5;
+    transform: scale(1.05);
+}
+
+.btn-view-text:active {
+    transform: scale(0.95);
+}
+

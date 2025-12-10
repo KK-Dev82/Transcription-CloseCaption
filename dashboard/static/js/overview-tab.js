@@ -131,6 +131,7 @@ async function refreshOverviewServer(serverName) {
             
             // Get transcription text for completed tasks
             let textPreview = '';
+            let viewTextButton = '';
             if (status === 'completed') {
                 let fullText = task.full_text || task.corrected_text || task.original_text;
                 
@@ -145,6 +146,12 @@ async function refreshOverviewServer(serverName) {
                 if (fullText && fullText.trim()) {
                     const preview = fullText.length > 150 ? fullText.substring(0, 150) + '...' : fullText;
                     textPreview = `<div style="font-size: 11px; color: var(--apple-gray-4); margin-top: 6px; padding: 6px; background: var(--apple-gray-1); border-radius: 4px; line-height: 1.4;">📝 ${preview}</div>`;
+                    viewTextButton = `<button 
+                        class="btn-view-text" 
+                        onclick="viewTranscriptionText('${serverName}', '${taskId}')"
+                        style="margin-top: 6px; padding: 4px 12px; font-size: 11px; background: var(--apple-blue); color: white; border: none; border-radius: 4px; cursor: pointer;"
+                        title="View full text and chunks"
+                    >🔍 View Text</button>`;
                 }
             }
             
@@ -167,6 +174,7 @@ async function refreshOverviewServer(serverName) {
                             <span class="log-item-status ${status}">${status}</span>
                             <span style="font-size: 12px; color: var(--apple-gray-3);">${progress}%</span>
                             ${stopButton}
+                            ${viewTextButton}
                         </div>
                         <div style="font-size: 12px; color: var(--apple-gray-3); margin-top: 4px;">
                             ${fileName.length > 40 ? fileName.substring(0, 40) + '...' : fileName}${durationInfo}
