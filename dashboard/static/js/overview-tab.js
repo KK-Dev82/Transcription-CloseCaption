@@ -223,6 +223,26 @@ function loadMoreTasks(serverName) {
     refreshOverviewServer(serverName);
 }
 
+async function stopTask(serverName, taskId) {
+    if (!confirm(`หยุด task ${taskId.substring(0, 16)}... บน ${serverName}?`)) {
+        return;
+    }
+    
+    try {
+        const result = await dashboardAPI.stopTask(serverName, taskId);
+        if (result.success) {
+            alert(`✅ ${result.message || 'Task stopped successfully'}`);
+            // Refresh the server's task list
+            refreshOverviewServer(serverName);
+        } else {
+            alert(`❌ Error: ${result.error || 'Failed to stop task'}`);
+        }
+    } catch (error) {
+        console.error('Error stopping task:', error);
+        alert(`Error: ${error.message || 'Unknown error'}`);
+    }
+}
+
 // Export functions
 window.startOverviewRefresh = startOverviewRefresh;
 window.stopOverviewRefresh = stopOverviewRefresh;
@@ -230,5 +250,6 @@ window.refreshOverviewData = refreshOverviewData;
 window.refreshOverviewServer = refreshOverviewServer;
 window.clearPendingTasks = clearPendingTasks;
 window.loadMoreTasks = loadMoreTasks;
+window.stopTask = stopTask;
 window.formatDate = formatDate;
 window.formatDuration = formatDuration;
