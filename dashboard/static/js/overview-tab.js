@@ -251,6 +251,97 @@ async function stopTask(serverName, taskId) {
     }
 }
 
+// Transcription Text Modal functions
+let currentTranscriptionTask = null;
+let currentTranscriptionServer = null;
+
+async function viewTranscriptionText(serverName, taskId) {
+    currentTranscriptionTask = taskId;
+    currentTranscriptionServer = serverName;
+    
+    const modal = document.getElementById('transcriptionTextModal');
+    const fulltextDiv = document.getElementById('transcription-fulltext');
+    const chunksDiv = document.getElementById('transcription-chunks');
+    
+    // Show loading
+    fulltextDiv.textContent = 'Loading...';
+    chunksDiv.innerHTML = '<div class="loading">Loading chunks...</div>';
+    modal.style.display = 'flex';
+    
+    // Reset to fulltext tab
+    switchTranscriptionTab('fulltext');
+    
+    try {
+        const remoteAPI = new RemoteServerAPI(serverName);
+        const task = await remoteAPI.getTaskStatus(taskId);
+        
+        // Get full text
+        let fullText = task.full_text || task.corrected_text || task.original_text;
+        
+        // If no full_text, construct from chunks
+        if (!fullText && task.chunks && task.chunks.length > 0) {
+            const chunkTexts = task.chunks.filter(c => c.text).map(c => c.text);
+            if (chunkTexts.length > 0) {
+                fullText = chunkTexts.join(' ');
+            }
+        }
+        
+        fulltextDiv.textContent = fullText || 'No text available';
+        
+        // Render chunks
+        if (task.chunks && task.chunks.length > 0) {
+            chunksDiv.innerHTML = task.chunks.map((chunk, index) => {
+                const startTime = chunk.start_time !== undefined ? formatTime(chunk.start_time) : 'N/A';
+                const endTime = chunk.end_time !== undefined ? formatTime(chunk.end_time) : 'N/A';
+                return `
+                    <div class="chunk-item">
+                        <div class="chunk-item-header">
+                            <span class="chunk-item-time">${startTime} - ${endTime}</span>
+                            <span>Chunk #${index + 1}</span>
+                        </div>
+                        <div class="chunk-item-text">${chunk.text || ''}</div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            chunksDiv.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--apple-gray-3);">No chunks available</div>';
+        }
+    } catch (error) {
+        console.error('Error loading transcription text:', error);
+        fulltextDiv.textContent = `Error: ${error.message || 'Failed to load transcription'}`;
+        chunksDiv.innerHTML = `<div style="color: #ff3b30;">Error loading chunks: ${error.message || 'Unknown error'}</div>`;
+    }
+}
+
+function formatTime(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
+function switchTranscriptionTab(tab) {
+    // Update tab buttons
+    document.querySelectorAll('.modal-tab').forEach(btn => btn.classList.remove('active'));
+    document.getElementById(`tab-${tab}`).classList.add('active');
+    
+    // Update tab content
+    document.querySelectorAll('.modal-tab-content').forEach(content => {
+        content.classList.remove('active');
+        content.style.display = 'none';
+    });
+    
+    const activeContent = document.getElementById(`transcription-${tab}-content`);
+    activeContent.classList.add('active');
+    activeContent.style.display = 'block';
+}
+
+function closeTranscriptionTextModal() {
+    const modal = document.getElementById('transcriptionTextModal');
+    modal.style.display = 'none';
+    currentTranscriptionTask = null;
+    currentTranscriptionServer = null;
+}
+
 // Export functions
 window.startOverviewRefresh = startOverviewRefresh;
 window.stopOverviewRefresh = stopOverviewRefresh;
@@ -259,5 +350,8 @@ window.refreshOverviewServer = refreshOverviewServer;
 window.clearPendingTasks = clearPendingTasks;
 window.loadMoreTasks = loadMoreTasks;
 window.stopTask = stopTask;
+window.viewTranscriptionText = viewTranscriptionText;
+window.switchTranscriptionTab = switchTranscriptionTab;
+window.closeTranscriptionTextModal = closeTranscriptionTextModal;
 window.formatDate = formatDate;
 window.formatDuration = formatDuration;
