@@ -200,14 +200,20 @@ async function refreshOverviewServer(serverName) {
                         ${stepInfo !== 'N/A' ? `<div style="font-size: 11px; color: var(--apple-gray-3); margin-top: 4px;">Step: ${stepInfo}</div>` : ''}
                         ${status === 'completed' ? (() => {
                             const times = [];
-                            if (task.audio_extraction_time && task.audio_extraction_time > 0) {
-                                times.push(`🎵 Extract: ${formatTimeDuration(task.audio_extraction_time)}`);
+                            // Check audio_extraction_time (may be null/undefined)
+                            const audioTime = task.audio_extraction_time || task.audio_extraction_time === 0 ? parseFloat(task.audio_extraction_time) : null;
+                            if (audioTime !== null && !isNaN(audioTime) && audioTime > 0) {
+                                times.push(`🎵 Extract: ${formatTimeDuration(audioTime)}`);
                             }
-                            if (task.transcription_time && task.transcription_time > 0) {
-                                times.push(`🎤 Transcribe: ${formatTimeDuration(task.transcription_time)}`);
+                            // Check transcription_time (may be null/undefined)
+                            const transcribeTime = task.transcription_time || task.transcription_time === 0 ? parseFloat(task.transcription_time) : null;
+                            if (transcribeTime !== null && !isNaN(transcribeTime) && transcribeTime > 0) {
+                                times.push(`🎤 Transcribe: ${formatTimeDuration(transcribeTime)}`);
                             }
-                            if (task.processing_time && task.processing_time > 0 && times.length === 0) {
-                                times.push(`⏱️ Total: ${formatTimeDuration(task.processing_time)}`);
+                            // Fallback to processing_time if no specific times available
+                            const processingTime = task.processing_time || task.time_used || (task.processing_time === 0 ? 0 : null);
+                            if (processingTime !== null && !isNaN(processingTime) && processingTime > 0 && times.length === 0) {
+                                times.push(`⏱️ Total: ${formatTimeDuration(processingTime)}`);
                             }
                             return times.length > 0 ? `<div style="font-size: 11px; color: var(--apple-blue); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">${times.join(' • ')}</div>` : '';
                         })() : ''}
