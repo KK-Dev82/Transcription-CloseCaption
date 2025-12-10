@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcription Service Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Transcription Service Dashboard</h1>
+        <p class="subtitle">Monitor and Control Transcription Tasks</p>
+
+        <!-- Tabs Navigation -->
+        <div class="tabs">
+            <button class="tab-button active" onclick="switchTab('overview')" id="tab-overview-btn">
+                📊 Overview
+            </button>
+            <button class="tab-button" onclick="switchTab('test')" id="tab-test-btn">
+                🧪 Test
+            </button>
+        </div>
+
+        <!-- Tab Content: Overview -->
+        <div id="tab-overview" class="tab-content active">
+            <div class="overview-container">
+                <!-- Left: 4000-ada -->
+                <div class="server-logs-section">
+                    <div class="server-header">
+                        <h2>4000-ada</h2>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('4000-ada')">
+                                🧹 Clear Pending
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('4000-ada')" title="Delete old tasks">
+                                🗑️ Delete Old
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('4000-ada')" title="Delete ALL tasks (all statuses)">
+                                ⚠️ Delete All
+                            </button>
+                        </div>
+                    </div>
+                    <div class="logs-filters">
+                        <select id="filter-4000-ada" onchange="refreshOverviewServer('4000-ada')">
+                            <option value="">All Status</option>
+                            <option value="pending">Pending</option>
+                            <option value="processing">Processing</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                            <option value="stopped">Stopped</option>
+                        </select>
+                    </div>
+                    <div class="logs-container" id="logs-4000-ada">
+                        <div class="loading">Loading logs...</div>
+                    </div>
+                </div>
+
+                <!-- Right: 5080 -->
+                <div class="server-logs-section">
+                    <div class="server-header">
+                        <h2>5080</h2>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('5080')">
+                                🧹 Clear Pending
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('5080')" title="Delete old tasks">
+                                🗑️ Delete Old
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('5080')" title="Delete ALL tasks (all statuses)">
+                                ⚠️ Delete All
+                            </button>
+                        </div>
+                    </div>
+                    <div class="logs-filters">
+                        <select id="filter-5080" onchange="refreshOverviewServer('5080')">
+                            <option value="">All Status</option>
+                            <option value="pending">Pending</option>
+                            <option value="processing">Processing</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                            <option value="stopped">Stopped</option>
+                        </select>
+                    </div>
+                    <div class="logs-container" id="logs-5080">
+                        <div class="loading">Loading logs...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Content: Test -->
+        <div id="tab-test" class="tab-content">
+            <div class="test-container">
+                <!-- Test Configuration -->
+                <div class="test-config-section">
+                    <h2>Test Configuration</h2>
+                    <div class="test-form">
+                        <div class="form-group">
+                            <label>Server</label>
+                            <select id="testServer" onchange="onTestServerChange()">
+                                <option value="">Select Server</option>
+                                <option value="4000-ada">4000-ada</option>
+                                <option value="5080">5080</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Video</label>
+                            <select id="testVideo" disabled>
+                                <option value="">Select Server first</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Count (1-50)</label>
+                            <input type="number" id="testCount" min="1" max="50" value="1">
+                        </div>
+                        <button class="btn btn-primary" id="startTestBtn" onclick="startTest()" disabled>
+                            🚀 Start Test
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Test Results -->
+                <div id="testResultsSection" style="display: none;">
+                    <div class="test-results-header">
+                        <h2>Test Results</h2>
+                        <div class="test-overview" id="testOverview">
+                            <!-- Overview stats will be shown here -->
+                        </div>
+                    </div>
+                    <div class="test-tasks-container" id="testTasksContainer">
+                        <!-- Task list will be shown here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Old Tasks Modal -->
+    <div id="deleteOldTasksModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Delete Old Tasks</h2>
+                <button class="modal-close" onclick="closeDeleteOldTasksModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Delete Options</label>
+                    <select id="deleteDaysOption">
+                        <option value="3">Older than 3 days</option>
+                        <option value="7">Older than 7 days</option>
+                        <option value="30">Older than 30 days</option>
+                        <option value="all">All (completed/failed)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Status to Delete</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="deleteStatusCompleted" checked>
+                            <span>Completed</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="deleteStatusFailed" checked>
+                            <span>Failed</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="deleteStatusCancelled" checked>
+                            <span>Cancelled / Stopped</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" onclick="closeDeleteOldTasksDialog()">Cancel</button>
+                    <button class="btn btn-danger" id="confirmDeleteOldBtn" onclick="confirmDeleteOldTasks()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Bottom Bar -->
+    <div id="deleteProgressBar" class="progress-bottom-bar" style="display: none;">
+        <div class="progress-bar-content">
+            <div class="progress-bar-header">
+                <span id="progressBarTitle">Deleting old tasks...</span>
+                <button class="progress-bar-close" onclick="closeProgressBar()">&times;</button>
+            </div>
+            <div class="progress-bar-body">
+                <div class="progress-bar-track">
+                    <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
+                </div>
+                <div class="progress-bar-info">
+                    <span id="progressBarText">0 / 0 files</span>
+                    <span id="progressBarPercent">0%</span>
+                </div>
+                <div class="progress-bar-detail" id="progressBarDetail">
+                    <small>Preparing...</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/api-client.js"></script>
+    <script src="/static/js/overview-tab.js"></script>
+    <script src="/static/js/test-tab.js"></script>
+    <script src="/static/js/cleanup-modal.js"></script>
+    <script src="/static/js/dashboard-tabs.js"></script>
+</body>
+</html>
