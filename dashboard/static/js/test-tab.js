@@ -60,12 +60,23 @@ async function onTestServerChange() {
             data.videos.map(video => {
                 // Handle different possible field names for file name
                 const fileName = video.file_name || video.filename || (video.file_path ? video.file_path.split('/').pop() : 'Unknown');
-                const duration = video.duration || video.duration_seconds || 'N/A';
+                // Use duration_formatted if available, otherwise format from duration/duration_seconds
+                let durationDisplay = 'N/A';
+                if (video.duration_formatted && video.duration_formatted !== 'Unknown') {
+                    durationDisplay = video.duration_formatted;
+                } else if (video.duration || video.duration_seconds) {
+                    const seconds = parseFloat(video.duration || video.duration_seconds);
+                    if (!isNaN(seconds) && seconds > 0) {
+                        const minutes = Math.floor(seconds / 60);
+                        const secs = Math.floor(seconds % 60);
+                        durationDisplay = `${minutes}:${secs.toString().padStart(2, '0')}`;
+                    }
+                }
                 const filePath = video.file_path || video.path || '';
                 
                 return `
                     <option value="${filePath}">
-                        ${fileName} (${duration})
+                        ${fileName} (${durationDisplay})
                     </option>
                 `;
             }).join('');
@@ -120,19 +131,55 @@ async function startTest() {
             return;
         }
 
-        // Store task IDs
-        testTaskIds = result.task_ids || [];
+        // Store batch_id and show loading message
+        const batchId = result.batch_id;
+        testTaskIds = []; // Will be populated after tasks are created
         
-        // Show results section
-        document.getElementById('testResultsSection').style.display = 'block';
-        startTestRefresh();
+        // Show results section immediately with loading state
+        const resultsSection = document.getElementById('testResultsSection');
+        resultsSection.style.display = 'block';
+        
+        // Show initial loading message
+        document.getElementById('testOverview').innerHTML = `
+            <div class="overview-stat">
+                <div class="overview-stat-value">${count}</div>
+                <div class="overview-stat-label">Total</div>
+            </div>
+            <div class="overview-stat">
+                <div class="overview-stat-value" style="color: #007aff;">Starting...</div>
+                <div class="overview-stat-label">Status</div>
+            </div>
+        `;
+        document.getElementById('testTasksContainer').innerHTML = '<div class="loading">🔄 กำลังส่ง tasks ไปยัง server... กรุณารอสักครู่</div>';
+        
+        // Poll batch status to get task_ids
+        const pollBatchStatus = async () => {
+            try {
+                const batchStatus = await dashboardAPI.getBatchStatus(batchId);
+                if (batchStatus && batchStatus.task_ids && batchStatus.task_ids.length > 0) {
+                    testTaskIds = batchStatus.task_ids;
+                    // Start refresh loop
+                    startTestRefresh();
+                } else {
+                    // Still waiting for tasks - poll again after 1 second
+                    setTimeout(pollBatchStatus, 1000);
+                }
+            } catch (error) {
+                console.error('Error polling batch status:', error);
+                // Still try to poll
+                setTimeout(pollBatchStatus, 2000);
+            }
+        };
+        
+        // Start polling for batch status
+        setTimeout(pollBatchStatus, 500); // Wait 500ms for first batch status
         
         // Reset button
         startBtn.disabled = false;
         startBtn.textContent = '🚀 Start Test';
         
         // Scroll to results
-        document.getElementById('testResultsSection').scrollIntoView({ behavior: 'smooth' });
+        resultsSection.scrollIntoView({ behavior: 'smooth' });
     } catch (error) {
         console.error('Error starting test:', error);
         alert(`Error: ${error.message}`);
@@ -228,57 +275,86 @@ function updateTestTaskList(tasks) {
     const container = document.getElementById('testTasksContainer');
     if (!container) return;
 
-    if (tasks.length === 0) {
-        container.innerHTML = '<div class="loading">No tasks</div>';
+    if (tasks.length === 0 && testTaskIds.length === 0) {
+        container.innerHTML = '<div class="loading">🔄 กำลังส่ง tasks ไปยัง server... กรุณารอสักครู่</div>';
+        return;
+    }
+    
+    if (tasks.length === 0 && testTaskIds.length > 0) {
+        // Tasks are being created but not yet available
+        container.innerHTML = `
+            <div class="loading">
+                ⏳ กำลังสร้าง tasks... (${testTaskIds.length} tasks)
+                <br><small style="color: var(--apple-gray-3);">รอสักครู่แล้วจะอัพเดทอัตโนมัติ</small>
+            </div>
+        `;
         return;
     }
 
-    container.innerHTML = tasks.map(task => {
-        const taskId = task.task_id || task.id || 'N/A';
+    container.innerHTML = tasks.map((task, index) => {
+        const taskId = task.task_id || task.id || testTaskIds[index] || 'N/A';
         const status = (task.status || 'unknown').toLowerCase();
         const progress = task.progress || 0;
-        const stepInfo = task.current_stage || task.current_stage_description || 'N/A';
-        const fileName = task.file_name || task.filename || 'N/A';
-        const fullText = task.full_text || '';
+        const stepInfo = task.current_stage || task.current_stage_description || task.stage || 'N/A';
+        const fileName = task.file_name || task.filename || (task.file_path ? task.file_path.split('/').pop() : 'N/A');
+        
+        // Get video duration if available
+        let durationInfo = '';
+        const duration = task.total_duration || task.video_duration || task.duration || task.duration_seconds;
+        if (duration && typeof duration === 'number' && duration > 0) {
+            const minutes = Math.floor(duration / 60);
+            const seconds = Math.floor(duration % 60);
+            durationInfo = ` (${minutes}:${seconds.toString().padStart(2, '0')})`;
+        }
+        
+        // Get transcribed text
+        const fullText = task.full_text || task.corrected_text || task.original_text || '';
         const isCompleted = status === 'completed' && progress >= 100;
         
         const statusClass = status === 'completed' ? 'completed' : 
-                           status === 'processing' ? 'processing' :
+                           status === 'processing' || status === 'transcribing' ? 'processing' :
                            status === 'pending' ? 'pending' :
-                           status === 'failed' ? 'failed' : 'pending';
+                           status === 'failed' || status === 'error' ? 'failed' : 'pending';
 
         return `
-            <div class="test-task-item">
+            <div class="test-task-item ${statusClass}">
                 <div class="test-task-header">
-                    <div class="test-task-id">${taskId.substring(0, 32)}...</div>
+                    <div class="test-task-id" title="${taskId}">Task #${index + 1}: ${taskId.substring(0, 24)}...</div>
                     <span class="log-item-status ${statusClass}">${status}</span>
                 </div>
                 <div class="test-task-progress">
                     <div class="progress-bar">
                         <div class="progress-bar-fill" style="width: ${progress}%"></div>
                     </div>
-                    <div style="text-align: center; margin-top: 4px; font-size: 12px; color: var(--apple-gray-3);">
+                    <div style="text-align: center; margin-top: 4px; font-size: 12px; color: var(--apple-gray-3); font-weight: 500;">
                         ${progress}%
                     </div>
                 </div>
                 <div class="test-task-info">
                     <div class="test-task-info-item">
-                        <div class="test-task-info-label">File</div>
-                        <div class="test-task-info-value">${fileName.length > 30 ? fileName.substring(0, 30) + '...' : fileName}</div>
+                        <div class="test-task-info-label">📁 File</div>
+                        <div class="test-task-info-value">${fileName.length > 35 ? fileName.substring(0, 35) + '...' : fileName}${durationInfo}</div>
                     </div>
                     <div class="test-task-info-item">
-                        <div class="test-task-info-label">Step</div>
+                        <div class="test-task-info-label">⚙️ Step</div>
                         <div class="test-task-info-value">${stepInfo}</div>
                     </div>
                     <div class="test-task-info-item">
-                        <div class="test-task-info-label">Updated</div>
+                        <div class="test-task-info-label">🕐 Updated</div>
                         <div class="test-task-info-value">${formatDate(task.updated_at || task.created_at)}</div>
                     </div>
                 </div>
                 ${isCompleted && fullText ? `
                     <div class="test-task-text visible">
-                        <strong>Transcribed Text:</strong><br>
-                        ${fullText.substring(0, 1000)}${fullText.length > 1000 ? '...' : ''}
+                        <strong>📝 Transcribed Text:</strong>
+                        <div style="margin-top: 8px; padding: 12px; background: #f5f5f5; border-radius: 6px; font-size: 14px; line-height: 1.6; max-height: 200px; overflow-y: auto;">
+                            ${fullText.substring(0, 1000)}${fullText.length > 1000 ? '...' : ''}
+                        </div>
+                    </div>
+                ` : ''}
+                ${task.error_message ? `
+                    <div class="test-task-error">
+                        <strong>❌ Error:</strong> ${task.error_message}
                     </div>
                 ` : ''}
             </div>

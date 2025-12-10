@@ -81,7 +81,16 @@ class APIClient {
 
     async post(endpoint, data, options = {}) {
         const { timeout = this.defaultTimeout } = options;
-        const url = new URL(endpoint, this.baseURL);
+        
+        // Handle empty baseURL (for relative URLs)
+        let urlString;
+        if (this.baseURL) {
+            const url = new URL(endpoint, this.baseURL);
+            urlString = url.toString();
+        } else {
+            // Relative URL - use endpoint directly
+            urlString = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+        }
 
         try {
             const controller = new AbortController();
@@ -174,7 +183,7 @@ class DashboardAPI extends APIClient {
     }
 
     async getServerTasks(serverName, options = {}) {
-        const { limit = 20, status = null, timeout = 30 } = options;
+        const { limit = 100, status = null, timeout = 30 } = options;
         const params = { limit };
         if (status) params.status = status;
         return this.get(`/api/server/${serverName}/tasks`, { params, timeout });

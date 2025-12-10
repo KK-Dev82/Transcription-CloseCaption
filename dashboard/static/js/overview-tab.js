@@ -5,6 +5,12 @@
 let overviewRefreshInterval = null;
 const OVERVIEW_REFRESH_INTERVAL = 10000; // 10 seconds for overview
 
+// Track displayed tasks per server for Load More
+const displayedTasksCount = {
+    '4000-ada': 20,
+    '5080': 20
+};
+
 // Utility functions
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
@@ -21,6 +27,13 @@ function formatDate(dateString) {
     } catch (e) {
         return dateString;
     }
+}
+
+function formatDuration(seconds) {
+    if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) return 'N/A';
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    return `${minutes}m ${remainingSeconds}s`;
 }
 
 // Overview Tab Functions
@@ -53,9 +66,9 @@ async function refreshOverviewServer(serverName) {
         
         // Always fetch all tasks first, then filter client-side if needed
         const data = await dashboardAPI.getServerTasks(serverName, {
-            limit: 100, // Get more tasks to filter from
+            limit: 100, // Get up to 100 tasks
             status: null, // Don't filter on server
-            timeout: 10
+            timeout: 30 // 30s timeout
         });
 
         const container = document.getElementById(`logs-${serverName}`);
@@ -76,15 +89,19 @@ async function refreshOverviewServer(serverName) {
             });
         }
         
-        // Limit to 20 after filtering
-        tasks = tasks.slice(0, 20);
-        
-        if (tasks.length === 0) {
-            container.innerHTML = '<div class="loading">No tasks found</div>';
-            return;
+        // Reset displayed count when filter changes
+        const currentFilter = filterEl ? filterEl.value : '';
+        if (!window[`lastFilter_${serverName}`] || window[`lastFilter_${serverName}`] !== currentFilter) {
+            displayedTasksCount[serverName] = 20;
+            window[`lastFilter_${serverName}`] = currentFilter;
         }
-
-        container.innerHTML = tasks.map(task => {
+        
+        // Limit to displayed count
+        const displayCount = displayedTasksCount[serverName] || 20;
+        const displayedTasks = tasks.slice(0, displayCount);
+        const hasMore = tasks.length > displayCount;
+        
+        container.innerHTML = displayedTasks.map(task => {
             const taskId = task.task_id || task.id || 'N/A';
             const status = (task.status || 'unknown').toLowerCase();
             const updatedAt = task.updated_at || task.created_at || '';
@@ -128,38 +145,58 @@ async function refreshOverviewServer(serverName) {
                     </div>
                 </div>
             `;
-        }).join('');
+        }).join('') + (hasMore ? `
+            <div style="text-align: center; margin-top: 16px; padding: 12px;">
+                <button class="btn btn-secondary" onclick="loadMoreTasks('${serverName}')" style="padding: 8px 24px;">
+                    📄 Load More (${tasks.length - displayCount} remaining)
+                </button>
+            </div>
+        ` : '');
+        
+        if (displayedTasks.length === 0) {
+            container.innerHTML = '<div class="empty">No tasks found</div>';
+            return;
+        }
     } catch (error) {
         console.error(`Error refreshing overview for ${serverName}:`, error);
         const container = document.getElementById(`logs-${serverName}`);
         if (container) {
-            container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            container.innerHTML = `<div class="error">Error: ${error.message || 'Unknown error'}</div>`;
         }
     }
 }
 
 async function clearPendingTasks(serverName) {
-    if (!confirm(`Clear all pending tasks on ${serverName}? This will mark them as stopped.`)) {
+    if (!confirm(`Clear all pending tasks on ${serverName}?`)) {
         return;
     }
-
+    
     try {
-        const result = await dashboardAPI.markTasksStopped(serverName, ['pending']);
-        if (result.success) {
-            alert(`✅ Cleared ${result.stopped_count || 0} pending tasks`);
-            refreshOverviewServer(serverName);
+        const result = await dashboardAPI.markTasksStopped(serverName, ['pending', 'processing']);
+        if (result.error) {
+            alert(`Error: ${result.error}`);
         } else {
-            alert(`❌ Failed: ${result.message || 'Unknown error'}`);
+            alert(`✅ Cleared ${result.cleared_count || 0} tasks`);
+            refreshOverviewServer(serverName);
         }
     } catch (error) {
-        alert(`❌ Error: ${error.message}`);
+        console.error('Error clearing tasks:', error);
+        alert(`Error: ${error.message || 'Unknown error'}`);
     }
 }
 
+// Load More function
+function loadMoreTasks(serverName) {
+    displayedTasksCount[serverName] = (displayedTasksCount[serverName] || 20) + 20;
+    refreshOverviewServer(serverName);
+}
+
 // Export functions
-window.clearPendingTasks = clearPendingTasks;
-window.refreshOverviewServer = refreshOverviewServer;
-window.refreshOverviewData = refreshOverviewData;
 window.startOverviewRefresh = startOverviewRefresh;
 window.stopOverviewRefresh = stopOverviewRefresh;
-
+window.refreshOverviewData = refreshOverviewData;
+window.refreshOverviewServer = refreshOverviewServer;
+window.clearPendingTasks = clearPendingTasks;
+window.loadMoreTasks = loadMoreTasks;
+window.formatDate = formatDate;
+window.formatDuration = formatDuration;

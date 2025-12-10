@@ -43,7 +43,7 @@ if WORKER_TYPE == 'async':
         logger.warning("⚠️ Falling back to pika worker")
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
         WORKER_TYPE = 'pika'
-else:
+                else:
     logger.info("🔧 Using Pika Worker (blocking)")
     try:
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
@@ -77,7 +77,7 @@ def main():
     else:
         logger.info("🔄 Running pika worker...")
         try:
-            worker.run()
+    worker.run()
         except KeyboardInterrupt:
             logger.info("ได้รับ interrupt signal")
         except Exception as e:
@@ -87,4 +87,4 @@ def main():
                 worker.cleanup()
 
 if __name__ == "__main__":
-    main()
+    main() 
