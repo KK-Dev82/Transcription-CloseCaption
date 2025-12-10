@@ -77,7 +77,7 @@ def main():
     else:
         logger.info("🔄 Running pika worker...")
         try:
-    worker.run()
+            worker.run()
         except KeyboardInterrupt:
             logger.info("ได้รับ interrupt signal")
         except Exception as e:
