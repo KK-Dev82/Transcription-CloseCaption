@@ -140,6 +140,19 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
                     
                     limited_tasks = tasks_sorted[:limit]
                     
+                    # For completed tasks, ensure full_text is available
+                    # Try to construct from chunks if not present
+                    for task in limited_tasks:
+                        if task.get("status", "").lower() == "completed":
+                            # If no full_text or corrected_text, try to construct from chunks
+                            if not task.get("full_text") and not task.get("corrected_text") and not task.get("original_text"):
+                                chunks = task.get("chunks", [])
+                                if chunks:
+                                    # Combine chunks text
+                                    chunk_texts = [chunk.get("text", "") for chunk in chunks if chunk.get("text")]
+                                    if chunk_texts:
+                                        task["full_text"] = " ".join(chunk_texts).strip()
+                    
                     status_count = {}
                     for task in tasks:
                         task_status = task.get("status", "unknown").lower()
