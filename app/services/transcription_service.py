@@ -1593,10 +1593,10 @@ class TranscriptionService:
                 task_data['updated_at'] = datetime.now().isoformat()
                 self.json_storage.save_transcription(task_id, task_data)
                 
-                logger.info(f"✅ Task {task_id} cancelled successfully")
+                logger.info(f"✅ Task {task_id} {'stopped' if new_status == 'stopped' else 'cancelled'} successfully")
                 return True
-            elif task.status == "cancelled":
-                logger.info(f"⚠️  Task {task_id} is already cancelled")
+            elif task.status in ["cancelled", "stopped"]:
+                logger.info(f"⚠️  Task {task_id} is already {task.status}")
                 return True
             else:
                 logger.warning(f"⚠️  Cannot cancel task {task_id} with status: {task.status}")
