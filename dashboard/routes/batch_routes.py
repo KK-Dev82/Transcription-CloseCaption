@@ -53,28 +53,38 @@ class BatchTaskStatus(BaseModel):
 async def send_transcription_task(server_name: str, video_file: str, model_size: str, language: str, batch_id: str):
     """Send a single transcription task to remote server"""
     if server_name not in SERVERS:
-        logger.error(f"Server {server_name} not found")
+        logger.error(f"❌ Server {server_name} not found in SERVERS config")
         return None
     
     server_config = SERVERS[server_name]
     api_url = server_config["api_url"]
     
+    # Log which server we're sending to
+    logger.info(f"📤 Sending transcription task to server: {server_name} ({api_url})")
+    logger.info(f"   File: {video_file}, Model: {model_size}, Language: {language}")
+    
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
+            request_payload = {
+                "file_path": video_file,
+                "language": language,
+                "model_size": model_size,
+                "use_chunking": False
+            }
+            logger.debug(f"   Request URL: {api_url}/transcribe")
+            logger.debug(f"   Request payload: {request_payload}")
+            
             async with session.post(
                 f"{api_url}/transcribe",
-                json={
-                    "file_path": video_file,
-                    "language": language,
-                    "model_size": model_size,
-                    "use_chunking": False
-                },
+                json=request_payload,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status == 200:
                     result = await response.json()
                     task_id = result.get("task_id")
+                    
+                    logger.info(f"✅ Successfully sent task to {server_name}: task_id={task_id}")
                     
                     # Update batch status
                     if batch_id in batch_tasks_store:
@@ -84,7 +94,7 @@ async def send_transcription_task(server_name: str, video_file: str, model_size:
                     return task_id
                 else:
                     error_text = await response.text()
-                    logger.error(f"Error sending task to {server_name}: {error_text}")
+                    logger.error(f"❌ Error sending task to {server_name} (HTTP {response.status}): {error_text}")
                     
                     if batch_id in batch_tasks_store:
                         batch_tasks_store[batch_id].pending_tasks -= 1
@@ -92,7 +102,7 @@ async def send_transcription_task(server_name: str, video_file: str, model_size:
                     
                     return None
     except Exception as e:
-        logger.error(f"Error sending task to {server_name}: {e}")
+        logger.error(f"❌ Exception sending task to {server_name} ({api_url}): {e}", exc_info=True)
         if batch_id in batch_tasks_store:
             batch_tasks_store[batch_id].pending_tasks -= 1
             batch_tasks_store[batch_id].failed_tasks += 1
