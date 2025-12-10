@@ -60,6 +60,7 @@ class JSONStorage:
         
         # ป้องกันการ overwrite status ที่เป็น completed/failed โดย status ที่ต่ำกว่า (pending/processing)
         # ถ้า existing status เป็น completed/failed และ new status เป็น pending/processing ให้คง existing status
+        # แต่ถ้า new_status เป็น stopped หรือ cancelled ให้ overwrite ได้ (force stop)
         existing_status = existing_data.get("status", "")
         new_status = transcription_data.get("status")
         
@@ -67,6 +68,9 @@ class JSONStorage:
             # ไม่ให้ overwrite completed/failed status ด้วย pending/processing
             status = existing_status
             logger.debug(f"⚠️ Preserving existing status '{existing_status}' (preventing overwrite with '{new_status}')")
+        elif new_status in ["stopped", "cancelled"]:
+            # Force overwrite สำหรับ stopped/cancelled (เพื่อให้ stop task ได้)
+            status = new_status
         elif new_status:
             # ใช้ status ใหม่
             status = new_status
