@@ -43,7 +43,7 @@ if WORKER_TYPE == 'async':
         logger.warning("⚠️ Falling back to pika worker")
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
         WORKER_TYPE = 'pika'
-                else:
+else:
     logger.info("🔧 Using Pika Worker (blocking)")
     try:
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
