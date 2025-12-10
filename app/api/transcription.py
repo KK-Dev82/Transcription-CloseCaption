@@ -15,10 +15,10 @@ transcription_service = TranscriptionService()
 
 
 class CleanupRequest(BaseModel):
-    max_age_hours: int = Field(default=24, ge=0, description="ลบรายการที่เก่ากว่า (ชั่วโมง)")
+    max_age_hours: Optional[int] = Field(default=None, ge=0, description="ลบรายการที่เก่ากว่า (ชั่วโมง). ถ้า None หรือ 0 จะลบทุกอย่างไม่สนใจอายุ")
     statuses: Optional[List[str]] = Field(
         default=None,
-        description="ระบุสถานะที่ต้องการลบ (ค่าเริ่มต้น: completed, failed, cancelled)"
+        description="ระบุสถานะที่ต้องการลบ (ค่าเริ่มต้น: completed, failed, cancelled, stopped). ถ้า None จะลบทุก status"
     )
 
 @router.post("/", response_model=TranscriptionResponse)
@@ -89,13 +89,25 @@ async def get_all_transcriptions():
 async def cleanup_transcription_tasks(request: CleanupRequest):
     """ลบ transcription tasks ออกจาก storage/cache ตามเงื่อนไขที่กำหนด"""
     try:
+        # Convert 0 to None (delete all ages) for max_age_hours
+        max_age_hours = None if (request.max_age_hours is None or request.max_age_hours == 0) else request.max_age_hours
+        
         removed = transcription_service.cleanup_tasks(
             statuses=request.statuses,
-            max_age_hours=request.max_age_hours
+            max_age_hours=max_age_hours
         )
-        return {"removed": removed, "statuses": request.statuses or ["completed", "failed", "cancelled"]}
+        
+        # Return format that matches dashboard expectations
+        return {
+            "removed_count": removed.get("removed_count", 0),
+            "failed_count": removed.get("failed_count", 0),
+            "removed_task_ids": removed.get("removed_task_ids", []),
+            "failed_task_ids": removed.get("failed_task_ids", []),
+            "statuses": request.statuses or ["completed", "failed", "cancelled", "stopped"],
+            "max_age_hours": max_age_hours
+        }
     except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดในการ cleanup transcription tasks: {e}")
+        logger.error(f"เกิดข้อผิดพลาดในการ cleanup transcription tasks: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"เกิดข้อผิดพลาดในการ cleanup transcription tasks: {str(e)}"
