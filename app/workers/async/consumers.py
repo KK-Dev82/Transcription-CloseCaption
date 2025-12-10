@@ -54,14 +54,17 @@ class AsyncConsumerManager:
         
         # ตั้งค่า QoS สำหรับ channel (global setting สำหรับทุก queue)
         # ⚠️ ใน aio-pika, set_qos() เป็น global สำหรับ channel ทั้งหมด ไม่ใช่ per-queue
-        # ใช้ค่าสูงสุดระหว่าง chunk_prefetch และ request_prefetch เพื่อให้รองรับทั้งสอง queue
-        max_workers = int(os.getenv('TRANSCRIPTION_MAX_WORKERS', '5'))
-        chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', str(max_workers)))
-        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', str(max_workers)))  # ต้องเท่ากับ max_workers เพื่อรองรับ concurrent tasks
-        # ใช้ค่าสูงสุดเพื่อให้รองรับทั้ง transcription_chunk_queue และ transcription_request_queue
+        # ⚠️ ตั้ง prefetch_count=1 เพื่อไม่ให้ Worker รับ messages เกินความสามารถ
+        # Concurrency จะถูกควบคุมด้วย GPU semaphore (GPU_CONCURRENCY) แทน
+        # เมื่อ message ถูก ack แล้ว Worker จะรับ message ใหม่ทันที
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '1'))  # Default: 1 (ไม่รับเกินความสามารถ)
+        chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', '1'))  # Default: 1 สำหรับ backward compatibility
+        # ใช้ค่าสูงสุดระหว่าง chunk_prefetch และ request_prefetch
         global_prefetch = max(chunk_prefetch, request_prefetch)
         await self.channel.set_qos(prefetch_count=global_prefetch)
         logger.info(f"✅ Set QoS: prefetch_count={global_prefetch} (chunk={chunk_prefetch}, request={request_prefetch})")
+        logger.info(f"   📌 Note: Concurrency is controlled by GPU semaphore (GPU_CONCURRENCY={os.getenv('GPU_CONCURRENCY', '2')})")
+        logger.info(f"   📌 Worker will receive 1 message at a time and process up to {os.getenv('GPU_CONCURRENCY', '2')} tasks concurrently")
         
         # Video processing queues
         await self._setup_queue_consumer(self.trim_queue_name, self.handlers.get('trim'))
