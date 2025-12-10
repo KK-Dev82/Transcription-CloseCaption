@@ -106,6 +106,10 @@ class VideoWorkerAsync:
                 logger.info("✅ Video Worker พร้อมรับงาน...")
                 logger.info("=" * 80)
                 
+                # เริ่ม background tasks
+                monitor_task = asyncio.create_task(self._monitor_stuck_tasks())
+                logger.info("✅ Started stuck tasks monitor")
+                
                 # เริ่มรับ messages (จะรอตลอดไปจนกว่าจะถูก interrupt)
                 logger.info("🔄 เริ่มรับ messages จาก RabbitMQ...")
                 logger.info("💓 Video Worker is alive and waiting for messages...")
@@ -117,6 +121,13 @@ class VideoWorkerAsync:
                 except asyncio.CancelledError:
                     logger.info("Received cancellation signal")
                     break
+                finally:
+                    # Cancel background tasks
+                    monitor_task.cancel()
+                    try:
+                        await monitor_task
+                    except asyncio.CancelledError:
+                        pass
                 
             except KeyboardInterrupt:
                 logger.info("ได้รับ interrupt signal")
@@ -143,6 +154,71 @@ class VideoWorkerAsync:
             'transcription_request': self.handlers.handle_transcription_request,
             'audio_extraction': self.handlers.handle_audio_extraction,
         }
+    
+    async def _monitor_stuck_tasks(self):
+        """
+        Background task เพื่อตรวจสอบและจัดการ stuck tasks
+        
+        ทำงาน:
+        1. ตรวจสอบ tasks ที่ติดค้างทุก 60 วินาที
+        2. ถ้าพบ stuck task ให้ mark as failed และ log warning
+        3. (Optional) Re-queue task เพื่อให้ worker อื่นลองประมวลผล
+        """
+        import time
+        from datetime import datetime
+        
+        check_interval = int(os.getenv('STUCK_TASK_CHECK_INTERVAL_SECONDS', '60'))  # Check every 60 seconds
+        
+        logger.info(f"🔍 Started stuck tasks monitor (check interval: {check_interval}s)")
+        
+        try:
+            while self.running:
+                await asyncio.sleep(check_interval)
+                
+                try:
+                    # Get stuck tasks from utils
+                    stuck_tasks = self.utils.get_stuck_tasks()
+                    
+                    if stuck_tasks:
+                        logger.warning(f"⚠️  Found {len(stuck_tasks)} stuck tasks:")
+                        for task_id, task_info in stuck_tasks.items():
+                            elapsed = task_info.get('elapsed_time', 0)
+                            time_since_heartbeat = task_info.get('time_since_heartbeat', 0)
+                            task_type = task_info.get('task_type', 'unknown')
+                            
+                            logger.warning(f"   - {task_id}: {task_type} - elapsed: {elapsed:.1f}s, no heartbeat: {time_since_heartbeat:.1f}s")
+                            
+                            # Mark task as failed
+                            try:
+                                task_data = self.json_storage.get_transcription(task_id)
+                                if task_data and task_data.get('status') == 'processing':
+                                    task_data['status'] = 'failed'
+                                    task_data['error_message'] = f"Task stuck - no progress for {time_since_heartbeat:.1f}s, total elapsed: {elapsed:.1f}s"
+                                    task_data['failed_at'] = datetime.now().isoformat()
+                                    task_data['failed_reason'] = 'stuck_task_detected'
+                                    self.json_storage.save_transcription(task_id, task_data)
+                                    
+                                    # Mark as failed in tracking
+                                    self.utils.track_task_complete(task_id, 'failed')
+                                    
+                                    logger.warning(f"   ✅ Marked task {task_id} as failed")
+                                    
+                                    # TODO: Optionally re-queue task if needed
+                                    # This could be done by publishing to the original queue
+                                    # But be careful to avoid infinite loops
+                                    
+                            except Exception as e:
+                                logger.error(f"   ❌ Failed to handle stuck task {task_id}: {e}", exc_info=True)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error in stuck tasks monitor: {e}", exc_info=True)
+                    await asyncio.sleep(10)  # Wait a bit before retrying
+        
+        except asyncio.CancelledError:
+            logger.info("🔍 Stuck tasks monitor cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Fatal error in stuck tasks monitor: {e}", exc_info=True)
     
     async def cleanup(self):
         """Cleanup resources"""

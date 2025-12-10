@@ -7,6 +7,8 @@ Message Handlers (aio-pika - Async)
 import asyncio
 import json
 import logging
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
@@ -14,6 +16,9 @@ import aio_pika
 from aio_pika import IncomingMessage
 
 logger = logging.getLogger(__name__)
+
+# Import timeout decorator
+from .utils import with_timeout
 
 
 class AsyncMessageHandlers:
@@ -452,6 +457,7 @@ class AsyncMessageHandlers:
     async def handle_transcription(self, message: IncomingMessage):
         """ประมวลผล transcription task"""
         async with message.process():
+            task_id = None
             try:
                 # Log immediately when message is received (BEFORE parsing)
                 logger.info("=" * 80)
@@ -489,6 +495,10 @@ class AsyncMessageHandlers:
                         # Message จะถูก ack อัตโนมัติเมื่อออกจาก message.process()
                         return
                 
+                # Start task tracking
+                task_timeout = int(os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '1800'))  # 30 minutes
+                self.worker.utils.track_task_start(task_id, 'transcription', timeout=task_timeout)
+                
                 # อัปเดตสถานะเป็น processing
                 task_data['status'] = 'processing'
                 task_data['started_at'] = datetime.now().isoformat()
@@ -505,13 +515,34 @@ class AsyncMessageHandlers:
                 )
                 
                 try:
-                    # ประมวลผล transcription
+                    # ประมวลผล transcription with timeout protection
                     logger.info(f"🚀 เริ่มประมวลผล transcription...")
-                    await self.worker.processors.execute_transcription_task(task_data)
+                    transcription_timeout = int(os.getenv('TRANSCRIPTION_PROCESSING_TIMEOUT_SECONDS', '1800'))
                     
-                    logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
-                    logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    try:
+                        await asyncio.wait_for(
+                            self.worker.processors.execute_transcription_task(task_data),
+                            timeout=transcription_timeout
+                        )
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"✅ Transcription task เสร็จสิ้น: {task_id}")
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        self.worker.utils.track_task_complete(task_id, 'completed')
+                    
+                    except asyncio.TimeoutError:
+                        task_start_time = self.worker.utils.active_tasks.get(task_id, {}).get('started_at', time.time())
+                        elapsed = time.time() - task_start_time
+                        logger.error(f"⏱️  Transcription processing TIMEOUT after {elapsed:.2f}s (limit: {transcription_timeout}s) for task: {task_id}")
+                        
+                        # Mark task as failed
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = f"Transcription processing timeout after {elapsed:.2f}s"
+                        task_data['failed_at'] = datetime.now().isoformat()
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                        self.worker.utils.track_task_complete(task_id, 'failed')
+                        
+                        # Raise to trigger message nack
+                        raise
                     
                 finally:
                     # Stop monitoring
@@ -521,10 +552,26 @@ class AsyncMessageHandlers:
                     except asyncio.CancelledError:
                         pass
                 
+            except asyncio.TimeoutError:
+                # Already handled above, just re-raise
+                raise
             except Exception as e:
                 logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                logger.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล transcription task {task_id if 'task_id' in locals() else 'unknown'}: {e}", exc_info=True)
+                logger.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล transcription task {task_id if task_id else 'unknown'}: {e}", exc_info=True)
                 logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                # Mark task as failed if we have task_id
+                if task_id:
+                    try:
+                        task_data = self.worker.json_storage.get_transcription(task_id) or {}
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = str(e)[:500]  # Limit error message length
+                        task_data['failed_at'] = datetime.now().isoformat()
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                        self.worker.utils.track_task_complete(task_id, 'failed')
+                    except Exception as save_error:
+                        logger.error(f"❌ Failed to mark task {task_id} as failed: {save_error}")
+                
                 # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
                 raise
 

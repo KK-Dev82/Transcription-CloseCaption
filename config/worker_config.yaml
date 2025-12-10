@@ -1,0 +1,101 @@
+# Worker Configuration (YAML Format)
+# Alternative configuration format using YAML instead of .env file
+
+environment: &env runpod
+storage_type: json
+json_storage_dir: /workspace/transcription-service/storage
+
+# RabbitMQ Configuration
+rabbitmq:
+  host: ${RABBITMQ_HOST:-178.128.105.100}
+  port: ${RABBITMQ_PORT:-5672}
+  user: ${RABBITMQ_USER:-senate}
+  password: ${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+  vhost: ${RABBITMQ_VHOST:-/}
+  heartbeat_timeout: ${RABBITMQ_HEARTBEAT_TIMEOUT:-1800}
+  blocked_timeout: ${RABBITMQ_BLOCKED_TIMEOUT:-600}
+  connection_check_interval: ${RABBITMQ_CONNECTION_CHECK_INTERVAL:-30}
+
+# Redis Configuration
+redis:
+  url: ${REDIS_URL:-redis://localhost:6379}
+
+# Whisper Provider Configuration
+whisper:
+  provider: ${WHISPER_PROVIDER:-faster-whisper}
+  api_url: ${WHISPER_API_URL:-http://localhost:8002}
+  model: ${WHISPER_MODEL:-medium}
+  device: ${WHISPER_DEVICE:-cuda}
+  use_thread_local: ${WHISPER_USE_THREAD_LOCAL:-false}
+  compute_type: ${WHISPER_COMPUTE_TYPE:-float16}
+  batch_size: ${WHISPER_BATCH_SIZE:-32}
+
+# GPU Configuration
+gpu:
+  visible_devices: ${CUDA_VISIBLE_DEVICES:-0}
+  cublas: ${WHISPER_CUBLAS:-1}
+  transcription_max_retries: ${GPU_TRANSCRIPTION_MAX_RETRIES:-3}
+  transcription_retry_delay: ${GPU_TRANSCRIPTION_RETRY_DELAY:-5.0}
+  concurrency: ${GPU_CONCURRENCY:-2}
+
+# Timezone
+timezone:
+  tz: ${TZ:-Asia/Bangkok}
+  tzdir: ${TZDIR:-/usr/share/zoneinfo}
+
+# Queue Limits
+queues:
+  max_request: ${MAX_QUEUE_REQUEST:-50}
+  max_extraction: ${MAX_QUEUE_EXTRACTION:-80}
+  max_transcribe: ${MAX_QUEUE_TRANSCRIBE:-20}
+  retry_after_seconds: ${RETRY_AFTER_SECONDS:-30}
+  transcription_max_size: ${TRANSCRIPTION_MAX_QUEUE_SIZE:-50}
+
+# Audio Extraction Configuration
+audio_extraction:
+  max_workers: ${AUDIO_EXTRACTION_MAX_WORKERS:-3}
+  pool_size: ${EXTRACT_POOL_SIZE:-4}
+  ffmpeg_proc_sem: ${FFMPEG_PROC_SEM:-3}
+  task_timeout: ${EXTRACT_TASK_TIMEOUT:-900}
+
+# Transcription Configuration
+transcription:
+  max_workers: ${TRANSCRIPTION_MAX_WORKERS:-5}
+  queue_prefetch_count: ${TRANSCRIPTION_QUEUE_PREFETCH_COUNT:-1}
+  prefetch_count: ${TRANSCRIPTION_PREFETCH_COUNT:-5}
+  request_prefetch_count: ${TRANSCRIPTION_REQUEST_PREFETCH_COUNT:-1}
+  
+  # Task Timeout Configuration
+  task_timeout_seconds: ${TRANSCRIPTION_TASK_TIMEOUT_SECONDS:-3600}
+  processing_timeout_seconds: ${TRANSCRIPTION_PROCESSING_TIMEOUT_SECONDS:-1800}
+  
+  # Stuck Task Detection
+  stuck_task_threshold_seconds: ${STUCK_TASK_THRESHOLD_SECONDS:-600}
+  stuck_task_check_interval_seconds: ${STUCK_TASK_CHECK_INTERVAL_SECONDS:-60}
+
+# Global Task Timeout
+task_timeout_seconds: ${TASK_TIMEOUT_SECONDS:-1800}
+
+# Final Architecture Settings
+architecture:
+  allow_cpu_fallback: ${ALLOW_CPU_FALLBACK:-false}
+  use_quorum_queues: ${USE_QUORUM_QUEUES:-true}
+  enable_dlx: ${ENABLE_DLX:-true}
+  use_3queue_architecture: ${USE_3QUEUE_ARCHITECTURE:-true}
+
+# Cleanup Service Configuration
+cleanup:
+  interval_seconds: ${CLEANUP_INTERVAL_SECONDS:-3600}
+  temp_folder_max_age_hours: ${TEMP_FOLDER_MAX_AGE_HOURS:-24}
+  disk_space_warning_threshold_gb: ${DISK_SPACE_WARNING_THRESHOLD_GB:-10.0}
+  disk_space_critical_threshold_gb: ${DISK_SPACE_CRITICAL_THRESHOLD_GB:-5.0}
+
+# Worker Type
+worker_type: ${VIDEO_WORKER_TYPE:-async}
+
+# Backend API Configuration
+backend:
+  api_base_url: ${BACKEND_API_BASE_URL:-http://localhost:5173}
+  url: ${BACKEND_URL:-http://localhost:5173}
+  file_service_url: ${FILE_SERVICE_URL:-http://localhost:5182}
+

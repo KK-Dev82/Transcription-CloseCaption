@@ -476,37 +476,100 @@ class FasterWhisperProvider(WhisperProvider):
                     start_time = time.time()
                     segments_list_raw = []
                     last_log_time = start_time
+                    last_segment_count = 0
+                    no_progress_count = 0
+                    max_no_progress_seconds = 30  # ถ้าไม่มี progress 30 วินาที ให้ timeout
+                    
+                    logger.info(f"[Faster Whisper] 🔍 Starting segments collection with timeout={timeout:.1f}s, max_no_progress={max_no_progress_seconds}s")
                     
                     while True:
                         elapsed = time.time() - start_time
+                        
+                        # Check overall timeout
                         if elapsed > timeout:
                             done_flag.set()
                             logger.error(f"[Faster Whisper] ❌ Segments collection timeout after {timeout}s ({len(segments_list_raw)} collected)")
                             raise TimeoutError(f"Segments collection timeout after {timeout}s")
                         
+                        # Check for thread errors
+                        if not thread.is_alive():
+                            try:
+                                error = error_queue.get_nowait()
+                                done_flag.set()
+                                logger.error(f"[Faster Whisper] ❌ Thread error during segments collection: {error}")
+                                raise error
+                            except queue.Empty:
+                                # Thread died without error - might be done or hung
+                                # Check if we got any segments recently
+                                if len(segments_list_raw) > last_segment_count:
+                                    # Got new segments, thread might have finished normally
+                                    logger.info(f"[Faster Whisper] 🔍 Thread finished, checking for remaining segments...")
+                                    last_segment_count = len(segments_list_raw)
+                                    no_progress_count = 0
+                                else:
+                                    # No new segments - thread might have hung
+                                    no_progress_count += 1
+                                    if no_progress_count * 0.5 > max_no_progress_seconds:
+                                        done_flag.set()
+                                        logger.error(f"[Faster Whisper] ❌ Thread hung - no progress for {no_progress_count * 0.5:.1f}s")
+                                        raise TimeoutError(f"Thread hung during segments collection (no progress for {no_progress_count * 0.5:.1f}s)")
+                        
                         # Log progress every 3 seconds
                         if time.time() - last_log_time >= 3.0:
-                            logger.info(f"[Faster Whisper] 🔍 Still collecting... ({len(segments_list_raw)} so far, {elapsed:.1f}s elapsed)")
+                            progress_str = f"({len(segments_list_raw)} segments, {elapsed:.1f}s elapsed"
+                            if thread.is_alive():
+                                progress_str += ", thread alive"
+                            else:
+                                progress_str += ", thread finished"
+                            progress_str += ")"
+                            logger.info(f"[Faster Whisper] 🔍 Still collecting... {progress_str}")
+                            
+                            # Check for progress
+                            if len(segments_list_raw) > last_segment_count:
+                                last_segment_count = len(segments_list_raw)
+                                no_progress_count = 0
+                            else:
+                                no_progress_count += 1
+                                if no_progress_count * 3 > max_no_progress_seconds:
+                                    logger.warning(f"[Faster Whisper] ⚠️  No progress for {no_progress_count * 3:.1f}s (thread alive: {thread.is_alive()})")
+                            
                             last_log_time = time.time()
                         
                         try:
                             seg = segments_queue.get(timeout=0.5)
                             if seg is None:
+                                # Sentinel received - thread finished normally
+                                logger.info(f"[Faster Whisper] 🔍 Received sentinel - thread finished normally")
                                 break
                             segments_list_raw.append(seg)
+                            no_progress_count = 0  # Reset no progress counter
                         except queue.Empty:
+                            # Timeout waiting for segment - check thread status
                             if not thread.is_alive():
+                                # Thread finished - check if there are any more segments
+                                # Try one more time with immediate timeout
                                 try:
-                                    error = error_queue.get_nowait()
-                                    raise error
+                                    seg = segments_queue.get(timeout=0.1)
+                                    if seg is None:
+                                        break
+                                    segments_list_raw.append(seg)
+                                    no_progress_count = 0
                                 except queue.Empty:
-                                    # Thread died without error, might be done
+                                    # No more segments
                                     break
                             continue
                     
                     done_flag.set()
+                    
+                    # Wait a bit for thread to finish cleanly
+                    if thread.is_alive():
+                        thread.join(timeout=1.0)
+                        if thread.is_alive():
+                            logger.warning(f"[Faster Whisper] ⚠️  Thread still alive after collection, but continuing...")
+                    
                     segments_iter = segments_list_raw
-                    logger.info(f"[Faster Whisper] ✅ Collected {len(segments_iter)} segments from generator")
+                    collection_time = time.time() - start_time
+                    logger.info(f"[Faster Whisper] ✅ Collected {len(segments_iter)} segments from generator in {collection_time:.2f}s")
                 
                 # Process segments
                 for segment in segments_iter:
