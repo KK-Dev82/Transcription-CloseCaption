@@ -1567,8 +1567,8 @@ class TranscriptionService:
         # ตรวจสอบจาก memory cache
         if task_id in self.tasks:
             task = self.tasks[task_id]
-            # รองรับ status: pending, processing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
-            cancellable_statuses = ["pending", "processing", "processing_chunks", "waiting_for_chunks", "merging_results"]
+            # รองรับ status: pending, processing, transcribing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
+            cancellable_statuses = ["pending", "processing", "transcribing", "processing_chunks", "waiting_for_chunks", "merging_results"]
             is_cancellable = (
                 task.status in cancellable_statuses or 
                 task.status.startswith("processing_chunk_")

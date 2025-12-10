@@ -339,23 +339,6 @@ async def stop_task(server_name: str, task_id: str):
                 "error": f"Failed to stop task. {last_error}",
                 "task_id": task_id
             }
-                if response.status == 200:
-                    result = await response.json()
-                    logger.info(f"✅ Stopped task {task_id} on {server_name}")
-                    return {
-                        "success": True,
-                        "message": result.get("message", "Task stopped successfully"),
-                        "task_id": task_id
-                    }
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ Failed to stop task {task_id} on {server_name}: HTTP {response.status}: {error_text}")
-                    return {
-                        "success": False,
-                        "error": f"Server returned status {response.status}",
-                        "error_details": error_text[:500],
-                        "task_id": task_id
-                    }
     except asyncio.TimeoutError:
         logger.error(f"Timeout stopping task {task_id} on {server_name}")
         return {
