@@ -129,6 +129,25 @@ async function refreshOverviewServer(serverName) {
                 durationInfo = ` (${minutes}:${seconds.toString().padStart(2, '0')})`;
             }
             
+            // Get transcription text for completed tasks
+            let textPreview = '';
+            if (status === 'completed') {
+                let fullText = task.full_text || task.corrected_text || task.original_text;
+                
+                // If no full_text, try to get from chunks
+                if (!fullText && task.chunks && task.chunks.length > 0) {
+                    const chunkTexts = task.chunks.filter(c => c.text).map(c => c.text);
+                    if (chunkTexts.length > 0) {
+                        fullText = chunkTexts.join(' ');
+                    }
+                }
+                
+                if (fullText && fullText.trim()) {
+                    const preview = fullText.length > 150 ? fullText.substring(0, 150) + '...' : fullText;
+                    textPreview = `<div style="font-size: 11px; color: var(--apple-gray-4); margin-top: 6px; padding: 6px; background: var(--apple-gray-1); border-radius: 4px; line-height: 1.4;">📝 ${preview}</div>`;
+                }
+            }
+            
             return `
                 <div class="log-item">
                     <div class="log-item-info">
@@ -142,6 +161,7 @@ async function refreshOverviewServer(serverName) {
                         </div>
                         <div class="log-item-time">${formatDate(updatedAt)}</div>
                         ${stepInfo !== 'N/A' ? `<div style="font-size: 11px; color: var(--apple-gray-3); margin-top: 4px;">Step: ${stepInfo}</div>` : ''}
+                        ${textPreview}
                     </div>
                 </div>
             `;
