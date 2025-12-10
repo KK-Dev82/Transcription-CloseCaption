@@ -1556,7 +1556,7 @@ class TranscriptionService:
                 
                 # อัปเดตใน memory cache ด้วย
                 if task_id in self.tasks:
-                    self.tasks[task_id].status = "cancelled"
+                    self.tasks[task_id].status = new_status
                     self.tasks[task_id].completed_at = datetime.now()
                 
                 logger.info(f"✅ Task {task_id} cancelled successfully")
