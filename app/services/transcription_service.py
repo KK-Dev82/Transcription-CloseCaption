@@ -1536,16 +1536,20 @@ class TranscriptionService:
             logger.info(f"   Task status from storage: {current_status}")
             
             # ตรวจสอบว่าสามารถยกเลิกได้หรือไม่
-            # รองรับ status: pending, processing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
-            cancellable_statuses = ["pending", "processing", "processing_chunks", "waiting_for_chunks", "merging_results"]
+            # รองรับ status: pending, processing, transcribing, processing_chunks, waiting_for_chunks, processing_chunk_*, merging_results
+            cancellable_statuses = ["pending", "processing", "transcribing", "processing_chunks", "waiting_for_chunks", "merging_results"]
             is_cancellable = (
                 current_status in cancellable_statuses or 
                 current_status.startswith("processing_chunk_")
             )
             
             if is_cancellable:
-                # อัปเดตสถานะเป็น cancelled
-                stored_data['status'] = 'cancelled'
+                # สำหรับ status "transcribing" ให้ mark เป็น "stopped" แทน "cancelled"
+                # เพราะ task อาจกำลังทำงานอยู่ที่ worker ต้อง kill/stop โดยตรง
+                new_status = 'stopped' if current_status == 'transcribing' else 'cancelled'
+                
+                # อัปเดตสถานะ
+                stored_data['status'] = new_status
                 stored_data['completed_at'] = datetime.now().isoformat()
                 stored_data['updated_at'] = datetime.now().isoformat()
                 self.json_storage.save_transcription(task_id, stored_data)
@@ -1575,12 +1579,16 @@ class TranscriptionService:
             )
             
             if is_cancellable:
-                task.status = "cancelled"
+                # สำหรับ status "transcribing" ให้ mark เป็น "stopped" แทน "cancelled"
+                # เพราะ task อาจกำลังทำงานอยู่ที่ worker ต้อง kill/stop โดยตรง
+                new_status = 'stopped' if task.status == 'transcribing' else 'cancelled'
+                
+                task.status = new_status
                 task.completed_at = datetime.now()
                 
                 # บันทึกลง storage ด้วย
                 task_data = task.__dict__
-                task_data['status'] = 'cancelled'
+                task_data['status'] = new_status
                 task_data['completed_at'] = datetime.now().isoformat()
                 task_data['updated_at'] = datetime.now().isoformat()
                 self.json_storage.save_transcription(task_id, task_data)
