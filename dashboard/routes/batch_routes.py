@@ -110,6 +110,20 @@ async def send_all_tasks(
     """Send all tasks concurrently"""
     from datetime import datetime
     
+    logger.info(f"🚀 Starting batch transcription: server={server_name}, files={len(video_files)}, concurrency={concurrency}")
+    
+    # Verify server config
+    if server_name not in SERVERS:
+        logger.error(f"❌ Server {server_name} not found in SERVERS config!")
+        if batch_id in batch_tasks_store:
+            batch_tasks_store[batch_id].status = "failed"
+            batch_tasks_store[batch_id].failed_tasks = len(video_files)
+        return
+    
+    server_config = SERVERS[server_name]
+    api_url = server_config["api_url"]
+    logger.info(f"📍 Target server: {server_name} -> {api_url}")
+    
     semaphore = asyncio.Semaphore(concurrency)
     task_ids = []
     
@@ -123,11 +137,21 @@ async def send_all_tasks(
     for result in results:
         if result and not isinstance(result, Exception):
             task_ids.append(result)
+        elif isinstance(result, Exception):
+            logger.error(f"❌ Task failed with exception: {result}")
+    
+    logger.info(f"✅ Batch complete: {len(task_ids)}/{len(video_files)} tasks sent successfully to {server_name}")
     
     # Update batch status
     if batch_id in batch_tasks_store:
         batch_tasks_store[batch_id].task_ids = task_ids
         batch_tasks_store[batch_id].pending_tasks = len(video_files) - len(task_ids)
+        if len(task_ids) == len(video_files):
+            batch_tasks_store[batch_id].status = "sent"
+        elif len(task_ids) > 0:
+            batch_tasks_store[batch_id].status = "partial"
+        else:
+            batch_tasks_store[batch_id].status = "failed"
 
 
 @router.post("/api/batch/transcription")
@@ -171,7 +195,8 @@ async def start_batch_transcription(request: BatchTranscriptionRequest, backgrou
         "batch_id": batch_id,
         "server_name": request.server_name,
         "total_tasks": len(request.video_files),
-        "status": "processing"
+        "status": "processing",
+        "task_ids": []  # Will be populated by send_all_tasks
     }
 
 
