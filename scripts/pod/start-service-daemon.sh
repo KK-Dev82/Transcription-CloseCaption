@@ -237,19 +237,33 @@ else
     echo "🚀 Starting Video Worker..."
     
     # Setup LD_LIBRARY_PATH for CTranslate2 and cuDNN
-    CTRANSLATE2_LIBS="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
-    CUDNN_DIR="/workspace/cudnn/lib"
+    PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/local/lib/python3.10/dist-packages")
+    CTRANSLATE2_LIBS="${PYTHON_SITE}/ctranslate2.libs"
+    CUDNN_LIB_DIR="${PYTHON_SITE}/nvidia/cudnn/lib"
+    CUDA_LIB_DIRS="/usr/local/cuda/lib64:/usr/local/cuda-11.8/lib64"
     LD_LIBRARY_PATH_VAL="${LD_LIBRARY_PATH:-}"
     
+    # Add cuDNN libraries (most important for GPU support)
+    if [ -d "$CUDNN_LIB_DIR" ]; then
+        LD_LIBRARY_PATH_VAL="${CUDNN_LIB_DIR}:${LD_LIBRARY_PATH_VAL}"
+        echo "   ✅ Added cuDNN libraries to LD_LIBRARY_PATH: $CUDNN_LIB_DIR"
+    fi
+    
+    # Add CUDA libraries
+    for CUDA_DIR in $(echo "$CUDA_LIB_DIRS" | tr ':' ' '); do
+        if [ -d "$CUDA_DIR" ]; then
+            LD_LIBRARY_PATH_VAL="${CUDA_DIR}:${LD_LIBRARY_PATH_VAL}"
+            echo "   ✅ Added CUDA libraries to LD_LIBRARY_PATH: $CUDA_DIR"
+        fi
+    done
+    
+    # Add CTranslate2 libraries (if exists)
     if [ -d "$CTRANSLATE2_LIBS" ]; then
         LD_LIBRARY_PATH_VAL="${CTRANSLATE2_LIBS}:${LD_LIBRARY_PATH_VAL}"
         echo "   ✅ Added CTranslate2 libraries to LD_LIBRARY_PATH"
     fi
     
-    if [ -d "$CUDNN_DIR" ]; then
-        LD_LIBRARY_PATH_VAL="${CUDNN_DIR}:${LD_LIBRARY_PATH_VAL}"
-        echo "   ✅ Added cuDNN libraries to LD_LIBRARY_PATH"
-    fi
+    echo "   📁 Final LD_LIBRARY_PATH: $LD_LIBRARY_PATH_VAL"
     
     # Start worker with nohup
     nohup env TZ="${TZ:-Asia/Bangkok}" \
@@ -264,6 +278,7 @@ else
              WHISPER_PROVIDER="${WHISPER_PROVIDER:-faster-whisper}" \
              WHISPER_MODEL="${WHISPER_MODEL:-medium}" \
              WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
+             GPU_CONCURRENCY="${GPU_CONCURRENCY:-10}" \
              LD_LIBRARY_PATH="${LD_LIBRARY_PATH_VAL}" \
              python3 -m app.workers.video_worker \
         > "$WORKER_LOG" 2>&1 &
