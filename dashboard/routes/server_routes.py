@@ -285,6 +285,57 @@ async def get_server_videos(server_name: str):
         return {"error": str(e), "videos": []}
 
 
+@router.post("/api/server/{server_name}/tasks/{task_id}/stop")
+async def stop_task(server_name: str, task_id: str):
+    """Stop a single task by calling remote server's DELETE endpoint"""
+    if server_name not in SERVERS:
+        raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
+    
+    server_config = SERVERS[server_name]
+    api_url = server_config["api_url"]
+    
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(
+                f"{api_url}/transcribe/{task_id}",
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"✅ Stopped task {task_id} on {server_name}")
+                    return {
+                        "success": True,
+                        "message": result.get("message", "Task stopped successfully"),
+                        "task_id": task_id
+                    }
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Failed to stop task {task_id} on {server_name}: HTTP {response.status}: {error_text}")
+                    return {
+                        "success": False,
+                        "error": f"Server returned status {response.status}",
+                        "error_details": error_text[:500],
+                        "task_id": task_id
+                    }
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout stopping task {task_id} on {server_name}")
+        return {
+            "success": False,
+            "error": "Connection timeout",
+            "task_id": task_id
+        }
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error stopping task {task_id} on {server_name}: {error_details}")
+        return {
+            "success": False,
+            "error": f"Error: {str(e)}",
+            "task_id": task_id
+        }
+
+
 @router.post("/api/server/{server_name}/tasks/mark-stopped")
 async def mark_tasks_stopped(server_name: str, request: ClearTasksRequest):
     """Mark stuck tasks as 'stopped' by calling remote server's DELETE endpoint"""
