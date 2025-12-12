@@ -55,7 +55,21 @@ app.include_router(cleanup_routes.router)
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """Main dashboard page"""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    try:
+        from .server_constants import SERVERS
+    except ImportError:
+        from .config import SERVERS
+    
+    # Inject server configs to frontend
+    server_configs_js = "window.SERVER_CONFIGS = " + str({
+        k: {"name": v["name"], "api_url": v["api_url"]}
+        for k, v in SERVERS.items()
+    }).replace("'", '"') + ";"
+    
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "server_configs_js": server_configs_js
+    })
 
 
 if __name__ == "__main__":

@@ -11,16 +11,24 @@ from pydantic import BaseModel, Field
 
 # Support both relative and absolute imports
 try:
-    from ..config import SERVERS
+    from ..server_constants import SERVERS
     from ..services import cleanup_service
 except ImportError:
-    import sys
-    from pathlib import Path
-    dashboard_dir = Path(__file__).parent.parent
-    if str(dashboard_dir) not in sys.path:
-        sys.path.insert(0, str(dashboard_dir))
-    from config import SERVERS
-    from services import cleanup_service
+    try:
+        from ..config import SERVERS
+        from ..services import cleanup_service
+    except ImportError:
+        import sys
+        from pathlib import Path
+        dashboard_dir = Path(__file__).parent.parent
+        if str(dashboard_dir) not in sys.path:
+            sys.path.insert(0, str(dashboard_dir))
+        try:
+            from server_constants import SERVERS
+            from services import cleanup_service
+        except ImportError:
+            from config import SERVERS
+            from services import cleanup_service
 
 cleanup_progress_store = cleanup_service.cleanup_progress_store
 

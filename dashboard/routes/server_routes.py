@@ -10,14 +10,20 @@ from pydantic import BaseModel, Field
 
 # Support both relative and absolute imports
 try:
-    from ..config import SERVERS
+    from ..server_constants import SERVERS
 except ImportError:
-    import sys
-    from pathlib import Path
-    dashboard_dir = Path(__file__).parent.parent
-    if str(dashboard_dir) not in sys.path:
-        sys.path.insert(0, str(dashboard_dir))
-    from config import SERVERS
+    try:
+        from ..config import SERVERS
+    except ImportError:
+        import sys
+        from pathlib import Path
+        dashboard_dir = Path(__file__).parent.parent
+        if str(dashboard_dir) not in sys.path:
+            sys.path.insert(0, str(dashboard_dir))
+        try:
+            from server_constants import SERVERS
+        except ImportError:
+            from config import SERVERS
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
