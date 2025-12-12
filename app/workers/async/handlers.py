@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
 import aio_pika
@@ -255,7 +255,7 @@ class AsyncMessageHandlers:
                     'type': 'audio_extraction',
                     'status': 'completed',
                     'time': extraction_time,
-                    'completed_at': datetime.now().isoformat()
+                    'completed_at': datetime.now(timezone.utc).isoformat()
                 })
                 
                 # อัปเดต total_tasks และ completed_tasks
@@ -285,7 +285,7 @@ class AsyncMessageHandlers:
                     "job_id": job_id,
                     "user_id": user_id,
                     "initial_prompt": task_data.get('initial_prompt'),  # ส่ง initial_prompt ต่อไป
-                    "created_at": datetime.now().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                     "audio_extracted_from": video_file_path  # Track original video
                 }
                 
@@ -501,7 +501,7 @@ class AsyncMessageHandlers:
                 
                 # อัปเดตสถานะเป็น processing
                 task_data['status'] = 'processing'
-                task_data['started_at'] = datetime.now().isoformat()
+                task_data['started_at'] = datetime.now(timezone.utc).isoformat()
                 task_data['progress'] = 0
                 task_data['current_stage'] = 'transcribing'
                 task_data['current_stage_description'] = 'กำลังแปลงเสียงเป็นข้อความ'
@@ -537,7 +537,7 @@ class AsyncMessageHandlers:
                         # Mark task as failed
                         task_data['status'] = 'failed'
                         task_data['error_message'] = f"Transcription processing timeout after {elapsed:.2f}s"
-                        task_data['failed_at'] = datetime.now().isoformat()
+                        task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
                         self.worker.json_storage.save_transcription(task_id, task_data)
                         self.worker.utils.track_task_complete(task_id, 'failed')
                         
@@ -566,7 +566,7 @@ class AsyncMessageHandlers:
                         task_data = self.worker.json_storage.get_transcription(task_id) or {}
                         task_data['status'] = 'failed'
                         task_data['error_message'] = str(e)[:500]  # Limit error message length
-                        task_data['failed_at'] = datetime.now().isoformat()
+                        task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
                         self.worker.json_storage.save_transcription(task_id, task_data)
                         self.worker.utils.track_task_complete(task_id, 'failed')
                     except Exception as save_error:
