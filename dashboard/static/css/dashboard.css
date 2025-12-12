@@ -686,7 +686,7 @@ a:hover {
 /* Overview Tab */
 .overview-container {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
     gap: 24px;
 }
 
@@ -1050,6 +1050,12 @@ a:hover {
 
     .overview-container {
         grid-template-columns: 1fr;
+    }
+
+    @media (max-width: 1200px) {
+        .overview-container {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
 
     .modal-content {

@@ -25,7 +25,38 @@
         <!-- Tab Content: Overview -->
         <div id="tab-overview" class="tab-content active">
             <div class="overview-container">
-                <!-- Left: 4000-ada -->
+                <!-- 4000-ada-sc -->
+                <div class="server-logs-section">
+                    <div class="server-header">
+                        <h2>4000-ada-sc</h2>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('4000-ada-sc')">
+                                🧹 Clear Pending
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('4000-ada-sc')" title="Delete old tasks">
+                                🗑️ Delete Old
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('4000-ada-sc')" title="Delete ALL tasks (all statuses)">
+                                ⚠️ Delete All
+                            </button>
+                        </div>
+                    </div>
+                    <div class="logs-filters">
+                        <select id="filter-4000-ada-sc" onchange="refreshOverviewServer('4000-ada-sc')">
+                            <option value="">All Status</option>
+                            <option value="pending">Pending</option>
+                            <option value="processing">Processing</option>
+                            <option value="completed">Completed</option>
+                            <option value="failed">Failed</option>
+                            <option value="stopped">Stopped</option>
+                        </select>
+                    </div>
+                    <div class="logs-container" id="logs-4000-ada-sc">
+                        <div class="loading">Loading logs...</div>
+                    </div>
+                </div>
+
+                <!-- 4000-ada -->
                 <div class="server-logs-section">
                     <div class="server-header">
                         <h2>4000-ada</h2>
@@ -56,7 +87,7 @@
                     </div>
                 </div>
 
-                <!-- Right: 5080 -->
+                <!-- 5080 -->
                 <div class="server-logs-section">
                     <div class="server-header">
                         <h2>5080</h2>
