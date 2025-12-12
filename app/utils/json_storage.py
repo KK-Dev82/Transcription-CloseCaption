@@ -2,8 +2,12 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import re
+
+def utc_now():
+    """Helper function to get current UTC time with timezone"""
+    return datetime.now(timezone.utc)
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +87,9 @@ class JSONStorage:
         
         data = {
             "task_id": task_id,
-            "created_at": existing_data.get("created_at", datetime.now().isoformat()),
-            "start_time": transcription_data.get("start_time") or existing_data.get("start_time") or existing_data.get("created_at", datetime.now().isoformat()),  # Alias
-            "updated_at": datetime.now().isoformat(),
+            "created_at": existing_data.get("created_at", utc_now().isoformat()),
+            "start_time": transcription_data.get("start_time") or existing_data.get("start_time") or existing_data.get("created_at", utc_now().isoformat()),  # Alias
+            "updated_at": utc_now().isoformat(),
             "file_path": transcription_data.get("file_path", existing_data.get("file_path")),
             "file_url": transcription_data.get("file_url", existing_data.get("file_url")),
             "file_name": transcription_data.get("file_name", existing_data.get("file_name")),
@@ -200,8 +204,8 @@ class JSONStorage:
         # รวมข้อมูลเดิมกับข้อมูลใหม่
         data = {
             "task_id": task_id,
-            "created_at": existing_data.get("created_at", datetime.now().isoformat()),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": existing_data.get("created_at", utc_now().isoformat()),
+            "updated_at": utc_now().isoformat(),
             "file_path": caption_data.get("file_path", existing_data.get("file_path")),
             "language": caption_data.get("language", existing_data.get("language")),
             "subtitle_format": caption_data.get("subtitle_format", existing_data.get("subtitle_format")),
@@ -251,8 +255,8 @@ class JSONStorage:
         # เพิ่ม metadata
         data = {
             "task_id": task_id,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": utc_now().isoformat(),
+            "updated_at": utc_now().isoformat(),
             "type": video_data.get("type"),
             "status": video_data.get("status"),
             "input_file": video_data.get("input_file"),
@@ -574,7 +578,7 @@ class JSONStorage:
     
     def cleanup_old_files(self, max_age_hours: int = 24):
         """ลบไฟล์เก่า"""
-        cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
+        cutoff_time = utc_now().timestamp() - (max_age_hours * 3600)
         
         # ลบ transcription เก่า
         transcription_dir = self.storage_dir / "transcriptions"

@@ -3,7 +3,7 @@ import uuid
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import aiohttp
@@ -24,6 +24,10 @@ from ..models.transcription import TranscriptionChunk, TranscriptionResponse
 from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
+
+def utc_now():
+    """Helper function to get current UTC time with timezone"""
+    return datetime.now(timezone.utc)
 
 class TranscriptionService:
     def __init__(self):
@@ -188,7 +192,7 @@ class TranscriptionService:
                     )
                 )
             
-            created_at = self._parse_datetime(data.get("created_at")) or (existing.created_at if existing else datetime.now())
+            created_at = self._parse_datetime(data.get("created_at")) or (existing.created_at if existing else utc_now())
             updated_at = self._parse_datetime(data.get("updated_at"))
             completed_at = self._parse_datetime(data.get("completed_at"))
             
@@ -542,7 +546,7 @@ class TranscriptionService:
                 file_url=file_url,
                 file_name=file_name,
                 language=language,
-                created_at=datetime.now(),
+                created_at=utc_now(),
                 error_message=str(e)
             )
             self.tasks[task_id] = task
@@ -558,7 +562,7 @@ class TranscriptionService:
                     "language": language,
                     "status": "failed",
                     "error_message": str(e),
-                    "created_at": datetime.now().timestamp()
+                    "created_at": utc_now().timestamp()
                 }
                 self.json_storage.save_transcription(task_id, task_data)
             except Exception as storage_error:
@@ -573,7 +577,7 @@ class TranscriptionService:
         if not task.created_at:
             return False  # ไม่สามารถตรวจสอบได้
         
-        elapsed_time = (datetime.now() - task.created_at).total_seconds()
+        elapsed_time = (utc_now() - task.created_at).total_seconds()
         
         if elapsed_time > TASK_TIMEOUT_SECONDS:
             logger.error(
@@ -609,7 +613,7 @@ class TranscriptionService:
         if self._check_task_timeout(task_id, task):
             task.status = "failed"
             task.error_message = f"Task timeout: exceeded {os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '3600')} seconds"
-            task.completed_at = datetime.now()
+            task.completed_at = utc_now()
             self.json_storage.save_transcription(task_id, task.__dict__)
             logger.error(f"❌ Task {task_id} marked as failed due to timeout")
             return
@@ -702,7 +706,7 @@ class TranscriptionService:
                 if self._check_task_timeout(task_id, task):
                     task.status = "failed"
                     task.error_message = f"Task timeout: exceeded {os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '3600')} seconds"
-                    task.completed_at = datetime.now()
+                    task.completed_at = utc_now()
                     self.json_storage.save_transcription(task_id, task.__dict__)
                     logger.error(f"❌ Task {task_id} marked as failed due to timeout before transcription")
                     return
@@ -804,7 +808,7 @@ class TranscriptionService:
                                 'status': 'completed',
                                 'time': transcription_time,
                                 'chunks_count': chunks_count,
-                                'completed_at': datetime.now().isoformat()
+                                'completed_at': utc_now().isoformat()
                             })
                     else:
                         transcription_time = time.time() - transcription_start_time
@@ -939,7 +943,7 @@ class TranscriptionService:
                     "file_path": local_file_path,
                     "file_name": file_name,
                     "initial_prompt": initial_prompt,  # ส่ง initial_prompt ไปยัง chunk tasks
-                    "created_at": datetime.now().isoformat()
+                    "created_at": utc_now().isoformat()
                 }
                 
                 try:
@@ -1173,7 +1177,7 @@ class TranscriptionService:
             task.full_text = merged_result.get("text", "") or ""
             task.progress = 95
             task.status = "finalizing"
-            task.updated_at = datetime.now()
+            task.updated_at = utc_now()
             
             logger.info(f"📋 Final task data - full_text length: {len(task.full_text)}, chunks count: {len(task.chunks)}")
             if task.full_text:
@@ -1230,7 +1234,7 @@ class TranscriptionService:
             
             task.status = "completed"
             task.progress = 100
-            task.completed_at = datetime.now()
+            task.completed_at = utc_now()
             
             # 🧹 ลบ temp files หลังเสร็จสิ้น
             try:
@@ -1256,8 +1260,12 @@ class TranscriptionService:
             existing_data = self.json_storage.load_transcription(task_id)
             
             # คำนวณ processing time
-            completed_time = datetime.now()
+            # ใช้ UTC สำหรับบันทึก timestamp ทั้งหมด
+            completed_time = datetime.now(timezone.utc)
             created_time = task.created_at if task.created_at else completed_time
+            # ถ้า created_time ไม่มี timezone ให้ assume UTC
+            if created_time and created_time.tzinfo is None:
+                created_time = created_time.replace(tzinfo=timezone.utc)
             processing_time_seconds = (completed_time - created_time).total_seconds()
             
             # ดึง transcription_time และ audio_extraction_time จาก existing_data ถ้ามี
@@ -1277,7 +1285,7 @@ class TranscriptionService:
                 "language": task.language,
                 "created_at": task.created_at.isoformat() if task.created_at else None,
                 "start_time": task.created_at.isoformat() if task.created_at else None,  # Alias for compatibility
-                "completed_at": completed_time.isoformat(),  # อัปเดต completed_at
+                "completed_at": completed_time.isoformat(),  # อัปเดต completed_at (UTC with timezone indicator)
                 "end_time": completed_time.isoformat(),  # Alias for compatibility
                 "updated_at": completed_time.isoformat(),
                 "processing_time": processing_time_seconds,  # เวลาที่ใช้ในการประมวลผลทั้งหมด (วินาที)
@@ -1312,7 +1320,7 @@ class TranscriptionService:
             logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง {task_id}: {e}")
             task.status = "failed"
             task.error_message = str(e)
-            task.completed_at = datetime.now()
+            task.completed_at = utc_now()
             
             # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
             # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
@@ -1554,14 +1562,14 @@ class TranscriptionService:
                 
                 # อัปเดตสถานะ
                 stored_data['status'] = new_status
-                stored_data['completed_at'] = datetime.now().isoformat()
-                stored_data['updated_at'] = datetime.now().isoformat()
+                stored_data['completed_at'] = utc_now().isoformat()
+                stored_data['updated_at'] = utc_now().isoformat()
                 self.json_storage.save_transcription(task_id, stored_data)
                 
                 # อัปเดตใน memory cache ด้วย
                 if task_id in self.tasks:
                     self.tasks[task_id].status = new_status
-                    self.tasks[task_id].completed_at = datetime.now()
+                    self.tasks[task_id].completed_at = utc_now()
                 
                 logger.info(f"✅ Task {task_id} {'stopped' if new_status == 'stopped' else 'cancelled'} successfully")
                 return True
@@ -1588,13 +1596,13 @@ class TranscriptionService:
                 new_status = 'stopped' if task.status == 'transcribing' else 'cancelled'
                 
                 task.status = new_status
-                task.completed_at = datetime.now()
+                task.completed_at = utc_now()
                 
                 # บันทึกลง storage ด้วย
                 task_data = task.__dict__
                 task_data['status'] = new_status
-                task_data['completed_at'] = datetime.now().isoformat()
-                task_data['updated_at'] = datetime.now().isoformat()
+                task_data['completed_at'] = utc_now().isoformat()
+                task_data['updated_at'] = utc_now().isoformat()
                 self.json_storage.save_transcription(task_id, task_data)
                 
                 logger.info(f"✅ Task {task_id} {'stopped' if new_status == 'stopped' else 'cancelled'} successfully")
@@ -1618,7 +1626,7 @@ class TranscriptionService:
         if statuses is None or not statuses:
             statuses = ["completed", "failed", "cancelled"]
         
-        cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
+        cutoff_time = utc_now().timestamp() - (max_age_hours * 3600)
         removed_count = 0
         tasks_to_remove: List[str] = []
         
@@ -1655,7 +1663,7 @@ class TranscriptionService:
         """ลบ tasks ทั้งจากหน่วยความจำและ storage ตามเงื่อนไข"""
         removed_ids: List[str] = []
         failed_ids: List[str] = []
-        now = datetime.now()
+        now = utc_now()
         
         status_set = {status.strip().lower() for status in statuses} if statuses else None
         age_threshold: Optional[datetime] = None
@@ -1800,7 +1808,7 @@ class TranscriptionService:
                 "audioDuration": getattr(task, 'total_duration', None),
                 "wordCount": len(full_text.split()) if full_text else 0,
                 "averageConfidence": None,  # คำนวณได้ถ้าต้องการ
-                "completedAt": datetime.now().isoformat()
+                "completedAt": utc_now().isoformat()
             }
             
             logger.info(f"📤 Sending callback: job_id={payload['jobId']}, task_id={task.task_id}, text_length={len(full_text)}, segments_count={len(segments)}")
@@ -1857,7 +1865,7 @@ class TranscriptionService:
                 "chunks_count": chunks_count,
                 "success": success,
                 "error": error,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": utc_now().isoformat()
             }
             
             with open(metrics_file, 'w', encoding='utf-8') as f:
