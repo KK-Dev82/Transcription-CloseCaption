@@ -471,6 +471,145 @@ class RabbitMQService:
                             pass
                     raise
     
+    def send_transcription_request_task_thread_safe(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 30,
+        use_chunking: bool = False,
+        display_mode: str = "full_text",
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        initial_prompt: Optional[str] = None
+    ) -> str:
+        """
+        Thread-safe version: สร้าง connection ใหม่ใน thread
+        """
+        connection = None
+        try:
+            connection, channel = self._create_thread_safe_connection()
+            
+            task_id = str(uuid.uuid4())
+            
+            task_data = {
+                "task_id": task_id,
+                "task_type": "transcription_request",
+                "file_path": file_path,
+                "file_url": file_url,
+                "file_name": file_name,
+                "language": language,
+                "model_size": model_size,
+                "chunk_duration": chunk_duration,
+                "use_chunking": use_chunking,
+                "display_mode": display_mode,
+                "status": "pending",
+                "created_at": time.time(),
+                "callback_url": callback_url,
+                "job_id": job_id,
+                "user_id": user_id,
+                "initial_prompt": initial_prompt
+            }
+            
+            # บันทึก task ลง storage
+            self.json_storage.save_transcription(task_id, task_data)
+            
+            # ส่งไปยัง transcription_request_queue
+            priority = 10 if display_mode == "realtime_chunks" else 5
+            
+            channel.basic_publish(
+                exchange='',
+                routing_key=self.transcription_request_queue,
+                body=json.dumps(task_data),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,
+                    content_type='application/json',
+                    priority=priority
+                )
+            )
+            
+            logger.info(f"✅ Thread-safe: Sent to {self.transcription_request_queue}: {task_id}")
+            return task_id
+            
+        except Exception as e:
+            logger.error(f"❌ Thread-safe send failed: {e}")
+            raise
+        finally:
+            if connection and not connection.is_closed:
+                try:
+                    connection.close()
+                except:
+                    pass
+    
+    def send_transcription_task_thread_safe(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 30,
+        use_chunking: bool = False,
+        display_mode: str = "full_text",
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None
+    ) -> str:
+        """
+        Thread-safe version: สร้าง connection ใหม่ใน thread
+        """
+        connection = None
+        try:
+            connection, channel = self._create_thread_safe_connection()
+            
+            task_id = str(uuid.uuid4())
+            task_data = {
+                "task_id": task_id,
+                "task_type": "transcription",
+                "file_path": file_path,
+                "file_url": file_url,
+                "file_name": file_name,
+                "language": language,
+                "model_size": model_size,
+                "chunk_duration": chunk_duration,
+                "use_chunking": use_chunking,
+                "display_mode": display_mode,
+                "status": "pending",
+                "created_at": time.time(),
+                "callback_url": callback_url,
+                "job_id": job_id,
+                "user_id": user_id
+            }
+            
+            # บันทึก task ลง storage
+            self.json_storage.save_transcription(task_id, task_data)
+            
+            # ส่งไปยัง queue
+            channel.basic_publish(
+                exchange='',
+                routing_key=self.transcription_queue,
+                body=json.dumps(task_data),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,
+                )
+            )
+            
+            logger.info(f"✅ Thread-safe: Sent to {self.transcription_queue}: {task_id}")
+            return task_id
+            
+        except Exception as e:
+            logger.error(f"❌ Thread-safe send failed: {e}")
+            raise
+        finally:
+            if connection and not connection.is_closed:
+                try:
+                    connection.close()
+                except:
+                    pass
+    
     def send_chunk_transcription_task(self, chunk_task: Dict[str, Any]) -> str:
         """ส่ง chunk transcription task ไปยัง queue สำหรับ parallel processing"""
         max_retries = 3
@@ -707,6 +846,69 @@ class RabbitMQService:
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล queue: {e}")
             return {}
+    
+    def _create_thread_safe_connection(self):
+        """สร้าง connection ใหม่สำหรับใช้ใน thread (thread-safe)"""
+        credentials = pika.PlainCredentials(self.username, self.password)
+        parameters = pika.ConnectionParameters(
+            host=self.host,
+            port=self.port,
+            virtual_host=self.virtual_host,
+            credentials=credentials,
+            heartbeat=600,
+            blocked_connection_timeout=300
+        )
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        return connection, channel
+    
+    def get_queue_info_thread_safe(self) -> Dict[str, Any]:
+        """ดึงข้อมูล queue (thread-safe version - สร้าง connection ใหม่)"""
+        connection = None
+        try:
+            connection, channel = self._create_thread_safe_connection()
+            
+            queue_info = {}
+            
+            # ตรวจสอบแต่ละ queue (รวม queues ใหม่)
+            queue_names = [
+                self.trim_queue, 
+                self.merge_queue, 
+                self.convert_queue, 
+                self.resize_queue, 
+                self.transcription_queue,
+                self.transcription_request_queue,  # 3-Queue Architecture
+                self.audio_extraction_queue        # 3-Queue Architecture
+            ]
+            
+            for queue_name in queue_names:
+                try:
+                    method = channel.queue_declare(queue=queue_name, passive=True)
+                    queue_info[queue_name] = {
+                        'name': queue_name,
+                        'message_count': method.method.message_count,
+                        'consumer_count': method.method.consumer_count
+                    }
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not get info for queue {queue_name}: {e}")
+                    queue_info[queue_name] = {
+                        'name': queue_name,
+                        'message_count': 0,
+                        'consumer_count': 0,
+                        'error': str(e)
+                    }
+            
+            return queue_info
+            
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล queue: {e}")
+            return {}
+        finally:
+            if connection and not connection.is_closed:
+                try:
+                    connection.close()
+                except:
+                    pass
     
     def purge_queue(self, queue_name: str) -> bool:
         """ลบ messages ทั้งหมดใน queue"""
