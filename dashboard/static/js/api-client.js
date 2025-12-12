@@ -186,14 +186,14 @@ class DashboardAPI extends APIClient {
     }
 
     async getServerTasks(serverName, options = {}) {
-        const { limit = 100, status = null, timeout = 30 } = options;
+        const { limit = 50, status = null, timeout = 60 } = options;  // เพิ่ม timeout เป็น 60s, ลด default limit
         const params = { limit };
         if (status) params.status = status;
         return this.get(`/api/server/${serverName}/tasks`, { params, timeout });
     }
 
     async getServerVideos(serverName) {
-        return this.get(`/api/server/${serverName}/videos`, { timeout: 10 });
+        return this.get(`/api/server/${serverName}/videos`, { timeout: 30 });  // เพิ่ม timeout เป็น 30s
     }
 
     async getServers() {

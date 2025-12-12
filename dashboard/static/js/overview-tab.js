@@ -85,9 +85,9 @@ async function refreshOverviewServer(serverName) {
         
         // Always fetch all tasks first, then filter client-side if needed
         const data = await dashboardAPI.getServerTasks(serverName, {
-            limit: 100, // Get up to 100 tasks
+            limit: 50, // ลด limit เป็น 50 เพื่อลดเวลา query
             status: null, // Don't filter on server
-            timeout: 30 // 30s timeout
+            timeout: 60 // เพิ่ม timeout เป็น 60s
         });
 
         const container = document.getElementById(`logs-${serverName}`);

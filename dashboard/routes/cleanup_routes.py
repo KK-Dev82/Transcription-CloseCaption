@@ -4,7 +4,7 @@ Cleanup and deletion API routes
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -62,7 +62,7 @@ async def delete_old_tasks(server_name: str, request: DeleteOldTasksRequest):
         "deleted": 0,
         "failed": 0,
         "current_file": "",
-        "started_at": datetime.now().isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "days": request.days,
         "statuses": request.statuses
     }
@@ -83,7 +83,7 @@ async def delete_old_tasks(server_name: str, request: DeleteOldTasksRequest):
                         return {"cleanup_id": cleanup_id, "error": "Invalid response format"}
                     
                     # Filter tasks by status and age
-                    now = datetime.now()
+                    now = datetime.now(timezone.utc)  # ใช้ UTC timezone-aware
                     days_threshold = request.days if request.days is not None else 0
                     threshold_date = now - timedelta(days=days_threshold)
                     
@@ -104,10 +104,24 @@ async def delete_old_tasks(server_name: str, request: DeleteOldTasksRequest):
                                 continue
                             
                             try:
-                                task_date = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
-                                if task_date.replace(tzinfo=None) >= threshold_date.replace(tzinfo=None):
+                                # Parse task date - handle timezone
+                                if 'Z' in updated_at:
+                                    task_date = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                                elif '+' in updated_at or updated_at.count('-') > 2:
+                                    task_date = datetime.fromisoformat(updated_at)
+                                else:
+                                    # No timezone - assume UTC
+                                    task_date = datetime.fromisoformat(updated_at.replace('Z', ''))
+                                    task_date = task_date.replace(tzinfo=timezone.utc)
+                                
+                                # Ensure both are timezone-aware before comparison
+                                if task_date.tzinfo is None:
+                                    task_date = task_date.replace(tzinfo=timezone.utc)
+                                
+                                if task_date >= threshold_date:
                                     continue  # Skip tasks that are not old enough
-                            except:
+                            except Exception as e:
+                                logger.debug(f"Error parsing task date {updated_at}: {e}")
                                 pass  # If date parsing fails, include the task
                         
                         old_tasks.append(task)
@@ -147,7 +161,7 @@ async def delete_old_tasks(server_name: str, request: DeleteOldTasksRequest):
                                 cleanup_progress_store[cleanup_id]["deleted"] = removed_count
                                 cleanup_progress_store[cleanup_id]["failed"] = failed_count
                                 cleanup_progress_store[cleanup_id]["status"] = "completed"
-                                cleanup_progress_store[cleanup_id]["completed_at"] = datetime.now().isoformat()
+                                cleanup_progress_store[cleanup_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
                                 
                                 logger.info(f"✅ Bulk cleanup completed on {server_name}: {removed_count} deleted, {failed_count} failed")
                                 
@@ -220,7 +234,7 @@ async def delete_old_tasks(server_name: str, request: DeleteOldTasksRequest):
                         cleanup_progress_store[cleanup_id]["failed"] = failed_count
                     
                     cleanup_progress_store[cleanup_id]["status"] = "completed"
-                    cleanup_progress_store[cleanup_id]["completed_at"] = datetime.now().isoformat()
+                    cleanup_progress_store[cleanup_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
                     
                     return {
                         "cleanup_id": cleanup_id,

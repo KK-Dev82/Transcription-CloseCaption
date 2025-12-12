@@ -115,12 +115,12 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
     server_config = SERVERS[server_name]
     api_url = server_config["api_url"]
     
-    task_timeout = 30
+    task_timeout = 60  # เพิ่ม timeout เป็น 60s สำหรับ server ที่มี tasks เยอะ
     
     try:
         import aiohttp
         async with aiohttp.ClientSession() as session:
-            params = {}
+            params = {"limit": limit * 2}  # เรียก limit มากกว่าเล็กน้อยเพื่อให้มี buffer
             if status:
                 params["status"] = status
             
@@ -134,17 +134,32 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
                     if not isinstance(tasks, list):
                         return {"tasks": [], "total": 0, "error": "Invalid response format"}
                     
+                    # ใช้ total จาก response
+                    total_tasks = len(tasks)
+                    
+                    # เพิ่ม updated_at ถ้าไม่มี
                     for task in tasks:
                         if "updated_at" not in task and "created_at" in task:
                             task["updated_at"] = task["created_at"]
                     
-                    tasks_sorted = sorted(
-                        tasks,
-                        key=lambda x: x.get("updated_at", "") or "",
-                        reverse=True
-                    )
-                    
-                    limited_tasks = tasks_sorted[:limit]
+                    # Sort และ limit - ถ้ามี tasks เยอะมาก ให้ limit ก่อนแล้วค่อย sort เพื่อประหยัดเวลา
+                    if len(tasks) > limit * 2:
+                        # Limit ก่อนแล้วค่อย sort (เร็วกว่า)
+                        tasks_to_sort = tasks[:limit * 2]
+                        tasks_sorted = sorted(
+                            tasks_to_sort,
+                            key=lambda x: x.get("updated_at", "") or "",
+                            reverse=True
+                        )
+                        limited_tasks = tasks_sorted[:limit]
+                    else:
+                        # ถ้ามี tasks น้อย ให้ sort ทั้งหมดก่อนแล้วค่อย limit
+                        tasks_sorted = sorted(
+                            tasks,
+                            key=lambda x: x.get("updated_at", "") or "",
+                            reverse=True
+                        )
+                        limited_tasks = tasks_sorted[:limit]
                     
                     # For completed tasks, ensure full_text is available
                     # Try to construct from chunks if not present
@@ -159,14 +174,15 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
                                     if chunk_texts:
                                         task["full_text"] = " ".join(chunk_texts).strip()
                     
+                    # นับ status จาก tasks ที่มี (ไม่ต้องนับทั้งหมดเพื่อประหยัดเวลา)
                     status_count = {}
-                    for task in tasks:
+                    for task in tasks[:limit * 2]:  # นับจาก tasks ที่ fetch มา
                         task_status = task.get("status", "unknown").lower()
                         status_count[task_status] = status_count.get(task_status, 0) + 1
                     
                     return {
                         "tasks": limited_tasks,
-                        "total": len(tasks),
+                        "total": total_tasks,  # ใช้ total จาก response
                         "showing": len(limited_tasks),
                         "status_count": status_count
                     }
@@ -229,7 +245,7 @@ async def get_server_videos(server_name: str):
             
             for endpoint in video_endpoints:
                 try:
-                    async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=30)) as response:  # เพิ่ม timeout เป็น 30s
                         response_status = response.status
                         if response.status == 200:
                             data = await response.json()

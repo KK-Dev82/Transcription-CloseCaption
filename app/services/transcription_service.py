@@ -600,7 +600,26 @@ class TranscriptionService:
         if not task.created_at:
             return False  # ไม่สามารถตรวจสอบได้
         
-        elapsed_time = (utc_now() - task.created_at).total_seconds()
+        # Ensure task.created_at is timezone-aware
+        created_at = task.created_at
+        if isinstance(created_at, str):
+            try:
+                if 'Z' in created_at:
+                    created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                elif '+' in created_at or created_at.count('-') > 2:
+                    created_at = datetime.fromisoformat(created_at)
+                else:
+                    created_at = datetime.fromisoformat(created_at.replace('Z', ''))
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+            except:
+                return False
+        elif isinstance(created_at, datetime):
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            return False
+        
+        elapsed_time = (utc_now() - created_at).total_seconds()
         
         if elapsed_time > TASK_TIMEOUT_SECONDS:
             logger.error(
@@ -1285,10 +1304,38 @@ class TranscriptionService:
             # คำนวณ processing time
             # ใช้ UTC สำหรับบันทึก timestamp ทั้งหมด
             completed_time = datetime.now(timezone.utc)
-            created_time = task.created_at if task.created_at else completed_time
-            # ถ้า created_time ไม่มี timezone ให้ assume UTC
-            if created_time and created_time.tzinfo is None:
+            
+            # Parse created_time - handle both string and datetime
+            created_time = None
+            if task.created_at:
+                if isinstance(task.created_at, str):
+                    # Parse string to datetime
+                    try:
+                        if 'Z' in task.created_at:
+                            created_time = datetime.fromisoformat(task.created_at.replace('Z', '+00:00'))
+                        elif '+' in task.created_at or task.created_at.count('-') > 2:
+                            created_time = datetime.fromisoformat(task.created_at)
+                        else:
+                            # No timezone - assume UTC
+                            created_time = datetime.fromisoformat(task.created_at.replace('Z', ''))
+                            created_time = created_time.replace(tzinfo=timezone.utc)
+                    except Exception as e:
+                        logger.warning(f"Error parsing created_at '{task.created_at}': {e}")
+                        created_time = completed_time
+                elif isinstance(task.created_at, datetime):
+                    created_time = task.created_at
+                    # Ensure timezone-aware
+                    if created_time.tzinfo is None:
+                        created_time = created_time.replace(tzinfo=timezone.utc)
+                else:
+                    created_time = completed_time
+            else:
+                created_time = completed_time
+            
+            # Ensure both are timezone-aware before subtraction
+            if created_time.tzinfo is None:
                 created_time = created_time.replace(tzinfo=timezone.utc)
+            
             processing_time_seconds = (completed_time - created_time).total_seconds()
             
             # ดึง transcription_time และ audio_extraction_time จาก existing_data ถ้ามี
