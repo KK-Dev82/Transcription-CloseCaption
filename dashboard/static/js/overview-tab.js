@@ -7,6 +7,7 @@ const OVERVIEW_REFRESH_INTERVAL = 10000; // 10 seconds for overview
 
 // Track displayed tasks per server for Load More
 const displayedTasksCount = {
+    '4000-ada-sc': 20,
     '4000-ada': 20,
     '5080': 20
 };
@@ -71,6 +72,7 @@ function stopOverviewRefresh() {
 
 async function refreshOverviewData() {
     await Promise.all([
+        refreshOverviewServer('4000-ada-sc'),
         refreshOverviewServer('4000-ada'),
         refreshOverviewServer('5080')
     ]);

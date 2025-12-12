@@ -4,7 +4,7 @@ let autoRefreshInterval = null;
 let historyRefreshInterval = null;
 const TRACKING_REFRESH_INTERVAL = 5000; // 5 seconds - for summary, worker status, queues
 const HISTORY_REFRESH_INTERVAL = 30000; // 30 seconds - for task list (history)
-const SERVERS = ['4000-ada', '5080'];
+const SERVERS = ['4000-ada-sc', '4000-ada', '5080']; // 4000-ada-sc is default (when 4000-ada GPU is full)
 
 // SERVER_CONFIGS is imported from api-client.js via window.SERVER_CONFIGS
 // Use window.SERVER_CONFIGS to avoid redeclaration error
