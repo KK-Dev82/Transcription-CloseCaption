@@ -142,6 +142,22 @@ pip3 install --user --no-cache-dir \
 echo "✅ Whisper dependencies installed"
 echo ""
 
+# Install RabbitMQ and async dependencies (critical for worker)
+echo "📦 Installing RabbitMQ and async dependencies..."
+echo "   (aiofiles, aio-pika, pika - required for video worker)"
+pip3 install --user --no-cache-dir \
+    aiofiles==23.2.1 \
+    "aio-pika==9.3.0" \
+    pika==1.3.2 \
+    aiohttp==3.9.1 \
+    || {
+    echo "❌ Failed to install RabbitMQ dependencies"
+    echo "   Worker will not be able to connect to RabbitMQ"
+    exit 1
+}
+echo "✅ RabbitMQ dependencies installed"
+echo ""
+
 # Install cuDNN (for CUDA 11.8)
 echo "📦 Installing cuDNN for CUDA 11.8..."
 CUDNN_DIR="/workspace/cudnn"
@@ -235,12 +251,36 @@ fi
 echo ""
 
 # Install remaining dependencies from requirements.txt
-echo "📦 Installing remaining dependencies..."
+echo "📦 Installing remaining dependencies from requirements.txt..."
 echo "   (This may take a while...)"
+echo "   Note: Critical dependencies (aiofiles, aio-pika, pika) already installed above"
 
+# Install from requirements.txt but skip already installed critical packages
 pip3 install --user --no-cache-dir -r requirements.txt || {
     echo "⚠️  Some dependencies failed to install"
-    echo "   Service may still work with core dependencies"
+    echo "   Checking which critical dependencies are missing..."
+    
+    # Verify critical dependencies
+    env PYTHONUSERBASE="/workspace/.local" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import aiofiles" 2>/dev/null || {
+        echo "❌ aiofiles still missing - installing directly..."
+        pip3 install --user --no-cache-dir aiofiles==23.2.1
+    }
+    
+    env PYTHONUSERBASE="/workspace/.local" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import aio_pika" 2>/dev/null || {
+        echo "❌ aio-pika still missing - installing directly..."
+        pip3 install --user --no-cache-dir "aio-pika==9.3.0"
+    }
+    
+    env PYTHONUSERBASE="/workspace/.local" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import pika" 2>/dev/null || {
+        echo "❌ pika still missing - installing directly..."
+        pip3 install --user --no-cache-dir pika==1.3.2
+    }
 }
 
 echo ""
@@ -270,10 +310,24 @@ env PYTHONUSERBASE="/workspace/.local" \
     python3 -c "import aio_pika; print('✅ aio-pika:', aio_pika.__version__)" || echo "⚠️  aio-pika not found"
 env PYTHONUSERBASE="/workspace/.local" \
     PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
-    python3 -c "import aiofiles; print('✅ aiofiles: OK')" || echo "⚠️  aiofiles not found"
+    python3 -c "import aiofiles; print('✅ aiofiles: OK')" || {
+    echo "❌ aiofiles not found - CRITICAL for worker!"
+    echo "   Installing aiofiles directly..."
+    pip3 install --user --no-cache-dir aiofiles==23.2.1
+    env PYTHONUSERBASE="/workspace/.local" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import aiofiles; print('✅ aiofiles: OK (installed)')" || echo "❌ aiofiles installation failed"
+}
 env PYTHONUSERBASE="/workspace/.local" \
     PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
-    python3 -c "import pika; print('✅ pika:', pika.__version__)" || echo "⚠️  pika not found"
+    python3 -c "import pika; print('✅ pika:', pika.__version__)" || {
+    echo "❌ pika not found - CRITICAL for worker!"
+    echo "   Installing pika directly..."
+    pip3 install --user --no-cache-dir pika==1.3.2
+    env PYTHONUSERBASE="/workspace/.local" \
+        PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+        python3 -c "import pika; print('✅ pika: OK (installed)')" || echo "❌ pika installation failed"
+}
 
 echo ""
 echo "=============================="

@@ -55,10 +55,15 @@ app.include_router(cleanup_routes.router)
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """Main dashboard page"""
+    # Support both relative (package) and absolute (direct run) imports
     try:
         from .server_constants import SERVERS
     except ImportError:
-        from .config import SERVERS
+        # If relative import fails, try absolute import
+        try:
+            from server_constants import SERVERS
+        except ImportError:
+            from config import SERVERS
     
     # Inject server configs to frontend
     server_configs_js = "window.SERVER_CONFIGS = " + str({
