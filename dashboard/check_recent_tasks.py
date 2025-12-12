@@ -280,6 +280,11 @@ async def main():
         
         if audio_start_times and latest_end:
             earliest_audio_start = min(audio_start_times)
+            # Ensure both have timezone
+            if earliest_audio_start.tzinfo is None:
+                earliest_audio_start = earliest_audio_start.replace(tzinfo=timezone.utc)
+            if latest_end.tzinfo is None:
+                latest_end = latest_end.replace(tzinfo=timezone.utc)
             total_diff = (latest_end - earliest_audio_start).total_seconds()
             print(f'⏱️  Total Duration (Audio Start to Last End): {format_duration(total_diff)} ({total_diff:.0f} seconds)')
     

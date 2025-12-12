@@ -27,15 +27,31 @@ function switchTab(tabName) {
         if (typeof stopTestRefresh === 'function') {
             stopTestRefresh();
         }
+        if (typeof stopMonitorRefresh === 'function') {
+            stopMonitorRefresh();
+        }
     } else if (tabName === 'test') {
         if (typeof stopOverviewRefresh === 'function') {
             stopOverviewRefresh();
+        }
+        if (typeof stopMonitorRefresh === 'function') {
+            stopMonitorRefresh();
         }
         const testResultsSection = document.getElementById('testResultsSection');
         if (testResultsSection && testResultsSection.style.display !== 'none') {
             if (typeof startTestRefresh === 'function') {
                 startTestRefresh();
             }
+        }
+    } else if (tabName === 'monitor') {
+        if (typeof stopOverviewRefresh === 'function') {
+            stopOverviewRefresh();
+        }
+        if (typeof stopTestRefresh === 'function') {
+            stopTestRefresh();
+        }
+        if (typeof loadPreviousResults === 'function') {
+            loadPreviousResults();
         }
     }
 }

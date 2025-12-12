@@ -1022,6 +1022,227 @@ a:hover {
     font-size: 16px;
 }
 
+/* Monitor Tab */
+.monitor-container {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.monitor-config-section {
+    background: var(--apple-white);
+    border-radius: 18px;
+    box-shadow: var(--apple-card-shadow);
+    padding: 24px;
+}
+
+.monitor-config-section h2 {
+    margin: 0 0 8px 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.monitor-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.monitor-form .form-group textarea {
+    padding: 10px 12px;
+    border: 1px solid var(--apple-gray-2);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--apple-white);
+    font-family: monospace;
+    resize: vertical;
+}
+
+.monitor-form .form-group small {
+    font-size: 12px;
+    color: var(--apple-gray-3);
+    margin-top: 4px;
+    display: block;
+}
+
+#monitorStatusSection {
+    background: var(--apple-white);
+    border-radius: 18px;
+    box-shadow: var(--apple-card-shadow);
+    padding: 24px;
+}
+
+.monitor-status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.monitor-status-header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.monitor-progress {
+    margin-top: 16px;
+}
+
+.monitor-progress-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.progress-stat {
+    text-align: center;
+    padding: 16px;
+    background: var(--apple-gray-1);
+    border-radius: 12px;
+}
+
+.progress-stat-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--apple-gray-4);
+}
+
+.progress-stat-label {
+    font-size: 12px;
+    color: var(--apple-gray-3);
+    margin-top: 4px;
+}
+
+#monitorResultsSection {
+    background: var(--apple-white);
+    border-radius: 18px;
+    box-shadow: var(--apple-card-shadow);
+    padding: 24px;
+}
+
+.monitor-results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.monitor-results-header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.analysis-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.analysis-stat-card {
+    background: var(--apple-gray-1);
+    padding: 20px;
+    border-radius: 12px;
+    text-align: center;
+    border-left: 4px solid var(--apple-blue);
+}
+
+.analysis-stat-value {
+    font-size: 32px;
+    font-weight: 600;
+    color: var(--apple-gray-4);
+    margin-bottom: 8px;
+}
+
+.analysis-stat-label {
+    font-size: 14px;
+    color: var(--apple-gray-3);
+}
+
+.analysis-section {
+    margin-bottom: 24px;
+    padding: 20px;
+    background: var(--apple-gray-1);
+    border-radius: 12px;
+}
+
+.analysis-section h3 {
+    margin: 0 0 16px 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--apple-gray-4);
+}
+
+.analysis-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px;
+    background: var(--apple-white);
+    border-radius: 8px;
+}
+
+.metric-label {
+    font-size: 14px;
+    color: var(--apple-gray-3);
+}
+
+.metric-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--apple-gray-4);
+}
+
+.analysis-warning {
+    padding: 12px;
+    background: #fffbf0;
+    border-left: 4px solid #ff9500;
+    border-radius: 8px;
+    color: #856404;
+    font-size: 14px;
+}
+
+.errors-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.error-item {
+    padding: 12px;
+    background: #fff3f3;
+    border-left: 4px solid #ff3b30;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #d70015;
+}
+
+.monitor-previous-results {
+    background: var(--apple-white);
+    border-radius: 18px;
+    box-shadow: var(--apple-card-shadow);
+    padding: 24px;
+}
+
+.monitor-previous-results h2 {
+    margin: 0 0 20px 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.previous-results-list {
+    min-height: 100px;
+}
+
 @media (max-width: 768px) {
     .container {
         padding: 40px 20px;
