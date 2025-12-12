@@ -354,7 +354,10 @@ class TranscriptionService:
                 MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
                 RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
                 
-                queue_info = self.rabbitmq_service.get_queue_info()
+                # Run get_queue_info in executor to avoid blocking event loop
+                import asyncio
+                loop = asyncio.get_event_loop()
+                queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info)
                 
                 # Check transcription_request_queue
                 request_queue_info = queue_info.get('transcription_request_queue', {})
@@ -404,7 +407,10 @@ class TranscriptionService:
                 # Legacy: ตรวจสอบ transcription_queue เก่า
                 MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
                 
-                queue_info = self.rabbitmq_service.get_queue_info()
+                # Run get_queue_info in executor to avoid blocking event loop
+                import asyncio
+                loop = asyncio.get_event_loop()
+                queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info)
                 transcription_queue_info = queue_info.get('transcription_queue', {})
                 current_queue_size = transcription_queue_info.get('message_count', 0)
                 
@@ -486,7 +492,14 @@ class TranscriptionService:
                             "Unable to inspect send_transcription_request_task signature; skipping 'callback_url' parameter."
                         )
                 
-                task_id = self.rabbitmq_service.send_transcription_request_task(**send_kwargs)
+                # Run send_transcription_request_task in executor to avoid blocking event loop
+                import asyncio
+                from functools import partial
+                loop = asyncio.get_event_loop()
+                task_id = await loop.run_in_executor(
+                    None, 
+                    partial(self.rabbitmq_service.send_transcription_request_task, **send_kwargs)
+                )
             else:
                 # Legacy: ส่งไปยัง transcription_queue เก่า (backward compatible)
                 logger.info("📤 Using Legacy Architecture: sending to transcription_queue")
@@ -505,7 +518,14 @@ class TranscriptionService:
                             "Unable to inspect send_transcription_task signature; skipping 'callback_url' parameter."
                         )
                 
-                task_id = self.rabbitmq_service.send_transcription_task(**send_kwargs)
+                # Run send_transcription_task in executor to avoid blocking event loop
+                import asyncio
+                from functools import partial
+                loop = asyncio.get_event_loop()
+                task_id = await loop.run_in_executor(
+                    None,
+                    partial(self.rabbitmq_service.send_transcription_task, **send_kwargs)
+                )
             
             # สร้าง task response
             task = TranscriptionResponse(
