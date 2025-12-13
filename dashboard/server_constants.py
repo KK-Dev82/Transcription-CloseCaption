@@ -13,7 +13,7 @@ from typing import Dict
 
 # 4000-ada (Original)
 SERVER_4000ADA_HOST = os.getenv("SERVER_4000ADA_HOST", "87.197.119.40")
-SERVER_4000ADA_PORT = os.getenv("SERVER_4000ADA_PORT", "40112")
+SERVER_4000ADA_PORT = os.getenv("SERVER_4000ADA_PORT", "40133")
 SERVER_4000ADA_API_URL = f"http://{SERVER_4000ADA_HOST}:{SERVER_4000ADA_PORT}"
 SERVER_4000ADA_SSH = os.getenv("SERVER_4000ADA_SSH", "4000-ada")
 
@@ -63,7 +63,7 @@ SERVERS: Dict[str, Dict[str, str]] = {
 # Default Active Server
 # ============================================
 # เปลี่ยนเป็น "4000-ada-sc" เมื่อ 4000-ada GPU เต็ม
-DEFAULT_SERVER = os.getenv("DEFAULT_SERVER", "4000-ada-sc")
+DEFAULT_SERVER = os.getenv("DEFAULT_SERVER", "4000-ada")
 
 # ============================================
 # Export for backward compatibility
