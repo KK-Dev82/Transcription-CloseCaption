@@ -12,9 +12,9 @@ from typing import Dict
 # ============================================
 
 # 4000-ada (Original)
-# Note: Port 40133 is SSH port, HTTP API port is 40112 (mapped from internal 8010)
+# Note: Port 40133 is SSH port (-> :22), HTTP API port is 40134 (-> :8010)
 SERVER_4000ADA_HOST = os.getenv("SERVER_4000ADA_HOST", "87.197.119.40")
-SERVER_4000ADA_PORT = os.getenv("SERVER_4000ADA_PORT", "40112")
+SERVER_4000ADA_PORT = os.getenv("SERVER_4000ADA_PORT", "40134")
 SERVER_4000ADA_API_URL = f"http://{SERVER_4000ADA_HOST}:{SERVER_4000ADA_PORT}"
 SERVER_4000ADA_SSH = os.getenv("SERVER_4000ADA_SSH", "4000-ada")
 
