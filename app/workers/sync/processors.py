@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any
 import ffmpeg
@@ -478,7 +478,7 @@ class TaskProcessors:
                 file_url=task_data.get('file_url'),
                 file_name=task_data.get('file_name'),
                 language=language,
-                created_at=datetime.now()
+                created_at=datetime.now(timezone.utc)
             )
             task.job_id = task_data.get('job_id')
             task.user_id = task_data.get('user_id')
@@ -560,7 +560,7 @@ class TaskProcessors:
                 total_chunks = len(valid_chunks) if valid_chunks else (existing_transcription.get('total_chunks') or 0)
                 
                 task_data['status'] = 'completed'
-                task_data['completed_at'] = datetime.now().isoformat()
+                task_data['completed_at'] = datetime.now(timezone.utc).isoformat()
                 task_data['progress'] = 100
                 task_data['full_text'] = full_text
                 task_data['chunks'] = chunks
@@ -603,7 +603,7 @@ class TaskProcessors:
                         'status': 'completed',
                         'time': transcription_time,
                         'chunks_count': len(valid_chunks),
-                        'completed_at': datetime.now().isoformat()
+                        'completed_at': datetime.now(timezone.utc).isoformat()
                     })
             else:
                 # ถ้าไม่มี existing_transcription ให้ลองดึงจาก task object ใน transcription_service
@@ -612,7 +612,7 @@ class TaskProcessors:
                 if task_in_service:
                     logger.info(f"📋 Found task in transcription_service: full_text length={len(task_in_service.full_text) if task_in_service.full_text else 0}, chunks count={len(task_in_service.chunks) if task_in_service.chunks else 0}")
                     task_data['status'] = 'completed'
-                    task_data['completed_at'] = datetime.now().isoformat()
+                    task_data['completed_at'] = datetime.now(timezone.utc).isoformat()
                     task_data['progress'] = 100
                     task_data['full_text'] = task_in_service.full_text if task_in_service.full_text else ''
                     task_data['chunks'] = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
@@ -621,7 +621,7 @@ class TaskProcessors:
                     logger.error(f"❌ No transcription data found in storage or service for {task_id}")
                     # ถ้าไม่มีข้อมูลเลย ให้บันทึกแค่ status
                     task_data['status'] = 'completed'
-                    task_data['completed_at'] = datetime.now().isoformat()
+                    task_data['completed_at'] = datetime.now(timezone.utc).isoformat()
                     task_data['progress'] = 100
             
             # บันทึกลง JSON storage (จะ merge กับข้อมูลเดิมอัตโนมัติ)

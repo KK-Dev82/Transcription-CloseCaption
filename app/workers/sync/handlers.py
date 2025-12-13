@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import pika
 
@@ -366,7 +366,7 @@ class MessageHandlers:
                     'type': 'audio_extraction',
                     'status': 'completed',
                     'time': extraction_time,
-                    'completed_at': datetime.now().isoformat()
+                    'completed_at': datetime.now(timezone.utc).isoformat()
                 })
                 
                 # อัปเดต total_tasks และ completed_tasks
@@ -394,7 +394,7 @@ class MessageHandlers:
                     "job_id": job_id,
                     "user_id": user_id,
                     # ไม่ส่ง status เพราะจะถูก set โดย transcription processor
-                    "created_at": datetime.now().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                     "audio_extracted_from": video_file_path  # Track original video
                 }
                 

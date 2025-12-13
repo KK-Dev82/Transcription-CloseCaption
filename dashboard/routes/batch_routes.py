@@ -126,7 +126,7 @@ async def send_all_tasks(
     batch_id: str
 ):
     """Send all tasks concurrently"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     
     logger.info(f"🚀 Starting batch transcription: server={server_name}, files={len(video_files)}, concurrency={concurrency}")
     
@@ -179,7 +179,7 @@ async def start_batch_transcription(request: BatchTranscriptionRequest, backgrou
         raise HTTPException(status_code=404, detail=f"Server {request.server_name} not found")
     
     batch_id = str(uuid.uuid4())
-    from datetime import datetime
+    from datetime import datetime, timezone
     
     batch_status = BatchTaskStatus(
         batch_id=batch_id,
@@ -190,7 +190,7 @@ async def start_batch_transcription(request: BatchTranscriptionRequest, backgrou
         processing_tasks=0,
         pending_tasks=len(request.video_files),
         task_ids=[],
-        created_at=datetime.now().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
         status="starting"
     )
     
