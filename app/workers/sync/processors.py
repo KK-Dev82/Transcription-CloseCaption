@@ -426,7 +426,7 @@ class TaskProcessors:
                 "confidence": transcription_result.get("avg_logprob"),
                 "audioFileId": audio_file_id,
                 "language": language,
-                "createdAt": datetime.now().isoformat()
+                "createdAt": datetime.now(timezone.utc).isoformat()
             }
             
             # Publish result กลับไป Backend
