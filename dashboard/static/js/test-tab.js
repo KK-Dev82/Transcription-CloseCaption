@@ -300,15 +300,25 @@ async function refreshTestResults() {
             return;
         }
 
-        // Fetch all task statuses
-        const remoteAPI = new RemoteServerAPI(serverName);
+        // Fetch all task statuses via Dashboard API (proxy) to avoid CORS
         const tasks = await Promise.all(
             testTaskIds.map(async (taskId) => {
                 try {
-                    const task = await remoteAPI.getTaskStatus(taskId);
+                    // Use Dashboard API to proxy request (avoids CORS)
+                    const response = await fetch(`/api/server/${serverName}/task/${taskId}`, {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: 10000
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+                    }
+                    
+                    const task = await response.json();
                     return task;
                 } catch (error) {
-                    console.error(`Error fetching task ${taskId.substring(0, 16)}...:`, error);
+                    console.error(`Error fetching task ${taskId}:`, error);
                     // Return a placeholder task with error status
                     return {
                         task_id: taskId,
@@ -524,7 +534,7 @@ function updateTestTaskList(tasks) {
             <div class="test-task-item ${statusClass}">
                 <div class="test-task-header">
                     <div class="test-task-id" title="${taskId}">
-                        <strong>${index + 1}. Task ID:</strong> ${taskId.substring(0, 32)}...
+                        <strong>${index + 1}. Task ID:</strong> ${taskId}
                     </div>
                 </div>
                 <div class="test-task-progress">
