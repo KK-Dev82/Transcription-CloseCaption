@@ -17,6 +17,9 @@
             <button class="tab-button active" onclick="switchTab('overview')" id="tab-overview-btn">
                 📊 Overview
             </button>
+            <button class="tab-button" onclick="switchTab('monitoring')" id="tab-monitoring-btn">
+                📡 Monitoring & Logs
+            </button>
             <button class="tab-button" onclick="switchTab('test')" id="tab-test-btn">
                 🧪 Test
             </button>
@@ -27,56 +30,43 @@
 
         <!-- Tab Content: Overview -->
         <div id="tab-overview" class="tab-content active">
-            <div class="overview-container">
-                <!-- 4000-ada-sc -->
-                <div class="server-logs-section">
-                    <div class="server-header">
-                        <h2>4000-ada-sc</h2>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('4000-ada-sc')">
-                                🧹 Clear Pending
-                            </button>
-                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('4000-ada-sc')" title="Delete old tasks">
-                                🗑️ Delete Old
-                            </button>
-                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('4000-ada-sc')" title="Delete ALL tasks (all statuses)">
-                                ⚠️ Delete All
-                            </button>
-                        </div>
-                    </div>
-                    <div class="logs-filters">
-                        <select id="filter-4000-ada-sc" onchange="refreshOverviewServer('4000-ada-sc')">
-                            <option value="">All Status</option>
-                            <option value="pending">Pending</option>
-                            <option value="processing">Processing</option>
-                            <option value="completed">Completed</option>
-                            <option value="failed">Failed</option>
-                            <option value="stopped">Stopped</option>
-                        </select>
-                    </div>
-                    <div class="logs-container" id="logs-4000-ada-sc">
-                        <div class="loading">Loading logs...</div>
+            <div class="overview-single-container">
+                <!-- Server Selector -->
+                <div class="server-selector">
+                    <div class="server-buttons">
+                        <button class="server-btn active" onclick="selectOverviewServer('4000-ada-sc')" id="server-btn-4000-ada-sc">
+                            🖥️ 4000-ada-sc
+                        </button>
+                        <button class="server-btn" onclick="selectOverviewServer('4000-ada')" id="server-btn-4000-ada">
+                            🖥️ 4000-ada
+                        </button>
+                        <button class="server-btn" onclick="selectOverviewServer('5080')" id="server-btn-5080">
+                            🖥️ 5080
+                        </button>
                     </div>
                 </div>
 
-                <!-- 4000-ada -->
-                <div class="server-logs-section">
-                    <div class="server-header">
-                        <h2>4000-ada</h2>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('4000-ada')">
+                <!-- Selected Server Content -->
+                <div class="server-content-section" id="overview-server-content">
+                    <div class="server-header-full">
+                        <h2 id="overview-server-name">4000-ada-sc</h2>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button class="btn btn-primary btn-small" onclick="manualRefreshOverview()" id="refresh-overview-btn">
+                                🔄 Refresh
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="clearPendingTasksCurrent()">
                                 🧹 Clear Pending
                             </button>
-                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('4000-ada')" title="Delete old tasks">
+                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialogCurrent()" title="Delete old tasks">
                                 🗑️ Delete Old
                             </button>
-                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('4000-ada')" title="Delete ALL tasks (all statuses)">
+                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialogCurrent()" title="Delete ALL tasks (all statuses)">
                                 ⚠️ Delete All
                             </button>
                         </div>
                     </div>
                     <div class="logs-filters">
-                        <select id="filter-4000-ada" onchange="refreshOverviewServer('4000-ada')">
+                        <select id="overview-status-filter" onchange="onOverviewFilterChange()">
                             <option value="">All Status</option>
                             <option value="pending">Pending</option>
                             <option value="processing">Processing</option>
@@ -85,39 +75,49 @@
                             <option value="stopped">Stopped</option>
                         </select>
                     </div>
-                    <div class="logs-container" id="logs-4000-ada">
-                        <div class="loading">Loading logs...</div>
+                    <div class="logs-container-full" id="overview-tasks-container">
+                        <div class="table-loader">
+                            <div class="loader-spinner"></div>
+                            <div class="loader-text">Loading tasks...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Content: Monitoring & Logs -->
+        <div id="tab-monitoring" class="tab-content">
+            <div class="monitoring-container">
+                <!-- Real-time Progress -->
+                <div class="monitoring-section">
+                    <h3>🔄 Real-time Task Progress</h3>
+                    <div class="real-time-progress" id="realTimeProgress">
+                        <div class="loading">Loading active tasks...</div>
                     </div>
                 </div>
 
-                <!-- 5080 -->
-                <div class="server-logs-section">
-                    <div class="server-header">
-                        <h2>5080</h2>
+                <!-- System Logs -->
+                <div class="monitoring-section">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <h3>📋 System Logs</h3>
                         <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-danger btn-small" onclick="clearPendingTasks('5080')">
-                                🧹 Clear Pending
-                            </button>
-                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialog('5080')" title="Delete old tasks">
-                                🗑️ Delete Old
-                            </button>
-                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialog('5080')" title="Delete ALL tasks (all statuses)">
-                                ⚠️ Delete All
-                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="clearLogs()">🧹 Clear Logs</button>
+                            <button class="btn btn-secondary btn-small" onclick="toggleAutoScroll()" id="autoScrollBtn">📌 Auto-scroll: ON</button>
                         </div>
                     </div>
-                    <div class="logs-filters">
-                        <select id="filter-5080" onchange="refreshOverviewServer('5080')">
-                            <option value="">All Status</option>
-                            <option value="pending">Pending</option>
-                            <option value="processing">Processing</option>
-                            <option value="completed">Completed</option>
-                            <option value="failed">Failed</option>
-                            <option value="stopped">Stopped</option>
-                        </select>
+                    <div class="logs-viewer" id="systemLogs">
+                        <div class="log-entry info">
+                            <span class="log-timestamp">[System]</span>
+                            Monitoring started. Waiting for logs...
+                        </div>
                     </div>
-                    <div class="logs-container" id="logs-5080">
-                        <div class="loading">Loading logs...</div>
+                </div>
+
+                <!-- Server Status -->
+                <div class="monitoring-section">
+                    <h3>🖥️ Server Status</h3>
+                    <div id="serverStatusGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
+                        <!-- Server status will be shown here -->
                     </div>
                 </div>
             </div>
@@ -360,8 +360,15 @@
         </div>
     </div>
 
+    <!-- Inject server configs from backend (overrides api-client.js defaults) -->
+    {% if server_configs_js %}
+    <script>
+        {{ server_configs_js|safe }}
+    </script>
+    {% endif %}
     <script src="/static/js/api-client.js"></script>
     <script src="/static/js/overview-tab.js"></script>
+    <script src="/static/js/monitoring-tab.js"></script>
     <script src="/static/js/test-tab.js"></script>
     <script src="/static/js/cleanup-modal.js"></script>
     <script src="/static/js/dashboard-tabs.js"></script>
