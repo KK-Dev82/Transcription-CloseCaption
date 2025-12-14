@@ -305,6 +305,12 @@ async function refreshTestResults() {
             testTaskIds.map(async (taskId) => {
                 try {
                     // Use Dashboard API to proxy request (avoids CORS)
+                    // Check if dashboardAPI is available and has getTaskStatus method
+                    if (!dashboardAPI || typeof dashboardAPI.getTaskStatus !== 'function') {
+                        console.error('dashboardAPI.getTaskStatus is not available');
+                        throw new Error('Dashboard API not initialized');
+                    }
+                    
                     const task = await dashboardAPI.getTaskStatus(serverName, taskId);
                     return task;
                 } catch (error) {
