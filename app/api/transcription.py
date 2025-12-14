@@ -65,19 +65,29 @@ async def start_transcription(request: TranscriptionRequest):
 @router.get("/{task_id}", response_model=TranscriptionResponse)
 async def get_transcription_status(task_id: str):
     """ดึงสถานะการแปลงเสียง"""
-    
-    task = transcription_service.get_task_status(task_id)
-    if not task:
-        logger.warning(f"Task {task_id} not found in transcription_service")
+    try:
+        task = transcription_service.get_task_status(task_id)
+        if not task:
+            logger.warning(f"Task {task_id} not found in transcription_service")
+            raise HTTPException(
+                status_code=404,
+                detail="ไม่พบ task"
+            )
+        
+        # Log task status for debugging
+        logger.debug(f"Task {task_id} status: {task.status}, progress: {task.progress}")
+        
+        return task
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error getting task {task_id} status: {error_details}")
         raise HTTPException(
-            status_code=404,
-            detail="ไม่พบ task"
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูล task: {str(e)}"
         )
-    
-    # Log task status for debugging
-    logger.debug(f"Task {task_id} status: {task.status}, progress: {task.progress}")
-    
-    return task
 
 @router.get("/", response_model=List[TranscriptionResponse])
 async def get_all_transcriptions():
