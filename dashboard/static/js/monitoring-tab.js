@@ -134,18 +134,29 @@ async function refreshServerStatus() {
     if (!container) return;
     
     const serverName = currentMonitoringServer;
+    if (!serverName) return;
     
     try {
-        let summary, status, error = null;
+        // Get status from Dashboard API (which proxies to remote server)
+        let summary, status, systemInfo = null;
+        let error = null;
         
         try {
             summary = await dashboardAPI.getServerSummary(serverName);
             status = await dashboardAPI.getServerStatus(serverName);
+            
+            // Try to get system info from Management API
+            try {
+                const managementAPI = getManagementAPI(serverName);
+                systemInfo = await managementAPI.getSystemInfo();
+            } catch (e) {
+                console.debug('Management API not available, using basic status only');
+            }
         } catch (err) {
             error = err.message;
         }
         
-        if (error) {
+        if (error && !systemInfo) {
             container.innerHTML = `
                 <div class="status-card failed">
                     <h4>${serverName}</h4>
@@ -155,39 +166,139 @@ async function refreshServerStatus() {
             return;
         }
         
-        const total = summary?.total || 0;
-        const completed = summary?.completed || 0;
-        const processing = summary?.processing || 0;
-        const pending = summary?.pending || 0;
-        const failed = summary?.failed || 0;
+        let html = '';
         
-        container.innerHTML = `
-            <div class="status-card">
-                <h4>${serverName}</h4>
-                <div style="margin-top: 12px;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                        <span>Total:</span>
-                        <strong>${total}</strong>
+        // Health Status
+        if (status && status.health) {
+            html += `
+                <div class="status-card ${status.health === 'healthy' ? 'success' : 'warning'}">
+                    <h4>Health</h4>
+                    <p>${status.health || 'unknown'}</p>
+                </div>
+            `;
+        }
+        
+        // System Info (from Management API)
+        if (systemInfo && !systemInfo.error) {
+            if (systemInfo.memory_usage) {
+                const mem = systemInfo.memory_usage;
+                const percent = mem.percent_used || ((mem.used_gb / mem.total_gb) * 100).toFixed(1);
+                html += `
+                    <div class="status-card ${percent > 90 ? 'error' : percent > 70 ? 'warning' : 'info'}">
+                        <h4>Memory</h4>
+                        <p>${percent}%</p>
+                        <small>${mem.used_gb}GB / ${mem.total_gb}GB</small>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                        <span>✅ Completed:</span>
-                        <strong style="color: #34c759;">${completed}</strong>
+                `;
+            }
+            
+            if (systemInfo.disk_usage) {
+                const disk = systemInfo.disk_usage;
+                const percent = disk.percent_used || ((disk.used_gb / disk.total_gb) * 100).toFixed(1);
+                html += `
+                    <div class="status-card ${percent > 90 ? 'error' : percent > 70 ? 'warning' : 'info'}">
+                        <h4>Disk</h4>
+                        <p>${percent}%</p>
+                        <small>${disk.used_gb}GB / ${disk.total_gb}GB</small>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                        <span>⏳ Processing:</span>
-                        <strong style="color: #ff9500;">${processing}</strong>
+                `;
+            }
+            
+            if (systemInfo.cpu_info) {
+                const cpu = systemInfo.cpu_info;
+                html += `
+                    <div class="status-card info">
+                        <h4>CPU</h4>
+                        <p>${cpu.percent || 0}%</p>
+                        <small>Cores: ${cpu.count || 'N/A'}</small>
                     </div>
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                        <span>⏸️ Pending:</span>
-                        <strong style="color: #0071e3;">${pending}</strong>
-                    </div>
-                    <div style="display: flex; justify-content: space-between;">
-                        <span>❌ Failed:</span>
-                        <strong style="color: #ff3b30;">${failed}</strong>
+                `;
+            }
+            
+            if (systemInfo.gpu_info && systemInfo.gpu_info.length > 0) {
+                systemInfo.gpu_info.forEach((gpu, idx) => {
+                    const memPercent = ((gpu.memory_used_mb / gpu.memory_total_mb) * 100).toFixed(1);
+                    html += `
+                        <div class="status-card ${memPercent > 90 ? 'error' : memPercent > 70 ? 'warning' : 'success'}">
+                            <h4>GPU ${idx + 1}</h4>
+                            <p>${gpu.name || 'N/A'}</p>
+                            <small>Memory: ${memPercent}% (${gpu.memory_used_mb}MB / ${gpu.memory_total_mb}MB)</small>
+                            <small>Util: ${gpu.utilization_percent || 0}%</small>
+                        </div>
+                    `;
+                });
+            }
+        }
+        
+        // Task Summary
+        if (summary) {
+            const total = summary?.total || 0;
+            const completed = summary?.completed || 0;
+            const processing = summary?.processing || 0;
+            const pending = summary?.pending || 0;
+            const failed = summary?.failed || 0;
+            
+            html += `
+                <div class="status-card">
+                    <h4>Tasks</h4>
+                    <div style="margin-top: 12px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>Total:</span>
+                            <strong>${total}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>✅ Completed:</span>
+                            <strong style="color: #34c759;">${completed}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>⏳ Processing:</span>
+                            <strong style="color: #ff9500;">${processing}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>⏸️ Pending:</span>
+                            <strong style="color: #0071e3;">${pending}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span>❌ Failed:</span>
+                            <strong style="color: #ff3b30;">${failed}</strong>
+                        </div>
                     </div>
                 </div>
-            </div>
-        `;
+            `;
+        }
+        
+        // Worker Status
+        if (status && status.worker && !status.worker.error) {
+            html += `
+                <div class="status-card ${status.worker.running ? 'success' : 'error'}">
+                    <h4>Video Worker</h4>
+                    <p>${status.worker.running ? 'Running' : 'Not Running'}</p>
+                    ${status.worker.pid ? `<small>PID: ${status.worker.pid}</small>` : ''}
+                </div>
+            `;
+        }
+        
+        // Queue Status
+        if (status && status.queues && !status.queues.error) {
+            const queueInfo = status.queues.queues || {};
+            const queueNames = Object.keys(queueInfo);
+            
+            if (queueNames.length > 0) {
+                html += `
+                    <div class="status-card info">
+                        <h4>Queues</h4>
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            ${queueNames.map(name => {
+                                const queue = queueInfo[name];
+                                return `<small>${name}: ${queue.message_count || 0} messages, ${queue.consumer_count || 0} consumers</small>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        container.innerHTML = html || '<div class="status-card">No status data available</div>';
     } catch (error) {
         console.error('Error refreshing server status:', error);
         container.innerHTML = `<div class="error">Error: ${error.message || 'Unknown error'}</div>`;
@@ -203,60 +314,95 @@ async function refreshSystemLogs() {
     if (!container) return;
     
     const serverName = currentMonitoringServer;
+    if (!serverName) {
+        container.innerHTML = '<div class="log-entry info">Select a server to view logs</div>';
+        return;
+    }
     
-    // In a real implementation, you would fetch logs from the server
-    // For now, we'll simulate with task status updates from selected server
     try {
-        const data = await dashboardAPI.getServerTasks(serverName, {
-            limit: 20,
-            status: null,
-            timeout: 30  // เพิ่ม timeout จาก 5 เป็น 30 วินาที
-        });
+        // Try to use Management API to get real logs from remote server
+        let logsData = null;
+        try {
+            const managementAPI = getManagementAPI(serverName);
+            logsData = await managementAPI.getLogs('service', 50);
+        } catch (e) {
+            console.debug('Management API not available, falling back to task-based logs');
+        }
         
-        if (data.tasks) {
-            data.tasks.forEach(task => {
-                const status = (task.status || 'unknown').toLowerCase();
-                if (status === 'processing' || status === 'pending' || status === 'transcribing') {
-                    const logEntry = {
-                        timestamp: new Date().toISOString(),
-                        server: serverName,
-                        taskId: task.task_id || task.id,
-                        status: status,
-                        progress: task.progress || 0,
-                        stage: task.current_stage || task.current_stage_description || 'Processing'
-                    };
-                    
-                    // Avoid duplicates
-                    const existing = logsBuffer.find(log => 
-                        log.taskId === logEntry.taskId && 
-                        log.status === logEntry.status &&
-                        Math.abs(new Date(log.timestamp) - new Date(logEntry.timestamp)) < 5000
-                    );
-                    
-                    if (!existing) {
-                        logsBuffer.push(logEntry);
-                        if (logsBuffer.length > MAX_LOGS) {
-                            logsBuffer.shift();
-                        }
-                    }
+        if (logsData && !logsData.error && logsData.lines && Array.isArray(logsData.lines)) {
+            // Use real logs from Management API
+            logsData.lines.forEach(logLine => {
+                const logEntry = {
+                    timestamp: new Date().toISOString(),
+                    server: serverName,
+                    message: logLine.trim(),
+                    level: 'info'
+                };
+                
+                // Determine log level from message
+                if (logLine.includes('ERROR') || logLine.includes('error') || logLine.includes('❌')) {
+                    logEntry.level = 'error';
+                } else if (logLine.includes('WARNING') || logLine.includes('warning') || logLine.includes('⚠️')) {
+                    logEntry.level = 'warning';
+                }
+                
+                logsBuffer.push(logEntry);
+                if (logsBuffer.length > MAX_LOGS) {
+                    logsBuffer.shift();
                 }
             });
+        } else {
+            // Fallback: Use task status updates
+            const data = await dashboardAPI.getServerTasks(serverName, {
+                limit: 20,
+                status: null,
+                timeout: 30
+            });
+            
+            if (data.tasks) {
+                data.tasks.forEach(task => {
+                    const status = (task.status || 'unknown').toLowerCase();
+                    if (status === 'processing' || status === 'pending' || status === 'transcribing') {
+                        const logEntry = {
+                            timestamp: new Date().toISOString(),
+                            server: serverName,
+                            taskId: task.task_id || task.id,
+                            status: status,
+                            progress: task.progress || 0,
+                            stage: task.current_stage || task.current_stage_description || 'Processing',
+                            message: `Task ${(task.task_id || task.id).substring(0, 16)}... ${status.toUpperCase()} ${task.progress || 0}%`,
+                            level: status === 'failed' ? 'error' : 'info'
+                        };
+                        
+                        // Avoid duplicates
+                        const existing = logsBuffer.find(log => 
+                            log.taskId === logEntry.taskId && 
+                            log.status === logEntry.status &&
+                            Math.abs(new Date(log.timestamp) - new Date(logEntry.timestamp)) < 5000
+                        );
+                        
+                        if (!existing) {
+                            logsBuffer.push(logEntry);
+                            if (logsBuffer.length > MAX_LOGS) {
+                                logsBuffer.shift();
+                            }
+                        }
+                    }
+                });
+            }
         }
         
         // Render logs
         const logsHtml = logsBuffer.slice(-100).reverse().map(log => {
             const time = new Date(log.timestamp).toLocaleTimeString('th-TH');
-            const logType = log.status === 'failed' ? 'error' : 
-                           log.status === 'processing' ? 'info' : 'debug';
+            const logType = log.level || (log.status === 'failed' ? 'error' : 
+                           log.status === 'processing' ? 'info' : 'debug');
             
             return `
                 <div class="log-entry ${logType}">
                     <span class="log-timestamp">[${time}]</span>
                     <strong>[${log.server}]</strong>
-                    Task ${log.taskId.substring(0, 16)}... 
-                    ${log.status.toUpperCase()} 
-                    ${log.progress > 0 ? `(${log.progress}%)` : ''}
-                    ${log.stage ? `- ${log.stage}` : ''}
+                    ${log.message || `Task ${log.taskId?.substring(0, 16)}... ${log.status?.toUpperCase()} ${log.progress > 0 ? `(${log.progress}%)` : ''} ${log.stage ? `- ${log.stage}` : ''}`}
                 </div>
             `;
         }).join('');
@@ -269,6 +415,7 @@ async function refreshSystemLogs() {
         }
     } catch (error) {
         console.error('Error refreshing system logs:', error);
+        container.innerHTML = `<div class="log-entry error">Error: ${error.message || 'Unknown error'}</div>`;
     }
 }
 
