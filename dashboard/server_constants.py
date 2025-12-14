@@ -20,7 +20,7 @@ SERVER_4000ADA_SSH = os.getenv("SERVER_4000ADA_SSH", "4000-ada")
 
 # 4000-ada-sc (Secure - ใช้แทนเมื่อ 4000-ada GPU เต็ม)
 SERVER_4000ADA_SC_HOST = os.getenv("SERVER_4000ADA_SC_HOST", "213.173.108.6")
-SERVER_4000ADA_SC_PORT = os.getenv("SERVER_4000ADA_SC_PORT", "10889")
+SERVER_4000ADA_SC_PORT = os.getenv("SERVER_4000ADA_SC_PORT", "14237")
 SERVER_4000ADA_SC_API_URL = f"http://{SERVER_4000ADA_SC_HOST}:{SERVER_4000ADA_SC_PORT}"
 SERVER_4000ADA_SC_SSH = os.getenv("SERVER_4000ADA_SC_SSH", "4000-ada-sc")
 
@@ -64,7 +64,7 @@ SERVERS: Dict[str, Dict[str, str]] = {
 # Default Active Server
 # ============================================
 # เปลี่ยนเป็น "4000-ada-sc" เมื่อ 4000-ada GPU เต็ม
-DEFAULT_SERVER = os.getenv("DEFAULT_SERVER", "4000-ada")
+DEFAULT_SERVER = os.getenv("DEFAULT_SERVER", "4000-ada-sc")
 
 # ============================================
 # Export for backward compatibility
