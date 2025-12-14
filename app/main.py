@@ -480,6 +480,20 @@ async def cleanup_system():
 # ฟังก์ชั่น startup สำหรับ cleanup temp folders เก่า
 @app.on_event("startup")
 async def startup_event():
+    """Startup event - initialize services"""
+    import os
+    # Start Worker Monitor if enabled
+    if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
+        try:
+            from ..services.worker_monitor import get_worker_monitor
+            monitor = get_worker_monitor()
+            monitor.start()
+            logger.info("✅ Worker Monitor started")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to start Worker Monitor: {e}")
+
+@app.on_event("startup")
+async def startup_event():
     """เริ่มต้น application"""
     logger.info("🚀 เริ่มต้น Transcription Service API...")
     
@@ -498,6 +512,19 @@ async def startup_event():
         logger.info("✅ Cleanup Service initialized and started")
     except Exception as e:
         logger.warning(f"⚠️ ไม่สามารถเริ่มต้น Cleanup Service: {e}")
+    
+    # ============================================================
+    # Phase 6: Worker Monitor - Auto-restart Video Worker
+    # ============================================================
+    import os
+    if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
+        try:
+            from .services.worker_monitor import get_worker_monitor
+            monitor = get_worker_monitor()
+            monitor.start()
+            logger.info("✅ Worker Monitor started (auto-restart enabled)")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to start Worker Monitor: {e}")
     
     # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
     # 🔌 เริ่มต้น WebSocket Service

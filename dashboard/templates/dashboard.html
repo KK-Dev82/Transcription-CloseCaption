@@ -88,6 +88,26 @@
         <!-- Tab Content: Monitoring & Logs -->
         <div id="tab-monitoring" class="tab-content">
             <div class="monitoring-container">
+                <!-- Server Selector -->
+                <div class="server-selector" style="margin-bottom: 20px;">
+                    <div class="server-buttons">
+                        <button class="server-btn active" onclick="selectMonitoringServer('4000-ada-sc')" id="monitoring-server-btn-4000-ada-sc">
+                            🖥️ 4000-ada-sc
+                        </button>
+                        <button class="server-btn" onclick="selectMonitoringServer('4000-ada')" id="monitoring-server-btn-4000-ada">
+                            🖥️ 4000-ada
+                        </button>
+                        <button class="server-btn" onclick="selectMonitoringServer('5080')" id="monitoring-server-btn-5080">
+                            🖥️ 5080
+                        </button>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span id="monitoring-server-name" style="font-weight: bold; color: var(--apple-blue);">4000-ada-sc</span>
+                        <button class="btn btn-secondary btn-small" onclick="manualRefreshMonitoring()">🔄 Refresh</button>
+                        <button class="btn btn-secondary btn-small" onclick="openMonitoringInNewWindow()">🔗 Open in New Window</button>
+                    </div>
+                </div>
+                
                 <!-- Real-time Progress -->
                 <div class="monitoring-section">
                     <h3>🔄 Real-time Task Progress</h3>
@@ -373,5 +393,19 @@
     <script src="/static/js/cleanup-modal.js"></script>
     <script src="/static/js/dashboard-tabs.js"></script>
     <script src="/static/js/monitor-tab.js"></script>
+    <script src="/static/js/task-checker.js"></script>
+    
+    <!-- Task Checker Modal -->
+    <div id="taskCheckerModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2>🔍 Task Checker</h2>
+                <span class="close" onclick="closeTaskCheckerModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="taskCheckerContent">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
 </body>
 </html>

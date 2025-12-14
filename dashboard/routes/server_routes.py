@@ -339,6 +339,39 @@ async def get_task_status(server_name: str, task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/server/{server_name}/queue/check-task/{task_id}")
+async def check_task_in_queue(server_name: str, task_id: str):
+    """ตรวจสอบ task ที่ค้างใน queue (proxy to remote server)"""
+    if server_name not in SERVERS:
+        raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
+    
+    server_config = SERVERS[server_name]
+    api_url = server_config["api_url"]
+    
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{api_url}/queue/check-task/{task_id}",
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Server {server_name} returned status {response.status} for task {task_id}: {error_text}")
+                    raise HTTPException(
+                        status_code=response.status,
+                        detail=f"Server returned status {response.status}: {error_text[:200]}"
+                    )
+    except aiohttp.ClientError as e:
+        logger.error(f"Error checking task {task_id} from {server_name}: {e}")
+        raise HTTPException(status_code=503, detail=f"Connection error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error checking task {task_id} from {server_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/server/{server_name}/tasks/{task_id}/stop")
 async def stop_task(server_name: str, task_id: str):
     """Stop a single task by calling remote server's DELETE endpoint"""

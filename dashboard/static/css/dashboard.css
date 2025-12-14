@@ -1436,6 +1436,74 @@ a:hover {
     background: #d70015;
 }
 
+.btn-action.btn-check {
+    background: #ff9500;
+    color: white;
+}
+
+.btn-action.btn-check:hover {
+    background: #ff8800;
+}
+
+/* Task Checker Modal */
+.task-checker-result {
+    padding: 20px;
+}
+
+.checker-section {
+    margin-bottom: 24px;
+    padding: 16px;
+    background: var(--apple-gray-1);
+    border-radius: 12px;
+}
+
+.checker-section h4 {
+    margin-bottom: 12px;
+    color: var(--apple-gray-4);
+    font-size: 18px;
+}
+
+.checker-item {
+    margin-bottom: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--apple-gray-2);
+}
+
+.checker-item:last-child {
+    border-bottom: none;
+}
+
+.checker-item strong {
+    color: var(--apple-gray-4);
+    margin-right: 8px;
+}
+
+.checker-item.success {
+    color: var(--apple-green);
+}
+
+.checker-item.error {
+    color: #ff3b30;
+}
+
+.checker-item.warning {
+    color: #ff9500;
+}
+
+.recommendations {
+    list-style: none;
+    padding: 0;
+}
+
+.recommendations li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--apple-gray-2);
+}
+
+.recommendations li:last-child {
+    border-bottom: none;
+}
+
 /* Monitoring Tab Styles */
 .monitoring-container {
     display: grid;
