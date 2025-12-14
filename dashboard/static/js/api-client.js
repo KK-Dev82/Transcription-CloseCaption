@@ -281,8 +281,54 @@ class RemoteServerAPI extends APIClient {
     }
 }
 
+/**
+ * Management API Client (for remote server management via API)
+ */
+class ManagementAPI extends APIClient {
+    constructor(serverName) {
+        const config = SERVER_CONFIGS[serverName];
+        if (!config) {
+            throw new Error(`Server ${serverName} not found`);
+        }
+        // Use dashboard API as proxy (dashboard will forward to remote server)
+        super('', 30); // Empty base URL - will use dashboard API
+        this.serverName = serverName;
+    }
+
+    async executeCommand(command, timeout = 30) {
+        return this.post(`/api/server/${this.serverName}/management/execute`, {
+            command,
+            timeout
+        }, { timeout: timeout + 10 });
+    }
+
+    async getSystemInfo() {
+        return this.get(`/api/server/${this.serverName}/management/system-info`, { timeout: 10 });
+    }
+
+    async getLogs(logType = 'service', lines = 100) {
+        return this.get(`/api/server/${this.serverName}/management/logs`, {
+            params: { log_type: logType, lines },
+            timeout: 10
+        });
+    }
+
+    async listScripts() {
+        return this.get(`/api/server/${this.serverName}/management/scripts`, { timeout: 10 });
+    }
+
+    async executeScript(scriptName) {
+        return this.post(`/api/server/${this.serverName}/management/scripts/${scriptName}/execute`, {}, { timeout: 60 });
+    }
+}
+
 // Create singleton instances
 const dashboardAPI = new DashboardAPI();
+
+// Helper function to create ManagementAPI instance
+function getManagementAPI(serverName) {
+    return new ManagementAPI(serverName);
+}
 
 // Export
 window.APIClient = APIClient;

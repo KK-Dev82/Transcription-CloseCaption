@@ -37,7 +37,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 # Import and include routers
 # Support both relative (package) and absolute (direct run) imports
 try:
-    from .routes import server_routes, batch_routes, cleanup_routes
+    from .routes import server_routes, batch_routes, cleanup_routes, management_routes
 except ImportError:
     # If relative import fails, try absolute import
     import sys
@@ -45,11 +45,18 @@ except ImportError:
     dashboard_dir = Path(__file__).parent
     if str(dashboard_dir) not in sys.path:
         sys.path.insert(0, str(dashboard_dir))
-    from routes import server_routes, batch_routes, cleanup_routes
+    try:
+        from routes import server_routes, batch_routes, cleanup_routes, management_routes
+    except ImportError:
+        # management_routes might not exist yet
+        from routes import server_routes, batch_routes, cleanup_routes
+        management_routes = None
 
 app.include_router(server_routes.router)
 app.include_router(batch_routes.router)
 app.include_router(cleanup_routes.router)
+if management_routes:
+    app.include_router(management_routes.router)
 
 
 @app.get("/", response_class=HTMLResponse)
