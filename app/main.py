@@ -22,7 +22,7 @@ except Exception as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"⚠️  Failed to load .env.runpod: {e}")
 
-from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring, files, tasks, cleanup, control
+from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring, files, tasks, cleanup, control, management
 # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
 # from .api import websocket
 # from .api.websocket import router as websocket_router
@@ -150,6 +150,7 @@ app.include_router(cleanup.router)
 
 # 🎛️ Control API (Service Control & Testing)
 app.include_router(control.router)
+app.include_router(management.router)
 
 # Mount static files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
