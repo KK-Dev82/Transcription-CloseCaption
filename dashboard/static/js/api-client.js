@@ -220,6 +220,10 @@ class DashboardAPI extends APIClient {
         return this.get(`/api/server/${serverName}/task/${taskId}`, { timeout: 10 });
     }
 
+    async checkTaskInQueue(serverName, taskId) {
+        return this.get(`/api/server/${serverName}/queue/check-task/${taskId}`, { timeout: 30 });
+    }
+
     async stopTask(serverName, taskId) {
         try {
             const response = await this.post(`/api/server/${serverName}/tasks/${taskId}/stop`, {}, { timeout: 30 });

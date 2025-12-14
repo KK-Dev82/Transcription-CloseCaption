@@ -315,6 +315,11 @@ async function refreshOverviewServer(serverName, page = null) {
             if (status === 'processing' || status === 'pending' || status === 'transcribing') {
                 actions.push(`<button class="btn-action btn-stop" onclick="stopTask('${serverName}', '${taskId}')" title="Stop task">⏹️ Stop</button>`);
             }
+            // Add Check Task button for stuck tasks
+            if (status === 'pending' || status === 'processing' || status === 'transcribing') {
+                actions.push(`<button class="btn-action btn-check" onclick="checkTaskInQueue('${serverName}', '${taskId}')" title="Check task status">🔍 Check</button>`);
+            }
+            
             const actionsHtml = actions.length > 0 ? actions.join(' ') : '-';
             
             return `
