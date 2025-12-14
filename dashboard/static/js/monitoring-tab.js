@@ -453,8 +453,8 @@ function startProgressTracking(serverName, tasks) {
                 if (!taskId) continue;
                 
                 try {
-                    const remoteAPI = new RemoteServerAPI(serverName);
-                    const updatedTask = await remoteAPI.getTaskStatus(taskId);
+                    // Use Dashboard API proxy to avoid CORS issues
+                    const updatedTask = await dashboardAPI.getTaskStatus(serverName, taskId);
                     
                     // Update progress in table if task row exists
                     const row = document.querySelector(`tr[data-task-id="${taskId}"]`);
