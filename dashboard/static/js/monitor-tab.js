@@ -203,7 +203,8 @@ async function refreshMonitorStatus(serverName) {
     if (monitorTaskIds.length === 0) return;
     
     try {
-        const remoteAPI = new RemoteServerAPI(serverName);
+        // Use Dashboard API proxy to avoid CORS issues
+        // const remoteAPI = new RemoteServerAPI(serverName); // DEPRECATED: Use dashboardAPI instead
         
         // Fetch all task statuses
         const tasks = await Promise.all(

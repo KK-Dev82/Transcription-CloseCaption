@@ -321,7 +321,11 @@ async def get_server_videos(server_name: str):
 async def get_task_status(server_name: str, task_id: str):
     """Get single task status from remote server (proxy to avoid CORS)"""
     if server_name not in SERVERS:
-        raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
+        return {
+            "error": f"Server {server_name} not found",
+            "task_id": task_id,
+            "status": "error"
+        }
     
     server_config = SERVERS[server_name]
     api_url = server_config["api_url"]
@@ -336,17 +340,48 @@ async def get_task_status(server_name: str, task_id: str):
                     return await response.json()
                 else:
                     error_text = await response.text()
-                    logger.error(f"Server {server_name} returned status {response.status} for task {task_id}: {error_text}")
-                    raise HTTPException(
-                        status_code=response.status,
-                        detail=f"Server returned status {response.status}: {error_text[:200]}"
-                    )
+                    logger.error(f"Server {server_name} returned status {response.status} for task {task_id}: {error_text[:500]}")
+                    # Return error response instead of raising exception
+                    return {
+                        "error": f"Server returned status {response.status}",
+                        "error_details": error_text[:200],
+                        "task_id": task_id,
+                        "status": "error",
+                        "server": server_name,
+                        "api_url": api_url
+                    }
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Connection error getting task {task_id} from {server_name}: {e}")
+        return {
+            "error": f"Cannot connect to host {api_url}",
+            "error_details": str(e),
+            "task_id": task_id,
+            "status": "error",
+            "server": server_name,
+            "api_url": api_url
+        }
     except aiohttp.ClientError as e:
-        logger.error(f"Error getting task {task_id} from {server_name}: {e}")
-        raise HTTPException(status_code=503, detail=f"Connection error: {str(e)}")
+        logger.error(f"Client error getting task {task_id} from {server_name}: {e}")
+        return {
+            "error": f"Connection error: {str(e)}",
+            "error_details": str(e),
+            "task_id": task_id,
+            "status": "error",
+            "server": server_name,
+            "api_url": api_url
+        }
     except Exception as e:
-        logger.error(f"Error getting task {task_id} from {server_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error getting task {task_id} from {server_name}: {error_details}")
+        return {
+            "error": f"Error: {str(e)}",
+            "error_details": str(e),
+            "task_id": task_id,
+            "status": "error",
+            "server": server_name,
+            "api_url": api_url
+        }
 
 
 @router.get("/api/server/{server_name}/queue/check-task/{task_id}")

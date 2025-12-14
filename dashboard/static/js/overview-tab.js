@@ -515,8 +515,8 @@ async function viewTranscriptionText(serverName, taskId) {
     switchTranscriptionTab('fulltext');
     
     try {
-        const remoteAPI = new RemoteServerAPI(serverName);
-        const task = await remoteAPI.getTaskStatus(taskId);
+        // Use Dashboard API proxy to avoid CORS issues
+        const task = await dashboardAPI.getTaskStatus(serverName, taskId);
         
         // Get full text
         let fullText = task.full_text || task.corrected_text || task.original_text;
