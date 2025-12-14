@@ -107,4 +107,116 @@ async def get_queue_stats():
         
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาดในการดึงสถิติ queue: {e}")
-        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}")
+
+@router.get("/check-task/{task_id}")
+async def check_task_in_queue(task_id: str):
+    """
+    ตรวจสอบ task ที่ค้างใน queue
+    
+    ตรวจสอบ:
+    1. Task status จาก storage
+    2. Queue status (audio_extraction_queue, transcription_queue, etc.)
+    3. Worker status
+    4. File existence
+    """
+    try:
+        from ..utils.storage_factory import get_storage
+        import subprocess
+        from pathlib import Path
+        
+        result = {
+            "task_id": task_id,
+            "storage": {},
+            "queues": {},
+            "worker": {},
+            "file": {},
+            "recommendations": []
+        }
+        
+        # 1. ตรวจสอบจาก Storage
+        storage = get_storage()
+        task_data = storage.load_transcription(task_id)
+        
+        if task_data:
+            result["storage"] = {
+                "found": True,
+                "status": task_data.get('status', 'unknown'),
+                "progress": task_data.get('progress', 0),
+                "created_at": task_data.get('created_at', 'N/A'),
+                "updated_at": task_data.get('updated_at', 'N/A'),
+                "current_stage": task_data.get('current_stage', 'N/A'),
+                "stage_description": task_data.get('current_stage_description', 'N/A'),
+                "file_path": task_data.get('file_path', 'N/A'),
+                "error_message": task_data.get('error_message')
+            }
+        else:
+            result["storage"] = {"found": False}
+            result["recommendations"].append("⚠️ Task ไม่พบใน storage - อาจถูกลบหรือยังไม่ถูกสร้าง")
+        
+        # 2. ตรวจสอบ Queue Status
+        queue_info = rabbitmq_service.get_queue_info()
+        
+        # ตรวจสอบ audio_extraction_queue
+        audio_extraction_queue = queue_info.get('audio_extraction_queue', {})
+        result["queues"]["audio_extraction_queue"] = {
+            "messages_ready": audio_extraction_queue.get('message_count', 0),
+            "consumers": audio_extraction_queue.get('consumer_count', 0),
+            "unacked": audio_extraction_queue.get('messages_unacknowledged', 0)
+        }
+        
+        if audio_extraction_queue.get('consumer_count', 0) == 0:
+            result["recommendations"].append("❌ audio_extraction_queue ไม่มี consumer - ต้อง restart Video Worker")
+        
+        if audio_extraction_queue.get('messages_unacknowledged', 0) > 0:
+            result["recommendations"].append("⚠️ มี messages ที่ยังไม่ acknowledged - อาจมี task ที่กำลัง process")
+        
+        # ตรวจสอบ transcription_queue
+        transcription_queue = queue_info.get('transcription_queue', {})
+        result["queues"]["transcription_queue"] = {
+            "messages_ready": transcription_queue.get('message_count', 0),
+            "consumers": transcription_queue.get('consumer_count', 0),
+            "unacked": transcription_queue.get('messages_unacknowledged', 0)
+        }
+        
+        # 3. ตรวจสอบ Worker Status
+        try:
+            worker_result = subprocess.run(
+                ["pgrep", "-f", "python.*video_worker"],
+                capture_output=True,
+                text=True
+            )
+            if worker_result.returncode == 0:
+                pids = worker_result.stdout.strip().split('\n')
+                result["worker"] = {
+                    "running": True,
+                    "pids": pids
+                }
+            else:
+                result["worker"] = {"running": False}
+                result["recommendations"].append("❌ Video Worker ไม่ทำงาน - ต้อง restart")
+        except Exception as e:
+            result["worker"] = {"error": str(e)}
+        
+        # 4. ตรวจสอบ File
+        if task_data and task_data.get('file_path'):
+            file_path = task_data.get('file_path')
+            if Path(file_path).exists():
+                size = Path(file_path).stat().st_size / (1024 * 1024)  # MB
+                result["file"] = {
+                    "exists": True,
+                    "path": file_path,
+                    "size_mb": round(size, 2)
+                }
+            else:
+                result["file"] = {
+                    "exists": False,
+                    "path": file_path
+                }
+                result["recommendations"].append("❌ ไฟล์ไม่พบ - Task อาจจะ fail แล้ว")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error checking task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error checking task: {str(e)}") 
