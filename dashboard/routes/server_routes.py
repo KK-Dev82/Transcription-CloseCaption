@@ -412,11 +412,14 @@ async def stop_task(server_name: str, task_id: str):
                 "note": "Task may already be completed or the server may not support stopping tasks"
             }
     except asyncio.TimeoutError:
-        logger.error(f"Timeout stopping task {task_id} on {server_name}")
+        logger.warning(f"⚠️ Timeout stopping task {task_id} on {server_name}")
         return {
             "success": False,
-            "error": "Connection timeout",
-            "task_id": task_id
+            "message": "Connection timeout",
+            "error": "Connection timeout",  # For backward compatibility
+            "task_id": task_id,
+            "server": server_name,
+            "note": "The server may be busy or unreachable. Task may already be completed."
         }
     except Exception as e:
         import traceback
