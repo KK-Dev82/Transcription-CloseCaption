@@ -295,54 +295,98 @@ class SQLiteStorage:
         """ดึงรายการ transcription ทั้งหมด (return format compatible กับ JSONStorage)"""
         conn = self._get_connection()
         
-        # Load full data (compatible with JSONStorage format)
-        cursor = conn.execute("""
-            SELECT * FROM transcriptions 
-            ORDER BY updated_at DESC, created_at DESC
-        """)
-        
-        results = []
-        for row in cursor.fetchall():
-            try:
-                chunks = json.loads(row['chunks_json']) if row.get('chunks_json') else []
-            except:
-                chunks = []
+        try:
+            # Check if table exists and has required columns
+            cursor = conn.execute("PRAGMA table_info(transcriptions)")
+            columns = [row[1] for row in cursor.fetchall()]
             
-            # Return format compatible กับ JSONStorage
-            result = {
-                "task_id": row['task_id'],
-                "created_at": row.get('created_at'),
-                "updated_at": row.get('updated_at'),
-                "completed_at": row.get('completed_at'),
-                "file_path": row.get('file_path'),
-                "file_url": row.get('file_url'),
-                "file_name": row.get('file_name'),
-                "language": row.get('language'),
-                "total_duration": row.get('total_duration'),
-                "chunks": chunks,
-                "full_text": row.get('full_text', ''),
-                "original_text": row.get('original_text'),
-                "corrected_text": row.get('corrected_text'),
-                "partial_text": row.get('partial_text'),
-                "status": row.get('status', 'pending'),
-                "progress": row.get('progress', 0),
-                "model_size": row.get('model_size'),
-                "chunk_duration": row.get('chunk_duration'),
-                "error_message": row.get('error_message'),
-                "processing_time": row.get('processing_time'),
-                "transcription_time": row.get('transcription_time'),
-                "audio_extraction_time": row.get('audio_extraction_time'),
-                "text_correction_time": row.get('text_correction_time'),
-                "current_stage": row.get('current_stage'),
-                "current_stage_description": row.get('current_stage_description'),
-                "stage_progress": row.get('stage_progress'),
-                "job_id": row.get('job_id'),
-                "user_id": row.get('user_id'),
-                "callback_url": row.get('callback_url')
-            }
-            results.append(result)
-        
-        return results
+            if not columns:
+                logger.warning("Transcriptions table does not exist")
+                return []
+            
+            # Build SELECT query based on available columns
+            # Use only columns that exist to avoid errors
+            available_columns = [
+                'task_id', 'created_at', 'updated_at', 'completed_at',
+                'file_path', 'file_url', 'file_name', 'language', 'total_duration',
+                'full_text', 'original_text', 'corrected_text', 'partial_text',
+                'chunks_json', 'status', 'progress', 'model_size', 'chunk_duration',
+                'error_message', 'processing_time', 'transcription_time',
+                'audio_extraction_time', 'text_correction_time', 'current_stage',
+                'current_stage_description', 'stage_progress', 'job_id', 'user_id', 'callback_url'
+            ]
+            
+            # Filter to only columns that exist
+            select_columns = [col for col in available_columns if col in columns]
+            
+            if not select_columns:
+                logger.error("No valid columns found in transcriptions table")
+                return []
+            
+            # Build query - use COALESCE for columns that might not exist
+            select_clause = ", ".join(select_columns)
+            
+            # Determine order by column (use updated_at if available, else created_at)
+            order_by = 'updated_at' if 'updated_at' in columns else 'created_at'
+            
+            cursor = conn.execute(f"""
+                SELECT {select_clause} FROM transcriptions 
+                ORDER BY {order_by} DESC
+            """)
+            
+            results = []
+            for row in cursor.fetchall():
+                try:
+                    chunks = []
+                    if 'chunks_json' in columns and row.get('chunks_json'):
+                        try:
+                            chunks = json.loads(row['chunks_json'])
+                        except:
+                            chunks = []
+                    
+                    # Return format compatible กับ JSONStorage
+                    # Use .get() with default values for safety
+                    result = {
+                        "task_id": row.get('task_id', ''),
+                        "created_at": row.get('created_at'),
+                        "updated_at": row.get('updated_at'),
+                        "completed_at": row.get('completed_at') if 'completed_at' in columns else None,
+                        "file_path": row.get('file_path'),
+                        "file_url": row.get('file_url') if 'file_url' in columns else None,
+                        "file_name": row.get('file_name') if 'file_name' in columns else None,
+                        "language": row.get('language', 'th'),
+                        "total_duration": row.get('total_duration'),
+                        "chunks": chunks,
+                        "full_text": row.get('full_text', ''),
+                        "original_text": row.get('original_text') if 'original_text' in columns else None,
+                        "corrected_text": row.get('corrected_text') if 'corrected_text' in columns else None,
+                        "partial_text": row.get('partial_text') if 'partial_text' in columns else None,
+                        "status": row.get('status', 'pending'),
+                        "progress": row.get('progress', 0) if 'progress' in columns else 0,
+                        "model_size": row.get('model_size'),
+                        "chunk_duration": row.get('chunk_duration'),
+                        "error_message": row.get('error_message'),
+                        "processing_time": row.get('processing_time') if 'processing_time' in columns else None,
+                        "transcription_time": row.get('transcription_time') if 'transcription_time' in columns else None,
+                        "audio_extraction_time": row.get('audio_extraction_time') if 'audio_extraction_time' in columns else None,
+                        "text_correction_time": row.get('text_correction_time') if 'text_correction_time' in columns else None,
+                        "current_stage": row.get('current_stage') if 'current_stage' in columns else None,
+                        "current_stage_description": row.get('current_stage_description') if 'current_stage_description' in columns else None,
+                        "stage_progress": row.get('stage_progress') if 'stage_progress' in columns else None,
+                        "job_id": row.get('job_id') if 'job_id' in columns else None,
+                        "user_id": row.get('user_id') if 'user_id' in columns else None,
+                        "callback_url": row.get('callback_url') if 'callback_url' in columns else None
+                    }
+                    results.append(result)
+                except Exception as e:
+                    logger.warning(f"Error processing transcription row: {e}")
+                    continue
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error listing transcriptions: {e}", exc_info=True)
+            # Return empty list instead of crashing
+            return []
     
     def search_transcription(self, task_id: str, query: str, case_sensitive: bool = False) -> List[Dict]:
         """ค้นหาข้อความใน transcription"""

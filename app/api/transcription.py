@@ -82,8 +82,12 @@ async def get_transcription_status(task_id: str):
 @router.get("/", response_model=List[TranscriptionResponse])
 async def get_all_transcriptions():
     """ดึงรายการ transcription tasks ทั้งหมด"""
-    
-    return transcription_service.get_all_tasks()
+    try:
+        return transcription_service.get_all_tasks()
+    except Exception as e:
+        logger.error(f"Error getting all transcriptions: {e}", exc_info=True)
+        # Return empty list instead of crashing
+        return []
 
 @router.post("/cleanup")
 async def cleanup_transcription_tasks(request: CleanupRequest):

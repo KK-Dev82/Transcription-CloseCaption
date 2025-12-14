@@ -1634,22 +1634,31 @@ class TranscriptionService:
         responses: List[TranscriptionResponse] = []
         seen_ids = set()
         
-        # โหลดจาก storage ทั้งหมดก่อน
-        stored_tasks = self.json_storage.list_all_transcriptions()
-        for stored in stored_tasks:
-            task_id = stored.get("task_id")
-            if not task_id:
-                continue
-            task = self._build_task_from_storage(task_id, stored, existing=self.tasks.get(task_id))
-            if task:
-                self.tasks[task_id] = task
-                responses.append(task)
-                seen_ids.add(task_id)
-        
-        # เติม tasks ที่อยู่ในหน่วยความจำ แต่ยังไม่อยู่ใน storage list
-        for task_id, task in self.tasks.items():
-            if task_id not in seen_ids:
-                responses.append(task)
+        try:
+            # โหลดจาก storage ทั้งหมดก่อน
+            stored_tasks = self.json_storage.list_all_transcriptions()
+            for stored in stored_tasks:
+                try:
+                    task_id = stored.get("task_id")
+                    if not task_id:
+                        continue
+                    task = self._build_task_from_storage(task_id, stored, existing=self.tasks.get(task_id))
+                    if task:
+                        self.tasks[task_id] = task
+                        responses.append(task)
+                        seen_ids.add(task_id)
+                except Exception as e:
+                    logger.warning(f"Error processing task {stored.get('task_id', 'unknown')}: {e}")
+                    continue
+            
+            # เติม tasks ที่อยู่ในหน่วยความจำ แต่ยังไม่อยู่ใน storage list
+            for task_id, task in self.tasks.items():
+                if task_id not in seen_ids:
+                    responses.append(task)
+        except Exception as e:
+            logger.error(f"Error getting all tasks from storage: {e}", exc_info=True)
+            # Return tasks from memory only if storage fails
+            responses = list(self.tasks.values())
         
         return responses
     
