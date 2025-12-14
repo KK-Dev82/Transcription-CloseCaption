@@ -216,6 +216,10 @@ class DashboardAPI extends APIClient {
         return this.post(`/api/server/${serverName}/tasks/clear`, { statuses }, { timeout: 30 });
     }
 
+    async getTaskStatus(serverName, taskId) {
+        return this.get(`/api/server/${serverName}/task/${taskId}`, { timeout: 10 });
+    }
+
     async stopTask(serverName, taskId) {
         try {
             const response = await this.post(`/api/server/${serverName}/tasks/${taskId}/stop`, {}, { timeout: 30 });
