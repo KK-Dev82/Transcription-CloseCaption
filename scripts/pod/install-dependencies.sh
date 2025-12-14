@@ -37,7 +37,7 @@ echo "🔧 Installing system dependencies..."
 if command -v apt-get > /dev/null 2>&1; then
     # Check if ffmpeg is already installed
     if ! command -v ffmpeg > /dev/null 2>&1; then
-        echo "📦 Installing FFmpeg..."
+        echo "📦 Installing FFmpeg via apt-get..."
         apt-get update -qq > /dev/null 2>&1
         apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
             echo "⚠️  Failed to install FFmpeg via apt-get"
@@ -45,13 +45,30 @@ if command -v apt-get > /dev/null 2>&1; then
         }
         
         if command -v ffmpeg > /dev/null 2>&1; then
+            FFMPEG_PATH=$(which ffmpeg)
+            FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}')
             echo "✅ FFmpeg installed successfully"
+            echo "   Location: $FFMPEG_PATH"
+            echo "   Version: $FFMPEG_VERSION"
         else
             echo "❌ FFmpeg installation failed"
         fi
     else
+        FFMPEG_PATH=$(which ffmpeg)
         FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}')
-        echo "✅ FFmpeg already installed (version: $FFMPEG_VERSION)"
+        echo "✅ FFmpeg already installed"
+        echo "   Location: $FFMPEG_PATH"
+        echo "   Version: $FFMPEG_VERSION"
+    fi
+    
+    # Verify ffmpeg is accessible from workspace
+    if command -v ffmpeg > /dev/null 2>&1; then
+        # Test ffmpeg can be found in PATH
+        if ffmpeg -version > /dev/null 2>&1; then
+            echo "✅ FFmpeg is accessible from PATH (workspace can use it)"
+        else
+            echo "⚠️  FFmpeg found but not working properly"
+        fi
     fi
     
     # Check if ffprobe is available (usually comes with ffmpeg)
