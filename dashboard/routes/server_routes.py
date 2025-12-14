@@ -373,25 +373,43 @@ async def stop_task(server_name: str, task_id: str):
                                 "task_id": task_id
                             }
                         elif response.status == 404:
-                            # Try next endpoint
+                            # Task not found - might already be deleted or completed
+                            logger.info(f"ℹ️ Task {task_id} not found on {server_name} (may already be deleted/completed)")
+                            return {
+                                "success": True,
+                                "message": f"Task {task_id} not found (may already be deleted or completed)",
+                                "task_id": task_id,
+                                "server": server_name
+                            }
+                        elif response.status == 500:
+                            # Server error - try next endpoint
                             error_text = await response.text()
-                            last_error = f"HTTP {response.status}: {error_text}"
+                            last_error = f"HTTP {response.status}: {error_text[:200]}"
+                            logger.warning(f"⚠️ Server error stopping task {task_id} on {server_name} via {endpoint}: {last_error}")
                             continue
                         else:
                             error_text = await response.text()
-                            logger.error(f"❌ Failed to stop task {task_id} on {server_name} via {endpoint}: HTTP {response.status}: {error_text}")
-                            last_error = f"HTTP {response.status}: {error_text}"
+                            last_error = f"HTTP {response.status}: {error_text[:200]}"
+                            logger.warning(f"⚠️ Failed to stop task {task_id} on {server_name} via {endpoint}: {last_error}")
                             continue
+                except aiohttp.ClientError as e:
+                    last_error = f"Connection error: {str(e)}"
+                    logger.warning(f"⚠️ Connection error stopping task {task_id} on {server_name} via {endpoint}: {last_error}")
+                    continue
                 except Exception as e:
-                    last_error = f"Exception: {str(e)}"
+                    last_error = f"Unexpected error: {str(e)}"
+                    logger.warning(f"⚠️ Unexpected error stopping task {task_id} on {server_name} via {endpoint}: {last_error}")
                     continue
             
-            # All endpoints failed
-            logger.error(f"❌ Failed to stop task {task_id} on {server_name}: All endpoints failed. Last error: {last_error}")
+            # All endpoints failed - return graceful error
+            logger.warning(f"⚠️ Could not stop task {task_id} on {server_name}: All endpoints failed. Last error: {last_error}")
             return {
                 "success": False,
-                "error": f"Failed to stop task. {last_error}",
-                "task_id": task_id
+                "message": f"Could not stop task: {last_error or 'Unknown error'}",
+                "error": last_error or "Unknown error",  # For backward compatibility
+                "task_id": task_id,
+                "server": server_name,
+                "note": "Task may already be completed or the server may not support stopping tasks"
             }
     except asyncio.TimeoutError:
         logger.error(f"Timeout stopping task {task_id} on {server_name}")
