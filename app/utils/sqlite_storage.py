@@ -241,7 +241,10 @@ class SQLiteStorage:
         return task_id
     
     def load_transcription(self, task_id: str) -> Optional[Dict]:
-        """โหลดข้อมูล transcription (return format compatible กับ JSONStorage)"""
+        """
+        โหลดข้อมูล transcription (return format compatible กับ JSONStorage)
+        ถ้าไม่เจอใน SQLite จะลองอ่านจาก JSON เป็น fallback
+        """
         conn = self._get_connection()
         
         cursor = conn.execute(
@@ -251,6 +254,23 @@ class SQLiteStorage:
         row = cursor.fetchone()
         
         if not row:
+            # Fallback: ลองอ่านจาก JSON storage ถ้ามีไฟล์อยู่
+            try:
+                from .json_storage import JSONStorage
+                json_storage = JSONStorage()
+                json_data = json_storage.load_transcription(task_id)
+                if json_data:
+                    logger.info(f"📦 Found task {task_id} in JSON storage (fallback) - consider migrating to SQLite")
+                    # Optionally migrate to SQLite automatically
+                    try:
+                        self.save_transcription(task_id, json_data)
+                        logger.info(f"✅ Auto-migrated task {task_id} from JSON to SQLite")
+                    except Exception as migrate_error:
+                        logger.warning(f"⚠️ Failed to auto-migrate task {task_id}: {migrate_error}")
+                    return json_data
+            except Exception as e:
+                logger.debug(f"JSON fallback not available for task {task_id}: {e}")
+            
             return None
         
         try:
