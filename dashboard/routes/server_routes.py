@@ -207,6 +207,16 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
             "server": server_name,
             "api_url": api_url
         }
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Connection error to {server_name} ({api_url}): {e}")
+        return {
+            "tasks": [],
+            "total": 0,
+            "error": f"Cannot connect to host {api_url}",
+            "error_details": str(e),
+            "server": server_name,
+            "api_url": api_url
+        }
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
