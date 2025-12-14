@@ -2,14 +2,14 @@
  * Overview Tab JavaScript
  */
 
-let overviewRefreshInterval = null;
-const OVERVIEW_REFRESH_INTERVAL = 10000; // 10 seconds for overview
+// Current selected server
+let currentOverviewServer = '4000-ada-sc';
 
-// Track displayed tasks per server for Load More
-const displayedTasksCount = {
-    '4000-ada-sc': 20,
-    '4000-ada': 20,
-    '5080': 20
+// Pagination state per server
+const paginationState = {
+    '4000-ada-sc': { currentPage: 1, totalTasks: 0, tasksPerPage: 50, allTasks: [] },
+    '4000-ada': { currentPage: 1, totalTasks: 0, tasksPerPage: 50, allTasks: [] },
+    '5080': { currentPage: 1, totalTasks: 0, tasksPerPage: 50, allTasks: [] }
 };
 
 // Utility functions
@@ -54,51 +54,125 @@ function formatDuration(seconds) {
     return `${minutes}m ${remainingSeconds}s`;
 }
 
-// Overview Tab Functions
+// Overview Tab Functions - No auto-refresh, manual refresh only
 function startOverviewRefresh() {
-    stopOverviewRefresh();
-    refreshOverviewData();
-    overviewRefreshInterval = setInterval(() => {
-        refreshOverviewData();
-    }, OVERVIEW_REFRESH_INTERVAL);
+    // Disabled - use manual refresh instead
 }
 
 function stopOverviewRefresh() {
-    if (overviewRefreshInterval) {
-        clearInterval(overviewRefreshInterval);
-        overviewRefreshInterval = null;
+    // Disabled - no auto-refresh
+}
+
+// Server selection
+function selectOverviewServer(serverName) {
+    currentOverviewServer = serverName;
+    
+    // Update button states
+    document.querySelectorAll('.server-btn').forEach(btn => btn.classList.remove('active'));
+    document.getElementById(`server-btn-${serverName}`).classList.add('active');
+    
+    // Update server name display
+    document.getElementById('overview-server-name').textContent = serverName;
+    
+    // Reset to page 1 when switching servers
+    paginationState[serverName].currentPage = 1;
+    
+    // Refresh the selected server
+    refreshOverviewServer(serverName);
+}
+
+// Manual refresh
+function manualRefreshOverview() {
+    const btn = document.getElementById('refresh-overview-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Refreshing...';
     }
+    
+    // Clear cache to force reload
+    paginationState[currentOverviewServer].allTasks = [];
+    paginationState[currentOverviewServer].currentPage = 1;
+    
+    refreshOverviewServer(currentOverviewServer).finally(() => {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🔄 Refresh';
+        }
+    });
 }
 
-async function refreshOverviewData() {
-    await Promise.all([
-        refreshOverviewServer('4000-ada-sc'),
-        refreshOverviewServer('4000-ada'),
-        refreshOverviewServer('5080')
-    ]);
+// Filter change handler
+function onOverviewFilterChange() {
+    // Reset pagination when filter changes
+    paginationState[currentOverviewServer].currentPage = 1;
+    paginationState[currentOverviewServer].allTasks = []; // Clear cache to reload
+    refreshOverviewServer(currentOverviewServer);
 }
 
-async function refreshOverviewServer(serverName) {
+// Helper functions for current server
+function clearPendingTasksCurrent() {
+    clearPendingTasks(currentOverviewServer);
+}
+
+function showDeleteOldTasksDialogCurrent() {
+    showDeleteOldTasksDialog(currentOverviewServer);
+}
+
+function showDeleteAllTasksDialogCurrent() {
+    showDeleteAllTasksDialog(currentOverviewServer);
+}
+
+async function refreshOverviewServer(serverName, page = null) {
+    const container = document.getElementById('overview-tasks-container');
+    if (!container) return;
+    
+    // Only refresh if this is the current selected server
+    if (serverName !== currentOverviewServer) return;
+    
+    // Show loader
+    container.innerHTML = `
+        <div class="table-loader">
+            <div class="loader-spinner"></div>
+            <div class="loader-text">Loading tasks...</div>
+        </div>
+    `;
+    
     try {
-        const filterEl = document.getElementById(`filter-${serverName}`);
+        const filterEl = document.getElementById('overview-status-filter');
         const statusFilter = filterEl ? filterEl.value : '';
         
-        // Always fetch all tasks first, then filter client-side if needed
-        const data = await dashboardAPI.getServerTasks(serverName, {
-            limit: 50, // ลด limit เป็น 50 เพื่อลดเวลา query
-            status: null, // Don't filter on server
-            timeout: 60 // เพิ่ม timeout เป็น 60s
-        });
-
-        const container = document.getElementById(`logs-${serverName}`);
-        if (!container) return;
-
-        if (data.error) {
-            container.innerHTML = `<div class="error">Error: ${data.error}</div>`;
-            return;
+        // Reset pagination when filter changes
+        const currentFilter = filterEl ? filterEl.value : '';
+        if (!window[`lastFilter_${serverName}`] || window[`lastFilter_${serverName}`] !== currentFilter) {
+            paginationState[serverName].currentPage = 1;
+            paginationState[serverName].allTasks = [];
+            window[`lastFilter_${serverName}`] = currentFilter;
         }
+        
+        // Update page if provided
+        if (page !== null) {
+            paginationState[serverName].currentPage = page;
+        }
+        
+        const state = paginationState[serverName];
+        
+        // Fetch 1000 tasks if not cached or filter changed
+        if (state.allTasks.length === 0) {
+            const data = await dashboardAPI.getServerTasks(serverName, {
+                limit: 1000, // Load 1000 tasks for pagination
+                status: null, // Don't filter on server
+                timeout: 60
+            });
 
-        let tasks = data.tasks || [];
+            if (data.error) {
+                container.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                return;
+            }
+
+            state.allTasks = data.tasks || [];
+        }
+        
+        let tasks = [...state.allTasks];
         
         // Client-side filtering
         if (statusFilter) {
@@ -108,19 +182,40 @@ async function refreshOverviewServer(serverName) {
             });
         }
         
-        // Reset displayed count when filter changes
-        const currentFilter = filterEl ? filterEl.value : '';
-        if (!window[`lastFilter_${serverName}`] || window[`lastFilter_${serverName}`] !== currentFilter) {
-            displayedTasksCount[serverName] = 20;
-            window[`lastFilter_${serverName}`] = currentFilter;
-        }
+        // Update total tasks after filtering
+        state.totalTasks = tasks.length;
         
-        // Limit to displayed count
-        const displayCount = displayedTasksCount[serverName] || 20;
-        const displayedTasks = tasks.slice(0, displayCount);
-        const hasMore = tasks.length > displayCount;
+        // Calculate pagination
+        const totalPages = Math.ceil(state.totalTasks / state.tasksPerPage);
+        const startIndex = (state.currentPage - 1) * state.tasksPerPage;
+        const endIndex = startIndex + state.tasksPerPage;
+        const displayedTasks = tasks.slice(startIndex, endIndex);
         
-        container.innerHTML = displayedTasks.map(task => {
+        // Calculate row numbers (continuous across pages)
+        const startRowNumber = startIndex + 1;
+        
+        // Render as Table (Admin Dashboard Style)
+        container.innerHTML = `
+            <div class="admin-table-container">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;">#</th>
+                            <th style="width: 200px;">Task ID</th>
+                            <th style="width: 100px;">Status</th>
+                            <th style="width: 80px;">Progress</th>
+                            <th style="width: 250px;">File Name</th>
+                            <th style="width: 120px;">Duration</th>
+                            <th style="width: 150px;">Created</th>
+                            <th style="width: 150px;">Updated</th>
+                            <th style="width: 120px;">Processing Time</th>
+                            <th style="width: 150px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${displayedTasks.map((task, index) => {
+            // Calculate row number (continuous across pages)
+            const rowNumber = startRowNumber + index;
             const taskId = task.task_id || task.id || 'N/A';
             const status = (task.status || 'unknown').toLowerCase();
             const updatedAt = task.updated_at || task.created_at || '';
@@ -185,55 +280,85 @@ async function refreshOverviewServer(serverName) {
                 >⏹️ Stop</button>`;
             }
             
+            // Calculate processing time
+            let processingTimeStr = 'N/A';
+            if (status === 'completed') {
+                const audioTime = task.audio_extraction_time || task.audio_extraction_time === 0 ? parseFloat(task.audio_extraction_time) : null;
+                const transcribeTime = task.transcription_time || task.transcription_time === 0 ? parseFloat(task.transcription_time) : null;
+                const totalTime = task.processing_time || task.time_used || (task.processing_time === 0 ? 0 : null);
+                
+                if (transcribeTime !== null && !isNaN(transcribeTime) && transcribeTime > 0) {
+                    processingTimeStr = formatTimeDuration(transcribeTime);
+                } else if (totalTime !== null && !isNaN(totalTime) && totalTime > 0) {
+                    processingTimeStr = formatTimeDuration(totalTime);
+                }
+            } else if (status === 'processing' || status === 'pending') {
+                processingTimeStr = '<span class="processing-indicator">⏳ Processing...</span>';
+            }
+            
+            // Status badge
+            const statusBadge = `<span class="status-badge status-${status}">${status.toUpperCase()}</span>`;
+            
+            // Progress bar
+            const progressBar = status === 'processing' || status === 'pending' 
+                ? `<div class="progress-bar-container">
+                     <div class="progress-bar-fill" style="width: ${progress}%; background: ${progress < 50 ? '#ff9500' : progress < 80 ? '#0071e3' : '#34c759'};"></div>
+                     <span class="progress-text">${progress}%</span>
+                   </div>`
+                : progress > 0 ? `${progress}%` : 'N/A';
+            
+            // Actions column
+            const actions = [];
+            if (status === 'completed' && (task.full_text || task.corrected_text || task.original_text || (task.chunks && task.chunks.length > 0))) {
+                actions.push(`<button class="btn-action btn-view" onclick="viewTranscriptionText('${serverName}', '${taskId}')" title="View transcription">🔍 View</button>`);
+            }
+            if (status === 'processing' || status === 'pending' || status === 'transcribing') {
+                actions.push(`<button class="btn-action btn-stop" onclick="stopTask('${serverName}', '${taskId}')" title="Stop task">⏹️ Stop</button>`);
+            }
+            const actionsHtml = actions.length > 0 ? actions.join(' ') : '-';
+            
             return `
-                <div class="log-item">
-                    <div class="log-item-info">
-                        <div class="log-item-id">${taskId.substring(0, 32)}...</div>
-                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
-                            <span class="log-item-status ${status}">${status}</span>
-                            <span style="font-size: 12px; color: var(--apple-gray-3);">${progress}%</span>
-                            ${stopButton}
-                            ${viewTextButton}
+                <tr class="task-row task-${status}" data-task-id="${taskId}">
+                    <td class="row-number-cell">
+                        <strong>${rowNumber}</strong>
+                    </td>
+                    <td>
+                        <div class="task-id-cell" title="${taskId}">
+                            <code>${taskId.substring(0, 16)}...</code>
                         </div>
-                        <div style="font-size: 12px; color: var(--apple-gray-3); margin-top: 4px;">
-                            ${fileName.length > 40 ? fileName.substring(0, 40) + '...' : fileName}${durationInfo}
+                    </td>
+                    <td>${statusBadge}</td>
+                    <td>${progressBar}</td>
+                    <td>
+                        <div class="file-name-cell" title="${fileName}">
+                            ${fileName.length > 30 ? fileName.substring(0, 30) + '...' : fileName}
+                            ${durationInfo ? `<span class="duration-badge">${durationInfo.replace(/[()]/g, '')}</span>` : ''}
                         </div>
-                        <div class="log-item-time">${formatDate(updatedAt)}</div>
-                        ${stepInfo !== 'N/A' ? `<div style="font-size: 11px; color: var(--apple-gray-3); margin-top: 4px;">Step: ${stepInfo}</div>` : ''}
-                        ${status === 'completed' ? (() => {
-                            const times = [];
-                            // Check audio_extraction_time (may be null/undefined)
-                            const audioTime = task.audio_extraction_time || task.audio_extraction_time === 0 ? parseFloat(task.audio_extraction_time) : null;
-                            if (audioTime !== null && !isNaN(audioTime) && audioTime > 0) {
-                                times.push(`🎵 Extract: ${formatTimeDuration(audioTime)}`);
-                            }
-                            // Check transcription_time (may be null/undefined)
-                            const transcribeTime = task.transcription_time || task.transcription_time === 0 ? parseFloat(task.transcription_time) : null;
-                            if (transcribeTime !== null && !isNaN(transcribeTime) && transcribeTime > 0) {
-                                times.push(`🎤 Transcribe: ${formatTimeDuration(transcribeTime)}`);
-                            }
-                            // Fallback to processing_time if no specific times available
-                            const processingTime = task.processing_time || task.time_used || (task.processing_time === 0 ? 0 : null);
-                            if (processingTime !== null && !isNaN(processingTime) && processingTime > 0 && times.length === 0) {
-                                times.push(`⏱️ Total: ${formatTimeDuration(processingTime)}`);
-                            }
-                            return times.length > 0 ? `<div style="font-size: 11px; color: var(--apple-blue); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">${times.join(' • ')}</div>` : '';
-                        })() : ''}
-                        ${textPreview}
-                    </div>
-                </div>
+                    </td>
+                    <td>${durationInfo || 'N/A'}</td>
+                    <td class="time-cell">${formatDate(task.created_at || created_at)}</td>
+                    <td class="time-cell">${formatDate(updatedAt)}</td>
+                    <td class="time-cell">${processingTimeStr}</td>
+                    <td class="actions-cell">${actionsHtml}</td>
+                </tr>
             `;
-        }).join('') + (hasMore ? `
-            <div style="text-align: center; margin-top: 16px; padding: 12px;">
-                <button class="btn btn-secondary" onclick="loadMoreTasks('${serverName}')" style="padding: 8px 24px;">
-                    📄 Load More (${tasks.length - displayCount} remaining)
-                </button>
+        }).join('')}
+                    </tbody>
+                </table>
             </div>
-        ` : '');
+            ${renderPagination(serverName, state.currentPage, totalPages, state.totalTasks)}
+        `;
         
         if (displayedTasks.length === 0) {
             container.innerHTML = '<div class="empty">No tasks found</div>';
             return;
+        }
+        
+        // Start real-time progress tracking for processing tasks
+        if (typeof startProgressTracking === 'function') {
+            startProgressTracking(serverName, displayedTasks.filter(t => 
+                ['processing', 'pending', 'transcribing'].includes((t.status || 'unknown').toLowerCase())
+            ));
         }
     } catch (error) {
         console.error(`Error refreshing overview for ${serverName}:`, error);
@@ -263,10 +388,79 @@ async function clearPendingTasks(serverName) {
     }
 }
 
-// Load More function
-function loadMoreTasks(serverName) {
-    displayedTasksCount[serverName] = (displayedTasksCount[serverName] || 20) + 20;
-    refreshOverviewServer(serverName);
+// Pagination functions
+function renderPagination(serverName, currentPage, totalPages, totalTasks) {
+    if (totalPages <= 1) return '';
+    
+    const tasksPerPage = paginationState[serverName].tasksPerPage;
+    const startTask = (currentPage - 1) * tasksPerPage + 1;
+    const endTask = Math.min(currentPage * tasksPerPage, totalTasks);
+    
+    // Calculate page numbers to show
+    const maxPagesToShow = 7;
+    let startPage = Math.max(1, currentPage - Math.floor(maxPagesToShow / 2));
+    let endPage = Math.min(totalPages, startPage + maxPagesToShow - 1);
+    
+    if (endPage - startPage < maxPagesToShow - 1) {
+        startPage = Math.max(1, endPage - maxPagesToShow + 1);
+    }
+    
+    const pageButtons = [];
+    
+    // First page
+    if (startPage > 1) {
+        pageButtons.push(`<button class="pagination-btn" onclick="goToPage('${serverName}', 1)">1</button>`);
+        if (startPage > 2) {
+            pageButtons.push(`<span class="pagination-ellipsis">...</span>`);
+        }
+    }
+    
+    // Page numbers
+    for (let i = startPage; i <= endPage; i++) {
+        pageButtons.push(
+            `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage('${serverName}', ${i})">${i}</button>`
+        );
+    }
+    
+    // Last page
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            pageButtons.push(`<span class="pagination-ellipsis">...</span>`);
+        }
+        pageButtons.push(`<button class="pagination-btn" onclick="goToPage('${serverName}', ${totalPages})">${totalPages}</button>`);
+    }
+    
+    return `
+        <div class="pagination-container">
+            <div class="pagination-info">
+                Showing ${startTask}-${endTask} of ${totalTasks} tasks
+            </div>
+            <div class="pagination-controls">
+                <button class="pagination-btn" onclick="goToPage('${serverName}', ${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>
+                    ← Previous
+                </button>
+                ${pageButtons.join('')}
+                <button class="pagination-btn" onclick="goToPage('${serverName}', ${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>
+                    Next →
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function goToPage(serverName, page) {
+    const state = paginationState[serverName];
+    const totalPages = Math.ceil(state.totalTasks / state.tasksPerPage);
+    
+    if (page < 1 || page > totalPages) return;
+    
+    refreshOverviewServer(serverName, page);
+    
+    // Scroll to top of table
+    const container = document.getElementById(`logs-${serverName}`);
+    if (container) {
+        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 async function stopTask(serverName, taskId) {
@@ -383,10 +577,15 @@ function closeTranscriptionTextModal() {
 // Export functions
 window.startOverviewRefresh = startOverviewRefresh;
 window.stopOverviewRefresh = stopOverviewRefresh;
-window.refreshOverviewData = refreshOverviewData;
+window.selectOverviewServer = selectOverviewServer;
+window.manualRefreshOverview = manualRefreshOverview;
+window.onOverviewFilterChange = onOverviewFilterChange;
+window.clearPendingTasksCurrent = clearPendingTasksCurrent;
+window.showDeleteOldTasksDialogCurrent = showDeleteOldTasksDialogCurrent;
+window.showDeleteAllTasksDialogCurrent = showDeleteAllTasksDialogCurrent;
 window.refreshOverviewServer = refreshOverviewServer;
 window.clearPendingTasks = clearPendingTasks;
-window.loadMoreTasks = loadMoreTasks;
+window.goToPage = goToPage;
 window.stopTask = stopTask;
 window.viewTranscriptionText = viewTranscriptionText;
 window.switchTranscriptionTab = switchTranscriptionTab;

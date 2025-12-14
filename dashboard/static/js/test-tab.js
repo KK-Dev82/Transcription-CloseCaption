@@ -288,6 +288,48 @@ function updateTestOverview(tasks) {
     `;
 }
 
+// Helper function to get step status
+function getStepStatus(task, stepName) {
+    const status = (task.status || 'unknown').toLowerCase();
+    const currentStage = (task.current_stage || '').toLowerCase();
+    
+    if (stepName === 'pending') {
+        // Pending is active when status is pending
+        return status === 'pending' ? 'active' : 
+               (status === 'processing' || status === 'transcribing' || status === 'completed' || status === 'failed') ? 'completed' : 'pending';
+    } else if (stepName === 'in_queue') {
+        // In queue is active when status is processing but stage hasn't started yet
+        return (status === 'processing' && !currentStage) || (status === 'processing' && currentStage === 'queued') ? 'active' :
+               (currentStage === 'extracting_audio' || currentStage === 'downloading' || currentStage === 'transcribing' || 
+                currentStage === 'merging' || currentStage === 'finalizing' || status === 'completed' || status === 'failed') ? 'completed' : 'pending';
+    } else if (stepName === 'audio_extraction') {
+        // Audio extraction is active when stage is extracting_audio or downloading
+        return currentStage === 'extracting_audio' || currentStage === 'downloading' ? 'active' :
+               (currentStage === 'transcribing' || currentStage === 'merging' || currentStage === 'finalizing' || 
+                status === 'completed' || status === 'failed') ? 'completed' : 'pending';
+    } else if (stepName === 'transcribe') {
+        // Transcribe is active when stage is transcribing
+        return currentStage === 'transcribing' ? 'active' :
+               (currentStage === 'merging' || currentStage === 'finalizing' || status === 'completed' || status === 'failed') ? 'completed' : 'pending';
+    } else if (stepName === 'completed') {
+        // Completed step shows completed or failed
+        return status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'pending';
+    }
+    return 'pending';
+}
+
+// Helper function to get step display name
+function getStepDisplayName(stepName) {
+    const stepNames = {
+        'pending': 'Pending',
+        'in_queue': 'In Queue',
+        'audio_extraction': 'Audio Extraction',
+        'transcribe': 'Transcribe',
+        'completed': 'Completed'
+    };
+    return stepNames[stepName] || stepName;
+}
+
 function updateTestTaskList(tasks) {
     const container = document.getElementById('testTasksContainer');
     if (!container) return;
@@ -308,12 +350,51 @@ function updateTestTaskList(tasks) {
         return;
     }
 
-    container.innerHTML = tasks.map((task, index) => {
+    // Sort tasks by creation time or keep original order
+    const sortedTasks = [...tasks].sort((a, b) => {
+        const aTime = new Date(a.created_at || 0);
+        const bTime = new Date(b.created_at || 0);
+        return aTime - bTime;
+    });
+
+    container.innerHTML = sortedTasks.map((task, index) => {
         const taskId = task.task_id || task.id || testTaskIds[index] || 'N/A';
         const status = (task.status || 'unknown').toLowerCase();
         const progress = task.progress || 0;
-        const stepInfo = task.current_stage || task.current_stage_description || task.stage || 'N/A';
+        const currentStage = (task.current_stage || '').toLowerCase();
+        const stageDescription = task.current_stage_description || task.current_stage || 'N/A';
         const fileName = task.file_name || task.filename || (task.file_path ? task.file_path.split('/').pop() : 'N/A');
+        
+        // Get step statuses
+        const steps = ['pending', 'in_queue', 'audio_extraction', 'transcribe', 'completed'];
+        const stepStatuses = steps.map(step => ({
+            name: step,
+            displayName: getStepDisplayName(step),
+            status: getStepStatus(task, step)
+        }));
+        
+        // Render step progress
+        const stepsHtml = stepStatuses.map((step, stepIndex) => {
+            let stepClass = 'step-pending';
+            let stepIcon = '⏸️';
+            let stepText = step.displayName;
+            
+            if (step.status === 'active') {
+                stepClass = 'step-active';
+                stepIcon = '⏳';
+            } else if (step.status === 'completed') {
+                stepClass = 'step-completed';
+                stepIcon = '✅';
+            } else if (step.status === 'failed' && step.name === 'completed') {
+                stepClass = 'step-failed';
+                stepIcon = '❌';
+                stepText = 'Failed';
+            }
+            
+            const arrow = stepIndex < stepStatuses.length - 1 ? ' → ' : '';
+            
+            return `<span class="step-item ${stepClass}">${stepIcon} ${stepText}</span>${arrow}`;
+        }).join('');
         
         // Get video duration if available
         let durationInfo = '';
@@ -336,15 +417,22 @@ function updateTestTaskList(tasks) {
         return `
             <div class="test-task-item ${statusClass}">
                 <div class="test-task-header">
-                    <div class="test-task-id" title="${taskId}">Task #${index + 1}: ${taskId.substring(0, 24)}...</div>
-                    <span class="log-item-status ${statusClass}">${status}</span>
+                    <div class="test-task-id" title="${taskId}">
+                        <strong>${index + 1}. Task ID:</strong> ${taskId.substring(0, 32)}...
+                    </div>
                 </div>
                 <div class="test-task-progress">
                     <div class="progress-bar">
                         <div class="progress-bar-fill" style="width: ${progress}%"></div>
                     </div>
-                    <div style="text-align: center; margin-top: 4px; font-size: 12px; color: var(--apple-gray-3); font-weight: 500;">
-                        ${progress}%
+                    <div style="text-align: center; margin-top: 4px; font-size: 14px; color: var(--apple-gray-4); font-weight: 600;">
+                        Progress: ${progress}%
+                    </div>
+                </div>
+                <div class="test-task-steps">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: var(--apple-gray-4);">Step Processing:</div>
+                    <div class="step-progress-container">
+                        ${stepsHtml}
                     </div>
                 </div>
                 <div class="test-task-info">
@@ -353,8 +441,8 @@ function updateTestTaskList(tasks) {
                         <div class="test-task-info-value">${fileName.length > 35 ? fileName.substring(0, 35) + '...' : fileName}${durationInfo}</div>
                     </div>
                     <div class="test-task-info-item">
-                        <div class="test-task-info-label">⚙️ Step</div>
-                        <div class="test-task-info-value">${stepInfo}</div>
+                        <div class="test-task-info-label">⚙️ Current Stage</div>
+                        <div class="test-task-info-value">${stageDescription}</div>
                     </div>
                     <div class="test-task-info-item">
                         <div class="test-task-info-label">🕐 Updated</div>

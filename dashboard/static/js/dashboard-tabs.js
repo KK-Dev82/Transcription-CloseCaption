@@ -21,21 +21,30 @@ function switchTab(tabName) {
 
     // Start appropriate refresh
     if (tabName === 'overview') {
-        if (typeof startOverviewRefresh === 'function') {
-            startOverviewRefresh();
-        }
+        // Stop other tabs
         if (typeof stopTestRefresh === 'function') {
             stopTestRefresh();
         }
         if (typeof stopMonitorRefresh === 'function') {
             stopMonitorRefresh();
         }
+        if (typeof stopMonitoringTab === 'function') {
+            stopMonitoringTab();
+        }
+        // Load initial server data (no auto-refresh)
+        if (typeof selectOverviewServer === 'function') {
+            selectOverviewServer('4000-ada-sc');
+        }
     } else if (tabName === 'test') {
+        // Stop other tabs
         if (typeof stopOverviewRefresh === 'function') {
             stopOverviewRefresh();
         }
         if (typeof stopMonitorRefresh === 'function') {
             stopMonitorRefresh();
+        }
+        if (typeof stopMonitoringTab === 'function') {
+            stopMonitoringTab();
         }
         const testResultsSection = document.getElementById('testResultsSection');
         if (testResultsSection && testResultsSection.style.display !== 'none') {
@@ -43,12 +52,34 @@ function switchTab(tabName) {
                 startTestRefresh();
             }
         }
-    } else if (tabName === 'monitor') {
+    } else if (tabName === 'monitoring') {
+        // Stop other tabs
         if (typeof stopOverviewRefresh === 'function') {
             stopOverviewRefresh();
         }
         if (typeof stopTestRefresh === 'function') {
             stopTestRefresh();
+        }
+        if (typeof stopMonitorRefresh === 'function') {
+            stopMonitorRefresh();
+        }
+        // Select default server and start monitoring tab (only refreshes itself)
+        if (typeof selectMonitoringServer === 'function') {
+            selectMonitoringServer('4000-ada-sc');
+        }
+        if (typeof startMonitoringTab === 'function') {
+            startMonitoringTab();
+        }
+    } else if (tabName === 'monitor') {
+        // Stop other tabs
+        if (typeof stopOverviewRefresh === 'function') {
+            stopOverviewRefresh();
+        }
+        if (typeof stopTestRefresh === 'function') {
+            stopTestRefresh();
+        }
+        if (typeof stopMonitoringTab === 'function') {
+            stopMonitoringTab();
         }
         if (typeof loadPreviousResults === 'function') {
             loadPreviousResults();

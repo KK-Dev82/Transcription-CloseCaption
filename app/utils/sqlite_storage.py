@@ -48,21 +48,38 @@ class SQLiteStorage:
         """สร้าง database tables"""
         conn = self._get_connection()
         
-        # Transcriptions table
+        # Transcriptions table - เพิ่ม fields สำหรับ compatibility กับ JSONStorage
         conn.execute("""
             CREATE TABLE IF NOT EXISTS transcriptions (
                 task_id TEXT PRIMARY KEY,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
                 file_path TEXT,
+                file_url TEXT,
+                file_name TEXT,
                 language TEXT,
                 total_duration REAL,
                 full_text TEXT,
+                original_text TEXT,
+                corrected_text TEXT,
+                partial_text TEXT,
                 chunks_json TEXT,
                 status TEXT DEFAULT 'pending',
+                progress INTEGER DEFAULT 0,
                 model_size TEXT,
                 chunk_duration INTEGER,
-                error_message TEXT
+                error_message TEXT,
+                processing_time REAL,
+                transcription_time REAL,
+                audio_extraction_time REAL,
+                text_correction_time REAL,
+                current_stage TEXT,
+                current_stage_description TEXT,
+                stage_progress INTEGER,
+                job_id TEXT,
+                user_id TEXT,
+                callback_url TEXT
             )
         """)
         
@@ -128,10 +145,47 @@ class SQLiteStorage:
         # Indexes สำหรับ performance
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_status ON transcriptions(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at ON transcriptions(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_updated_at ON transcriptions(updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_completed_at ON transcriptions(completed_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_captions_status ON captions(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_status ON video_tasks(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_type ON video_tasks(type)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_live_streams_status ON live_streams(status)")
+        
+        # Migrate existing table schema (add new columns if they don't exist)
+        try:
+            # Check if new columns exist, if not add them
+            cursor = conn.execute("PRAGMA table_info(transcriptions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            new_columns = {
+                'completed_at': 'TIMESTAMP',
+                'file_url': 'TEXT',
+                'file_name': 'TEXT',
+                'original_text': 'TEXT',
+                'corrected_text': 'TEXT',
+                'partial_text': 'TEXT',
+                'progress': 'INTEGER DEFAULT 0',
+                'processing_time': 'REAL',
+                'transcription_time': 'REAL',
+                'audio_extraction_time': 'REAL',
+                'text_correction_time': 'REAL',
+                'current_stage': 'TEXT',
+                'current_stage_description': 'TEXT',
+                'stage_progress': 'INTEGER',
+                'job_id': 'TEXT',
+                'user_id': 'TEXT',
+                'callback_url': 'TEXT'
+            }
+            
+            for col_name, col_type in new_columns.items():
+                if col_name not in existing_columns:
+                    logger.info(f"Adding column {col_name} to transcriptions table")
+                    conn.execute(f"ALTER TABLE transcriptions ADD COLUMN {col_name} {col_type}")
+            
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Error migrating table schema: {e}")
         
         conn.commit()
     
@@ -165,7 +219,7 @@ class SQLiteStorage:
         return task_id
     
     def load_transcription(self, task_id: str) -> Optional[Dict]:
-        """โหลดข้อมูล transcription"""
+        """โหลดข้อมูล transcription (return format compatible กับ JSONStorage)"""
         conn = self._get_connection()
         
         cursor = conn.execute(
@@ -178,48 +232,93 @@ class SQLiteStorage:
             return None
         
         try:
-            chunks = json.loads(row['chunks_json']) if row['chunks_json'] else []
+            chunks = json.loads(row['chunks_json']) if row.get('chunks_json') else []
         except:
             chunks = []
         
+        # Return format compatible กับ JSONStorage
         return {
             "task_id": row['task_id'],
-            "created_at": row['created_at'],
-            "updated_at": row['updated_at'],
-            "file_path": row['file_path'],
-            "language": row['language'],
-            "total_duration": row['total_duration'],
+            "created_at": row.get('created_at'),
+            "updated_at": row.get('updated_at'),
+            "completed_at": row.get('completed_at'),
+            "file_path": row.get('file_path'),
+            "file_url": row.get('file_url'),
+            "file_name": row.get('file_name'),
+            "language": row.get('language'),
+            "total_duration": row.get('total_duration'),
             "chunks": chunks,
-            "full_text": row['full_text'],
-            "status": row['status'],
-            "model_size": row['model_size'],
-            "chunk_duration": row['chunk_duration'],
-            "error_message": row['error_message']
+            "full_text": row.get('full_text', ''),
+            "original_text": row.get('original_text'),
+            "corrected_text": row.get('corrected_text'),
+            "partial_text": row.get('partial_text'),
+            "status": row.get('status', 'pending'),
+            "progress": row.get('progress', 0),
+            "model_size": row.get('model_size'),
+            "chunk_duration": row.get('chunk_duration'),
+            "error_message": row.get('error_message'),
+            "processing_time": row.get('processing_time'),
+            "transcription_time": row.get('transcription_time'),
+            "audio_extraction_time": row.get('audio_extraction_time'),
+            "text_correction_time": row.get('text_correction_time'),
+            "current_stage": row.get('current_stage'),
+            "current_stage_description": row.get('current_stage_description'),
+            "stage_progress": row.get('stage_progress'),
+            "job_id": row.get('job_id'),
+            "user_id": row.get('user_id'),
+            "callback_url": row.get('callback_url')
         }
     
     def list_all_transcriptions(self) -> List[Dict]:
-        """ดึงรายการ transcription ทั้งหมด"""
+        """ดึงรายการ transcription ทั้งหมด (return format compatible กับ JSONStorage)"""
         conn = self._get_connection()
         
+        # Load full data (compatible with JSONStorage format)
         cursor = conn.execute("""
-            SELECT task_id, created_at, file_path, language, total_duration, 
-                   status, model_size, LENGTH(full_text) as text_length
-            FROM transcriptions 
-            ORDER BY created_at DESC
+            SELECT * FROM transcriptions 
+            ORDER BY updated_at DESC, created_at DESC
         """)
         
         results = []
         for row in cursor.fetchall():
-            results.append({
+            try:
+                chunks = json.loads(row['chunks_json']) if row.get('chunks_json') else []
+            except:
+                chunks = []
+            
+            # Return format compatible กับ JSONStorage
+            result = {
                 "task_id": row['task_id'],
-                "created_at": row['created_at'],
-                "file_path": row['file_path'],
-                "language": row['language'],
-                "total_duration": row['total_duration'],
-                "status": row['status'],
-                "model_size": row['model_size'],
-                "text_length": row['text_length']
-            })
+                "created_at": row.get('created_at'),
+                "updated_at": row.get('updated_at'),
+                "completed_at": row.get('completed_at'),
+                "file_path": row.get('file_path'),
+                "file_url": row.get('file_url'),
+                "file_name": row.get('file_name'),
+                "language": row.get('language'),
+                "total_duration": row.get('total_duration'),
+                "chunks": chunks,
+                "full_text": row.get('full_text', ''),
+                "original_text": row.get('original_text'),
+                "corrected_text": row.get('corrected_text'),
+                "partial_text": row.get('partial_text'),
+                "status": row.get('status', 'pending'),
+                "progress": row.get('progress', 0),
+                "model_size": row.get('model_size'),
+                "chunk_duration": row.get('chunk_duration'),
+                "error_message": row.get('error_message'),
+                "processing_time": row.get('processing_time'),
+                "transcription_time": row.get('transcription_time'),
+                "audio_extraction_time": row.get('audio_extraction_time'),
+                "text_correction_time": row.get('text_correction_time'),
+                "current_stage": row.get('current_stage'),
+                "current_stage_description": row.get('current_stage_description'),
+                "stage_progress": row.get('stage_progress'),
+                "job_id": row.get('job_id'),
+                "user_id": row.get('user_id'),
+                "callback_url": row.get('callback_url')
+            }
+            results.append(result)
         
         return results
     
