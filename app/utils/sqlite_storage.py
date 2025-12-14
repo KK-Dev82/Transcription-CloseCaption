@@ -402,6 +402,32 @@ class SQLiteStorage:
                     logger.warning(f"Error processing transcription row: {e}")
                     continue
             
+            # Fallback: เพิ่ม tasks จาก JSON storage ที่ยังไม่อยู่ใน SQLite
+            sqlite_task_ids = {r.get('task_id') for r in results if r.get('task_id')}
+            try:
+                from .json_storage import JSONStorage
+                json_storage = JSONStorage()
+                json_tasks = json_storage.list_all_transcriptions()
+                
+                # เพิ่มเฉพาะ tasks ที่ยังไม่อยู่ใน SQLite
+                for json_task in json_tasks:
+                    task_id = json_task.get('task_id')
+                    if task_id and task_id not in sqlite_task_ids:
+                        logger.debug(f"📦 Found task {task_id} in JSON storage (not in SQLite) - adding to result")
+                        results.append(json_task)
+                        
+                        # Optionally auto-migrate
+                        try:
+                            self.save_transcription(task_id, json_task)
+                            logger.debug(f"✅ Auto-migrated task {task_id} from JSON to SQLite")
+                        except Exception as migrate_error:
+                            logger.debug(f"⚠️ Failed to auto-migrate task {task_id}: {migrate_error}")
+                
+                # Re-sort หลังจากรวมข้อมูล
+                results.sort(key=lambda x: x.get('updated_at') or x.get('created_at') or '', reverse=True)
+            except Exception as e:
+                logger.debug(f"JSON fallback not available in list_all_transcriptions: {e}")
+            
             return results
         except Exception as e:
             logger.error(f"Error listing transcriptions: {e}", exc_info=True)
