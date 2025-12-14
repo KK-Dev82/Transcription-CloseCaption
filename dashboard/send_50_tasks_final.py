@@ -186,11 +186,56 @@ async def main():
             print('❌ ไม่ได้รับ task_ids จาก batch')
             return
     else:
-        # ใช้วิธีเดิม (SSH) - ต้อง import functions เดิม
-        print('❌ Dashboard API ไม่พร้อมใช้งาน')
-        print('   กรุณารัน dashboard ก่อน: cd dashboard && python3 main.py')
-        print('   หรือตั้งค่า DASHBOARD_API_URL environment variable')
-        return
+        # Dashboard API ไม่พร้อมใช้งาน - ใช้ direct API แทน SSH
+        print('⚠️  Dashboard API ไม่พร้อมใช้งาน - ใช้ Direct API แทน')
+        print(f'   Connecting directly to: {SERVERS[server_name]["api_url"]}')
+        
+        # ใช้ Direct API แทน SSH
+        async with aiohttp.ClientSession() as session:
+            api_url = SERVERS[server_name]["api_url"]
+            task_ids = []
+            
+            print(f'📤 Sending {target_count} tasks directly via API...')
+            print(f'   Server: {server_name} ({api_url})')
+            
+            async def send_task(video_file):
+                try:
+                    payload = {
+                        "file_path": video_file,
+                        "language": "th",
+                        "model_size": "base",
+                        "use_chunking": False
+                    }
+                    async with session.post(
+                        f"{api_url}/transcribe/",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            return result.get("task_id")
+                        else:
+                            error_text = await response.text()
+                            print(f'❌ Error sending task: {response.status} - {error_text[:100]}')
+                            return None
+                except Exception as e:
+                    print(f'❌ Exception sending task: {e}')
+                    return None
+            
+            # ส่ง tasks พร้อมกัน
+            tasks = [send_task(file_path) for _ in range(target_count)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if result and not isinstance(result, Exception):
+                    task_ids.append(result)
+            
+            if len(task_ids) == 0:
+                print('❌ ไม่สามารถส่ง tasks ได้เลย')
+                print('   ตรวจสอบว่า transcription service ทำงานอยู่หรือไม่')
+                return
+            
+            print(f'✅ ส่ง tasks สำเร็จ: {len(task_ids)}/{target_count}')
     
     if len(task_ids) < target_count:
         print(f'⚠️  เตือน: ได้รับเพียง {len(task_ids)}/{target_count} task_ids')
