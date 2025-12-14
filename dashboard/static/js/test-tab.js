@@ -305,17 +305,7 @@ async function refreshTestResults() {
             testTaskIds.map(async (taskId) => {
                 try {
                     // Use Dashboard API to proxy request (avoids CORS)
-                    const response = await fetch(`/api/server/${serverName}/task/${taskId}`, {
-                        method: 'GET',
-                        headers: { 'Content-Type': 'application/json' },
-                        timeout: 10000
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-                    }
-                    
-                    const task = await response.json();
+                    const task = await dashboardAPI.getTaskStatus(serverName, taskId);
                     return task;
                 } catch (error) {
                     console.error(`Error fetching task ${taskId}:`, error);
