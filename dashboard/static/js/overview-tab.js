@@ -470,16 +470,22 @@ async function stopTask(serverName, taskId) {
     
     try {
         const result = await dashboardAPI.stopTask(serverName, taskId);
-        if (result.success) {
+        if (result && result.success) {
             alert(`✅ ${result.message || 'Task stopped successfully'}`);
             // Refresh the server's task list
             refreshOverviewServer(serverName);
         } else {
-            alert(`❌ Error: ${result.error || 'Failed to stop task'}`);
+            // Handle both error formats: result.error or result.message
+            const errorMsg = result?.error || result?.message || 'Failed to stop task';
+            alert(`⚠️ ${errorMsg}${result?.note ? '\n\n' + result.note : ''}`);
+            // Still refresh to show current status
+            refreshOverviewServer(serverName);
         }
     } catch (error) {
         console.error('Error stopping task:', error);
-        alert(`Error: ${error.message || 'Unknown error'}`);
+        alert(`❌ Error: ${error.message || 'Unknown error'}\n\nTask may already be completed or the server may not support stopping tasks.`);
+        // Still refresh to show current status
+        refreshOverviewServer(serverName);
     }
 }
 
