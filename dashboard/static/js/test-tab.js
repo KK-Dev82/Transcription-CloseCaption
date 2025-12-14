@@ -163,26 +163,91 @@ async function startTest() {
                 <div class="overview-stat-label">Total</div>
             </div>
             <div class="overview-stat">
-                <div class="overview-stat-value" style="color: #007aff;">Starting...</div>
-                <div class="overview-stat-label">Status</div>
+                <div class="overview-stat-value" style="color: #007aff;">0</div>
+                <div class="overview-stat-label">Completed</div>
+            </div>
+            <div class="overview-stat">
+                <div class="overview-stat-value" style="color: #ff9500;">0</div>
+                <div class="overview-stat-label">Processing</div>
+            </div>
+            <div class="overview-stat">
+                <div class="overview-stat-value" style="color: #007aff;">${count}</div>
+                <div class="overview-stat-label">Pending</div>
+            </div>
+            <div class="overview-stat">
+                <div class="overview-stat-value" style="color: #ff3b30;">0</div>
+                <div class="overview-stat-label">Failed</div>
             </div>
         `;
         document.getElementById('testTasksContainer').innerHTML = '<div class="loading">🔄 กำลังส่ง tasks ไปยัง server... กรุณารอสักครู่</div>';
         
         // Poll batch status to get task_ids
+        let pollAttempts = 0;
+        const MAX_POLL_ATTEMPTS = 60; // 60 attempts = 60 seconds max wait
         const pollBatchStatus = async () => {
+            pollAttempts++;
+            
+            // Update loading message
+            const container = document.getElementById('testTasksContainer');
+            if (container) {
+                container.innerHTML = `
+                    <div class="loading">
+                        ⏳ กำลังสร้าง tasks... (รอ task IDs จาก server)
+                        <br><small style="color: var(--apple-gray-3);">Attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} - รอสักครู่แล้วจะอัพเดทอัตโนมัติ</small>
+                    </div>
+                `;
+            }
+            
             try {
                 const batchStatus = await dashboardAPI.getBatchStatus(batchId);
-                if (batchStatus && batchStatus.task_ids && batchStatus.task_ids.length > 0) {
+                
+                if (!batchStatus) {
+                    if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                        container.innerHTML = '<div class="error">❌ Timeout: ไม่สามารถรับ task IDs ได้ กรุณาลองใหม่</div>';
+                        return;
+                    }
+                    setTimeout(pollBatchStatus, 1000);
+                    return;
+                }
+                
+                // Check if tasks are being sent
+                if (batchStatus.status === 'failed') {
+                    container.innerHTML = '<div class="error">❌ Batch failed: ไม่สามารถส่ง tasks ได้</div>';
+                    return;
+                }
+                
+                // Check if we have task_ids
+                if (batchStatus.task_ids && batchStatus.task_ids.length > 0) {
                     testTaskIds = batchStatus.task_ids;
-                    // Start refresh loop
+                    console.log(`✅ Got ${testTaskIds.length} task IDs, starting refresh...`);
+                    
+                    // Clear loading message
+                    const container = document.getElementById('testTasksContainer');
+                    if (container) {
+                        container.innerHTML = '<div class="loading">📡 กำลังโหลด task status...</div>';
+                    }
+                    
+                    // Start refresh loop immediately
                     startTestRefresh();
                 } else {
-                    // Still waiting for tasks - poll again after 1 second
+                    // Still waiting for tasks - poll again
+                    if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                        container.innerHTML = '<div class="error">❌ Timeout: ไม่ได้รับ task IDs ภายใน 60 วินาที กรุณาลองใหม่</div>';
+                        return;
+                    }
                     setTimeout(pollBatchStatus, 1000);
                 }
             } catch (error) {
                 console.error('Error polling batch status:', error);
+                
+                if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    const container = document.getElementById('testTasksContainer');
+                    if (container) {
+                        container.innerHTML = `<div class="error">❌ Error: ${error.message || 'ไม่สามารถเชื่อมต่อกับ server ได้'}</div>`;
+                    }
+                    return;
+                }
+                
                 // Still try to poll
                 setTimeout(pollBatchStatus, 2000);
             }
@@ -223,21 +288,34 @@ function stopTestRefresh() {
 }
 
 async function refreshTestResults() {
-    if (testTaskIds.length === 0) return;
+    if (testTaskIds.length === 0) {
+        console.warn('No task IDs to refresh');
+        return;
+    }
 
     try {
         const serverName = document.getElementById('testServer').value;
-        if (!serverName) return;
+        if (!serverName) {
+            console.warn('No server selected');
+            return;
+        }
 
         // Fetch all task statuses
         const remoteAPI = new RemoteServerAPI(serverName);
         const tasks = await Promise.all(
             testTaskIds.map(async (taskId) => {
                 try {
-                    return await remoteAPI.getTaskStatus(taskId);
+                    const task = await remoteAPI.getTaskStatus(taskId);
+                    return task;
                 } catch (error) {
-                    console.error(`Error fetching task ${taskId}:`, error);
-                    return null;
+                    console.error(`Error fetching task ${taskId.substring(0, 16)}...:`, error);
+                    // Return a placeholder task with error status
+                    return {
+                        task_id: taskId,
+                        status: 'error',
+                        error_message: `Failed to fetch: ${error.message || 'Connection error'}`,
+                        progress: 0
+                    };
                 }
             })
         );
@@ -249,8 +327,32 @@ async function refreshTestResults() {
 
         // Update task list
         updateTestTaskList(validTasks);
+        
+        // Log refresh status
+        const completed = validTasks.filter(t => t.status === 'completed').length;
+        const processing = validTasks.filter(t => t.status === 'processing' || t.status === 'transcribing').length;
+        const pending = validTasks.filter(t => t.status === 'pending').length;
+        const failed = validTasks.filter(t => t.status === 'failed' || t.status === 'error').length;
+        
+        console.log(`📊 Test refresh: ${completed} completed, ${processing} processing, ${pending} pending, ${failed} failed`);
+        
     } catch (error) {
         console.error('Error refreshing test results:', error);
+        
+        // Show error in UI
+        const container = document.getElementById('testTasksContainer');
+        if (container && testTaskIds.length > 0) {
+            const errorHtml = `
+                <div class="error" style="padding: 16px; background: #ffebee; border-radius: 8px; margin-bottom: 16px;">
+                    <strong>❌ Error refreshing tasks:</strong> ${error.message || 'Connection error'}
+                    <br><small style="color: #666;">Trying to reconnect...</small>
+                </div>
+            `;
+            const currentHtml = container.innerHTML;
+            if (!currentHtml.includes('Error refreshing')) {
+                container.innerHTML = errorHtml + (currentHtml || '');
+            }
+        }
     }
 }
 
@@ -341,12 +443,16 @@ function updateTestTaskList(tasks) {
     
     if (tasks.length === 0 && testTaskIds.length > 0) {
         // Tasks are being created but not yet available
-        container.innerHTML = `
-            <div class="loading">
-                ⏳ กำลังสร้าง tasks... (${testTaskIds.length} tasks)
-                <br><small style="color: var(--apple-gray-3);">รอสักครู่แล้วจะอัพเดทอัตโนมัติ</small>
-            </div>
-        `;
+        // Check if we're still polling for task IDs or if we have them but can't fetch status
+        const hasError = container.innerHTML.includes('Error');
+        if (!hasError) {
+            container.innerHTML = `
+                <div class="loading">
+                    ⏳ กำลังโหลด task status... (${testTaskIds.length} tasks)
+                    <br><small style="color: var(--apple-gray-3);">รอสักครู่แล้วจะอัพเดทอัตโนมัติ</small>
+                </div>
+            `;
+        }
         return;
     }
 
@@ -494,4 +600,7 @@ function updateTestTaskList(tasks) {
 // Export functions
 window.onTestServerChange = onTestServerChange;
 window.startTest = startTest;
+window.updateTestStartButton = updateTestStartButton;
+window.startTestRefresh = startTestRefresh;
+window.stopTestRefresh = stopTestRefresh;
 
