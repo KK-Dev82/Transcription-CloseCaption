@@ -142,52 +142,74 @@ class SQLiteStorage:
             )
         """)
         
-        # Indexes สำหรับ performance
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_status ON transcriptions(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at ON transcriptions(created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_updated_at ON transcriptions(updated_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_completed_at ON transcriptions(completed_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_captions_status ON captions(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_status ON video_tasks(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_type ON video_tasks(type)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_live_streams_status ON live_streams(status)")
-        
         # Migrate existing table schema (add new columns if they don't exist)
+        # ต้องทำก่อนสร้าง indexes เพื่อไม่ให้เกิด error
         try:
-            # Check if new columns exist, if not add them
-            cursor = conn.execute("PRAGMA table_info(transcriptions)")
-            existing_columns = [row[1] for row in cursor.fetchall()]
+            # Check if table exists
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transcriptions'")
+            table_exists = cursor.fetchone() is not None
             
-            new_columns = {
-                'completed_at': 'TIMESTAMP',
-                'file_url': 'TEXT',
-                'file_name': 'TEXT',
-                'original_text': 'TEXT',
-                'corrected_text': 'TEXT',
-                'partial_text': 'TEXT',
-                'progress': 'INTEGER DEFAULT 0',
-                'processing_time': 'REAL',
-                'transcription_time': 'REAL',
-                'audio_extraction_time': 'REAL',
-                'text_correction_time': 'REAL',
-                'current_stage': 'TEXT',
-                'current_stage_description': 'TEXT',
-                'stage_progress': 'INTEGER',
-                'job_id': 'TEXT',
-                'user_id': 'TEXT',
-                'callback_url': 'TEXT'
-            }
-            
-            for col_name, col_type in new_columns.items():
-                if col_name not in existing_columns:
-                    logger.info(f"Adding column {col_name} to transcriptions table")
-                    conn.execute(f"ALTER TABLE transcriptions ADD COLUMN {col_name} {col_type}")
-            
-            conn.commit()
+            if table_exists:
+                # Check if new columns exist, if not add them
+                cursor = conn.execute("PRAGMA table_info(transcriptions)")
+                existing_columns = [row[1] for row in cursor.fetchall()]
+                
+                new_columns = {
+                    'completed_at': 'TIMESTAMP',
+                    'file_url': 'TEXT',
+                    'file_name': 'TEXT',
+                    'original_text': 'TEXT',
+                    'corrected_text': 'TEXT',
+                    'partial_text': 'TEXT',
+                    'progress': 'INTEGER DEFAULT 0',
+                    'processing_time': 'REAL',
+                    'transcription_time': 'REAL',
+                    'audio_extraction_time': 'REAL',
+                    'text_correction_time': 'REAL',
+                    'current_stage': 'TEXT',
+                    'current_stage_description': 'TEXT',
+                    'stage_progress': 'INTEGER',
+                    'job_id': 'TEXT',
+                    'user_id': 'TEXT',
+                    'callback_url': 'TEXT'
+                }
+                
+                for col_name, col_type in new_columns.items():
+                    if col_name not in existing_columns:
+                        logger.info(f"Adding column {col_name} to transcriptions table")
+                        try:
+                            conn.execute(f"ALTER TABLE transcriptions ADD COLUMN {col_name} {col_type}")
+                        except Exception as e:
+                            logger.warning(f"Failed to add column {col_name}: {e}")
+                
+                conn.commit()
         except Exception as e:
             logger.warning(f"Error migrating table schema: {e}")
         
-        conn.commit()
+        # Indexes สำหรับ performance (สร้างหลังจาก migrate schema แล้ว)
+        # ใช้ IF NOT EXISTS และตรวจสอบว่า column มีอยู่ก่อน
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_status ON transcriptions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at ON transcriptions(created_at)")
+            
+            # ตรวจสอบว่า column มีอยู่ก่อนสร้าง index
+            cursor = conn.execute("PRAGMA table_info(transcriptions)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'updated_at' in existing_columns:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_updated_at ON transcriptions(updated_at)")
+            if 'completed_at' in existing_columns:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_completed_at ON transcriptions(completed_at)")
+            
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_captions_status ON captions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_status ON video_tasks(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_type ON video_tasks(type)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_live_streams_status ON live_streams(status)")
+            
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Error creating indexes: {e}")
+            conn.rollback()
     
     # Transcription methods
     def save_transcription(self, task_id: str, transcription_data: Dict) -> str:
