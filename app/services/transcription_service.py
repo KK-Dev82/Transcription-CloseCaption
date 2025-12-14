@@ -21,7 +21,8 @@ from .websocket_service import websocket_manager
 from .dictionary_service import DictionaryService
 from .prompt_builder import PromptBuilder
 from ..models.transcription import TranscriptionChunk, TranscriptionResponse
-from ..utils.json_storage import JSONStorage
+# ไม่ใช้ JSONStorage โดยตรงแล้ว ใช้ StorageFactory แทน
+# from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
 
