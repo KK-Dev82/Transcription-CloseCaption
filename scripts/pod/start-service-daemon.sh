@@ -83,10 +83,18 @@ if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]
     apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 || {
         echo "⚠️  Failed to install tzdata (may continue anyway)"
     }
+    # Verify installation succeeded
+    if [ -d "/usr/share/zoneinfo" ] && [ -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
+        echo "✅ tzdata installed successfully"
+    else
+        echo "⚠️  tzdata installation may have failed, but continuing..."
+    fi
+else
+    echo "✅ Timezone data already available (skipping installation)"
 fi
 if [ -d "/usr/share/zoneinfo" ]; then
     export TZDIR=/usr/share/zoneinfo
-    echo "✅ Timezone data available"
+    echo "✅ Timezone data ready"
 else
     echo "⚠️  Timezone data not found"
 fi
