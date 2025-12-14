@@ -204,13 +204,11 @@ async function refreshMonitorStatus(serverName) {
     
     try {
         // Use Dashboard API proxy to avoid CORS issues
-        // const remoteAPI = new RemoteServerAPI(serverName); // DEPRECATED: Use dashboardAPI instead
-        
         // Fetch all task statuses
         const tasks = await Promise.all(
             monitorTaskIds.map(async (taskId) => {
                 try {
-                    return await remoteAPI.getTaskStatus(taskId);
+                    return await dashboardAPI.getTaskStatus(serverName, taskId);
                 } catch (error) {
                     console.error(`Error fetching task ${taskId}:`, error);
                     return { task_id: taskId, status: 'unknown' };
