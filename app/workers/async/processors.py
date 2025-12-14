@@ -550,7 +550,18 @@ class AsyncTaskProcessors:
                     if task_in_service:
                         logger.info(f"📋 Found task in transcription_service: full_text length={len(task_in_service.full_text) if task_in_service.full_text else 0}, chunks count={len(task_in_service.chunks) if task_in_service.chunks else 0}")
                         full_text = task_in_service.full_text if task_in_service.full_text else ''
-                        chunks = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
+                        # Handle chunks - อาจเป็น list ของ dict หรือ Pydantic models
+                        if task_in_service.chunks:
+                            chunks = []
+                            for chunk in task_in_service.chunks:
+                                if isinstance(chunk, dict):
+                                    chunks.append(chunk)
+                                elif hasattr(chunk, 'dict'):
+                                    chunks.append(chunk.dict())
+                                else:
+                                    chunks.append(chunk)
+                        else:
+                            chunks = []
                 
                 # ดึง transcription_time จาก existing_transcription
                 transcription_time = existing_transcription.get('transcription_time') or existing_transcription.get('processing_time') or existing_transcription.get('time_used')
@@ -615,7 +626,18 @@ class AsyncTaskProcessors:
                     task_data['completed_at'] = datetime.now(timezone.utc).isoformat()
                     task_data['progress'] = 100
                     task_data['full_text'] = task_in_service.full_text if task_in_service.full_text else ''
-                    task_data['chunks'] = [chunk.dict() for chunk in task_in_service.chunks] if task_in_service.chunks else []
+                    # Handle chunks - อาจเป็น list ของ dict หรือ Pydantic models
+                    if task_in_service.chunks:
+                        task_data['chunks'] = []
+                        for chunk in task_in_service.chunks:
+                            if isinstance(chunk, dict):
+                                task_data['chunks'].append(chunk)
+                            elif hasattr(chunk, 'dict'):
+                                task_data['chunks'].append(chunk.dict())
+                            else:
+                                task_data['chunks'].append(chunk)
+                    else:
+                        task_data['chunks'] = []
                     task_data['total_duration'] = task_in_service.total_duration
                 else:
                     logger.error(f"❌ No transcription data found in storage or service for {task_id}")
