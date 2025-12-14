@@ -14,7 +14,8 @@ import time
 from .file_service import FileService
 from .rabbitmq_service import RabbitMQService
 from .whisper_service import WhisperService
-from ..utils.json_storage import JSONStorage
+# ไม่ใช้ JSONStorage โดยตรงแล้ว ใช้ StorageFactory แทน
+# from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
 
