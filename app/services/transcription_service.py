@@ -36,7 +36,10 @@ class TranscriptionService:
         self.video_service = VideoService()
         self.rabbitmq_service = RabbitMQService()
         self.webhook_service = webhook_service
-        self.json_storage = JSONStorage()
+        
+        # ใช้ StorageFactory เพื่อเลือก storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
+        from ..utils.storage_factory import get_storage
+        self.json_storage = get_storage()  # จะได้ SQLiteStorage หรือ JSONStorage ตาม env
         
         # Dictionary และ Prompt services สำหรับ initial_prompt
         self.dictionary_service = DictionaryService()
@@ -44,6 +47,10 @@ class TranscriptionService:
         
         self.tasks: Dict[str, TranscriptionResponse] = {}
         self.task_contexts: Dict[str, Dict[str, Optional[str]]] = {}
+        
+        # Temporary files management: default ไม่เก็บไฟล์ชั่วคราว (ประหยัด volume)
+        self.save_temp_files = os.getenv('SAVE_TEMP_FILES', 'not_save').lower() == 'save'
+        logger.info(f"📁 Temporary files management: {'SAVE' if self.save_temp_files else 'DELETE (default)'}")
         
         # DEPRECATED: ไม่ใช้ api_server_url แล้ว
         # ระบบใช้ SignalR ผ่าน senate-backend แทน WebSocket
@@ -874,13 +881,36 @@ class TranscriptionService:
                     self.json_storage.save_transcription(task_id, task_dict)
                     logger.info(f"✅ Transcription saved to storage")
                     
-                    # Cleanup temporary audio file (ถ้า extract จาก video)
-                    if audio_path != local_file_path and Path(audio_path).exists():
+                    # Cleanup temporary audio file และ wav files (ถ้า extract จาก video)
+                    # ลบทันทีหลัง transcribe เสร็จและบันทึก JSON fullText แล้ว (ถ้า SAVE_TEMP_FILES=not_save)
+                    if not self.save_temp_files:
+                        # ลบไฟล์ wav ที่ extract จาก video
+                        if audio_path != local_file_path and Path(audio_path).exists():
+                            try:
+                                # ลบไฟล์ wav
+                                Path(audio_path).unlink()
+                                logger.info(f"🧹 ลบ temporary audio file: {audio_path}")
+                                
+                                # ลบ temp folder ถ้ามี (เช่น temp/task_xxx/ หรือ temp/audio_xxx/)
+                                audio_path_obj = Path(audio_path)
+                                temp_folder = audio_path_obj.parent
+                                if temp_folder.exists() and (temp_folder.name.startswith('task_') or temp_folder.name.startswith('audio_')):
+                                    try:
+                                        import shutil
+                                        shutil.rmtree(temp_folder)
+                                        logger.info(f"🧹 ลบ temp folder: {temp_folder}")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ ไม่สามารถลบ temp folder {temp_folder}: {e}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ ไม่สามารถลบ temporary audio file: {e}")
+                        
+                        # ลบ wav files ใน uploads/tmp
                         try:
-                            Path(audio_path).unlink()
-                            logger.info(f"🧹 ลบ temporary audio file: {audio_path}")
+                            self.file_service.cleanup_wav_files_in_uploads_tmp()
                         except Exception as e:
-                            logger.warning(f"⚠️ ไม่สามารถลบ temporary audio file: {e}")
+                            logger.warning(f"⚠️ ไม่สามารถลบ wav files ใน uploads/tmp: {e}")
+                    else:
+                        logger.debug(f"💾 Keeping temporary audio file (SAVE_TEMP_FILES=save): {audio_path}")
                     
                     return
                     
@@ -1278,12 +1308,15 @@ class TranscriptionService:
             task.progress = 100
             task.completed_at = utc_now()
             
-            # 🧹 ลบ temp files หลังเสร็จสิ้น
-            try:
-                self.file_service.cleanup_temp_files(chunks)
-                logger.info(f"ลบ temp files สำเร็จ: {len(chunks)} files")
-            except Exception as e:
-                logger.warning(f"ไม่สามารถลบ temp files: {e}")
+            # 🧹 ลบ temp files หลังเสร็จสิ้น (ถ้า SAVE_TEMP_FILES=not_save)
+            if not self.save_temp_files:
+                try:
+                    self.file_service.cleanup_temp_files(chunks)
+                    logger.info(f"🧹 ลบ temp files สำเร็จ: {len(chunks)} files")
+                except Exception as e:
+                    logger.warning(f"⚠️ ไม่สามารถลบ temp files: {e}")
+            else:
+                logger.debug(f"💾 Keeping temp files (SAVE_TEMP_FILES=save): {len(chunks)} files")
             
             # 📞 Callback to Backend (ถ้ามี callback_url)
             # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
@@ -1382,9 +1415,14 @@ class TranscriptionService:
             
             logger.info(f"✅ แปลงเสียงเสร็จสิ้น: {task_id}")
             
-            # ลบไฟล์ชั่วคราวหลังจากประมวลผลเสร็จแล้ว (ปิดไว้เพื่อ debug)
-            # if 'chunks' in locals():
-            #     self.file_service.cleanup_temp_files(chunks)
+            # 🧹 ลบไฟล์ชั่วคราวหลังจากประมวลผลเสร็จแล้ว (ถ้า SAVE_TEMP_FILES=not_save)
+            if not self.save_temp_files:
+                if 'chunks' in locals():
+                    try:
+                        self.file_service.cleanup_temp_files(chunks)
+                        logger.info(f"🧹 ลบ temp files สำเร็จ: {len(chunks)} files")
+                    except Exception as e:
+                        logger.warning(f"⚠️ ไม่สามารถลบ temp files: {e}")
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง {task_id}: {e}")
@@ -1395,28 +1433,35 @@ class TranscriptionService:
             # Note: ไม่ต้องส่ง WebSocket notification จาก transcription-api แล้ว
             # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
             
-            # ลบไฟล์ชั่วคราวในกรณีเกิดข้อผิดพลาด (ปิดไว้เพื่อ debug)
-            # if 'chunks' in locals():
-            #     self.file_service.cleanup_temp_files(chunks)
+            # 🧹 ลบไฟล์ชั่วคราวในกรณีเกิดข้อผิดพลาด (ถ้า SAVE_TEMP_FILES=not_save)
+            if not self.save_temp_files:
+                if 'chunks' in locals():
+                    try:
+                        self.file_service.cleanup_temp_files(chunks)
+                    except Exception as e:
+                        logger.warning(f"⚠️ ไม่สามารถลบ temp files: {e}")
         finally:
+            # Cleanup temporary files และ folders (ถ้า SAVE_TEMP_FILES=not_save)
             context = self.task_contexts.get(task_id, {})
-            if downloaded_file_path:
-                try:
-                    Path(downloaded_file_path).unlink(missing_ok=True)
-                    logger.info("ลบไฟล์ที่ดาวน์โหลดสำหรับ task %s: %s", task_id, downloaded_file_path)
-                except Exception as cleanup_error:
-                    logger.warning("ไม่สามารถลบไฟล์ที่ดาวน์โหลด (%s): %s", downloaded_file_path, cleanup_error)
-            if download_temp_dir:
-                try:
-                    self.file_service.cleanup_temp_folder(download_temp_dir)
-                except Exception as cleanup_dir_error:
-                    logger.warning("ไม่สามารถลบ temp folder %s: %s", download_temp_dir, cleanup_dir_error)
-            extra_download_dir = context.get("download_temp_dir")
-            if extra_download_dir and extra_download_dir != download_temp_dir:
-                try:
-                    self.file_service.cleanup_temp_folder(extra_download_dir)
-                except Exception as extra_cleanup_error:
-                    logger.warning("ไม่สามารถลบ temp folder ที่เก็บไว้ใน context (%s): %s", extra_download_dir, extra_cleanup_error)
+            if not self.save_temp_files:
+                if downloaded_file_path:
+                    try:
+                        Path(downloaded_file_path).unlink(missing_ok=True)
+                        logger.info("🧹 ลบไฟล์ที่ดาวน์โหลดสำหรับ task %s: %s", task_id, downloaded_file_path)
+                    except Exception as cleanup_error:
+                        logger.warning("⚠️ ไม่สามารถลบไฟล์ที่ดาวน์โหลด (%s): %s", downloaded_file_path, cleanup_error)
+                download_temp_dir = context.get("download_temp_dir")
+                if download_temp_dir:
+                    try:
+                        self.file_service.cleanup_temp_folder(download_temp_dir)
+                    except Exception as cleanup_dir_error:
+                        logger.warning("⚠️ ไม่สามารถลบ temp folder %s: %s", download_temp_dir, cleanup_dir_error)
+                extra_download_dir = context.get("download_temp_dir")
+                if extra_download_dir and extra_download_dir != download_temp_dir:
+                    try:
+                        self.file_service.cleanup_temp_folder(extra_download_dir)
+                    except Exception as extra_cleanup_error:
+                        logger.warning("⚠️ ไม่สามารถลบ temp folder ที่เก็บไว้ใน context (%s): %s", extra_download_dir, extra_cleanup_error)
             if task_id in self.task_contexts:
                 self.task_contexts.pop(task_id, None)
     

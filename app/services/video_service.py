@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 class VideoService:
     def __init__(self):
         self.file_service = FileService()
-        self.json_storage = JSONStorage()
+        # ใช้ StorageFactory เพื่อเลือก storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
+        from ..utils.storage_factory import get_storage
+        self.json_storage = get_storage()  # จะได้ SQLiteStorage หรือ JSONStorage ตาม env
         self.rabbitmq_service = RabbitMQService()
         self.whisper_service = WhisperService()
         self.tasks: Dict[str, Dict] = {}
