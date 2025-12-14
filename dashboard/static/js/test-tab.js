@@ -305,13 +305,22 @@ async function refreshTestResults() {
             testTaskIds.map(async (taskId) => {
                 try {
                     // Use Dashboard API to proxy request (avoids CORS)
-                    // Check if dashboardAPI is available and has getTaskStatus method
-                    if (!dashboardAPI || typeof dashboardAPI.getTaskStatus !== 'function') {
-                        console.error('dashboardAPI.getTaskStatus is not available');
-                        throw new Error('Dashboard API not initialized');
+                    // Check if dashboardAPI is available
+                    if (!window.dashboardAPI) {
+                        console.error('window.dashboardAPI is not available, trying to use dashboardAPI directly');
+                        if (!dashboardAPI || typeof dashboardAPI.getTaskStatus !== 'function') {
+                            throw new Error('Dashboard API not initialized');
+                        }
                     }
                     
-                    const task = await dashboardAPI.getTaskStatus(serverName, taskId);
+                    // Use window.dashboardAPI if available, otherwise use dashboardAPI
+                    const api = window.dashboardAPI || dashboardAPI;
+                    if (!api || typeof api.getTaskStatus !== 'function') {
+                        console.error('getTaskStatus method not found. Available methods:', Object.keys(api || {}));
+                        throw new Error('getTaskStatus method not available');
+                    }
+                    
+                    const task = await api.getTaskStatus(serverName, taskId);
                     return task;
                 } catch (error) {
                     console.error(`Error fetching task ${taskId}:`, error);
