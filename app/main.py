@@ -481,47 +481,51 @@ async def cleanup_system():
 @app.on_event("startup")
 async def startup_event():
     """เริ่มต้น application"""
-    logger.info("🚀 เริ่มต้น Transcription Service API...")
-    
-    # ============================================================
-    # Phase 5: Cleanup Service - Startup Cleanup & Periodic Scheduler
-    # ============================================================
     try:
-        from .services.cleanup_service import cleanup_service
+        logger.info("🚀 เริ่มต้น Transcription Service API...")
         
-        # 1. Startup cleanup (run once on startup)
-        await cleanup_service.cleanup_on_startup()
-        
-        # 2. Start periodic cleanup scheduler
-        cleanup_service.start_periodic_cleanup()
-        
-        logger.info("✅ Cleanup Service initialized and started")
-    except Exception as e:
-        logger.warning(f"⚠️ ไม่สามารถเริ่มต้น Cleanup Service: {e}")
-    
-    # ============================================================
-    # Phase 6: Worker Monitor - Auto-restart Video Worker
-    # ============================================================
-    import os
-    if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
+        # ============================================================
+        # Phase 5: Cleanup Service - Startup Cleanup & Periodic Scheduler
+        # ============================================================
         try:
-            from .services.worker_monitor import get_worker_monitor
-            monitor = get_worker_monitor()
-            monitor.start()
-            logger.info("✅ Worker Monitor started (auto-restart enabled)")
+            from .services.cleanup_service import cleanup_service
+            
+            # 1. Startup cleanup (run once on startup)
+            await cleanup_service.cleanup_on_startup()
+            
+            # 2. Start periodic cleanup scheduler
+            cleanup_service.start_periodic_cleanup()
+            
+            logger.info("✅ Cleanup Service initialized and started")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to start Worker Monitor: {e}")
-    
-    # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
-    # 🔌 เริ่มต้น WebSocket Service
-    # try:
-    #     from .services.websocket_service import initialize_websocket_service
-    #     await initialize_websocket_service()
-    #     logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
-    # except Exception as e:
-    #     logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
-    
-    logger.info("✅ API Server พร้อมใช้งาน")
+            logger.error(f"❌ Error starting Cleanup Service: {e}", exc_info=True)
+        
+        # ============================================================
+        # Phase 6: Worker Monitor - Auto-restart Video Worker
+        # ============================================================
+        import os
+        if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
+            try:
+                from .services.worker_monitor import get_worker_monitor
+                monitor = get_worker_monitor()
+                monitor.start()
+                logger.info("✅ Worker Monitor started (auto-restart enabled)")
+            except Exception as e:
+                logger.error(f"❌ Error starting Worker Monitor: {e}", exc_info=True)
+        
+        # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
+        # 🔌 เริ่มต้น WebSocket Service
+        # try:
+        #     from .services.websocket_service import initialize_websocket_service
+        #     await initialize_websocket_service()
+        #     logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
+        # except Exception as e:
+        #     logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
+        
+        logger.info("✅ API Server พร้อมใช้งาน")
+    except Exception as e:
+        logger.critical(f"❌ CRITICAL: Failed to start API Server: {e}", exc_info=True)
+        raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
