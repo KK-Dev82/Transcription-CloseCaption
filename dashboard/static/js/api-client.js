@@ -201,7 +201,7 @@ class DashboardAPI extends APIClient {
     }
 
     async startBatchTranscription(request) {
-        return this.post('/api/batch/transcription', request, { timeout: 10 });
+        return this.post('/api/batch/transcription', request, { timeout: 30 });
     }
 
     async getBatchStatus(batchId) {
@@ -217,7 +217,7 @@ class DashboardAPI extends APIClient {
     }
 
     async getTaskStatus(serverName, taskId) {
-        return this.get(`/api/server/${serverName}/task/${taskId}`, { timeout: 10 });
+        return this.get(`/api/server/${serverName}/task/${taskId}`, { timeout: 30 });
     }
 
     async checkTaskInQueue(serverName, taskId) {
