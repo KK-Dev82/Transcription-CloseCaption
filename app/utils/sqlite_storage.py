@@ -438,13 +438,15 @@ class SQLiteStorage:
             
             # Determine order by column (use updated_at if available, else created_at)
             # Use COALESCE to fallback to created_at if updated_at is NULL
+            # Convert to datetime for proper sorting (handle different formats)
             if 'updated_at' in columns and 'created_at' in columns:
                 # Use COALESCE to prefer updated_at, fallback to created_at
-                order_by = 'COALESCE(updated_at, created_at) DESC, created_at DESC'
+                # Convert to datetime for proper sorting
+                order_by = 'datetime(COALESCE(updated_at, created_at)) DESC, datetime(created_at) DESC'
             elif 'updated_at' in columns:
-                order_by = 'updated_at DESC'
+                order_by = 'datetime(updated_at) DESC'
             elif 'created_at' in columns:
-                order_by = 'created_at DESC'
+                order_by = 'datetime(created_at) DESC'
             else:
                 order_by = 'task_id DESC'  # Fallback
             

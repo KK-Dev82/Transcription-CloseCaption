@@ -145,14 +145,45 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
                             task["updated_at"] = task["created_at"]
                     
                     # Sort และ limit - เรียงตาม updated_at DESC (ใหม่สุดก่อน) หรือ created_at DESC ถ้าไม่มี updated_at
+                    def parse_datetime(dt_str):
+                        """Parse datetime string to comparable format"""
+                        if not dt_str:
+                            return None
+                        try:
+                            from datetime import datetime
+                            # Handle different formats
+                            dt_str = str(dt_str).strip()
+                            # Remove timezone if present for comparison
+                            if '+' in dt_str:
+                                dt_str = dt_str.split('+')[0]
+                            elif 'Z' in dt_str:
+                                dt_str = dt_str.replace('Z', '')
+                            # Try parsing different formats
+                            for fmt in [
+                                '%Y-%m-%dT%H:%M:%S.%f',
+                                '%Y-%m-%dT%H:%M:%S',
+                                '%Y-%m-%d %H:%M:%S.%f',
+                                '%Y-%m-%d %H:%M:%S'
+                            ]:
+                                try:
+                                    return datetime.strptime(dt_str, fmt)
+                                except ValueError:
+                                    continue
+                            return None
+                        except Exception:
+                            return None
+                    
                     def get_sort_key(task):
                         # ใช้ updated_at ถ้ามี ไม่เช่นนั้นใช้ created_at
                         updated_at = task.get("updated_at") or ""
                         created_at = task.get("created_at") or ""
-                        # เปรียบเทียบ updated_at ก่อน ถ้าไม่มีค่อยใช้ created_at
-                        return (updated_at or created_at) or ""
+                        # Parse to datetime for proper comparison
+                        dt = parse_datetime(updated_at) or parse_datetime(created_at)
+                        # Return datetime object for proper sorting, or empty string as fallback
+                        return dt if dt else datetime.min
                     
                     # Sort ทั้งหมดก่อนแล้วค่อย limit เพื่อให้ได้ tasks ใหม่ที่สุด
+                    from datetime import datetime
                     tasks_sorted = sorted(
                         tasks,
                         key=get_sort_key,
