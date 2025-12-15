@@ -377,7 +377,10 @@ async def list_stored_transcriptions():
     """ดึงรายการ transcription ที่เก็บใน JSON storage"""
     
     try:
-        transcriptions = transcription_service.list_all_transcriptions()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        transcriptions = await loop.run_in_executor(None, transcription_service.list_all_transcriptions)
         
         return {
             "total_transcriptions": len(transcriptions),

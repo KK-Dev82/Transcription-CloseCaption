@@ -112,7 +112,10 @@ async def get_transcription_progress(task_id: str):
 async def get_all_active_tasks():
     """ดูรายการ tasks ที่กำลังทำงานอยู่"""
     try:
-        all_tasks = transcription_service.get_all_tasks()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_tasks = await loop.run_in_executor(None, transcription_service.get_all_tasks)
         
         active_tasks = []
         for task in all_tasks:
@@ -143,7 +146,10 @@ async def get_all_active_tasks():
 async def get_progress_stats():
     """สถิติการประมวลผล"""
     try:
-        all_tasks = transcription_service.get_all_tasks()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_tasks = await loop.run_in_executor(None, transcription_service.get_all_tasks)
         
         stats = {
             "total_tasks": len(all_tasks),
