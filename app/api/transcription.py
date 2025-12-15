@@ -91,10 +91,41 @@ async def get_transcription_status(task_id: str):
         )
 
 @router.get("/", response_model=List[TranscriptionResponse])
-async def get_all_transcriptions():
-    """ดึงรายการ transcription tasks ทั้งหมด"""
+async def get_all_transcriptions(
+    limit: Optional[int] = Query(None, ge=1, le=10000, description="จำนวน tasks สูงสุดที่ต้องการ (ถ้าไม่ระบุจะ return ทั้งหมด)"),
+    offset: Optional[int] = Query(0, ge=0, description="จำนวน tasks ที่จะข้าม (สำหรับ pagination)"),
+    sort_by: Optional[str] = Query("updated_at", description="Sort by field: created_at, updated_at, status"),
+    sort_order: Optional[str] = Query("desc", description="Sort order: asc, desc")
+):
+    """
+    ดึงรายการ transcription tasks ทั้งหมด
+    รองรับ pagination และ sorting
+    """
     try:
-        return transcription_service.get_all_tasks()
+        all_tasks = transcription_service.get_all_tasks()
+        
+        # Sorting
+        if sort_by in ['created_at', 'updated_at']:
+            reverse = sort_order.lower() == 'desc'
+            all_tasks.sort(
+                key=lambda x: getattr(x, sort_by, None) or datetime.min,
+                reverse=reverse
+            )
+        elif sort_by == 'status':
+            reverse = sort_order.lower() == 'desc'
+            all_tasks.sort(
+                key=lambda x: (getattr(x, 'status', '') or '').lower(),
+                reverse=reverse
+            )
+        
+        # Pagination
+        total_count = len(all_tasks)
+        if limit is not None:
+            paginated_tasks = all_tasks[offset:offset + limit]
+        else:
+            paginated_tasks = all_tasks[offset:]
+        
+        return paginated_tasks
     except Exception as e:
         logger.error(f"Error getting all transcriptions: {e}", exc_info=True)
         # Return empty list instead of crashing
