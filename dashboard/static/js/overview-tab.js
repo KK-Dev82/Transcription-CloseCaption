@@ -486,10 +486,10 @@ async function refreshOverviewServer(serverName, page = null) {
             ));
         }
     } catch (error) {
-        console.error(`Error refreshing overview for ${serverName}:`, error);
-        const container = document.getElementById(`logs-${serverName}`);
+        console.error(`[Overview] Error refreshing overview for ${serverName}:`, error);
+        const container = document.getElementById('overview-tasks-container');
         if (container) {
-            container.innerHTML = `<div class="error">Error: ${error.message || 'Unknown error'}</div>`;
+            container.innerHTML = `<div class="error">Error: ${error.message || 'Unknown error'}<br><small>Check browser console for details</small></div>`;
         }
     }
 }
