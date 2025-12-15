@@ -463,7 +463,20 @@ function startProgressTracking(serverName, tasks) {
     
     if (tasks.length === 0) return;
     
-    // เพิ่ม debounce และลด frequency (ทุก 10 วินาทีแทนที่จะเป็นทุก 5 วินาที)
+    // Subscribe to webhooks for all tasks
+    if (window.webhookService) {
+        tasks.forEach(task => {
+            const taskId = task.task_id || task.id;
+            if (taskId) {
+                window.webhookService.subscribeTask(taskId, serverName);
+            }
+        });
+        
+        // Listen for webhook events
+        window.addEventListener('webhook:task-update', handleMonitoringWebhookUpdate);
+    }
+    
+    // Fallback polling (reduced frequency - only if webhooks fail)
     let lastUpdateTime = {};
     progressTrackingIntervals[serverName] = setInterval(async () => {
         try {
@@ -522,7 +535,34 @@ function startProgressTracking(serverName, tasks) {
         } catch (error) {
             console.error(`Error tracking progress for ${serverName}:`, error);
         }
-    }, 3000); // Update every 3 seconds
+    }, 10000); // Update every 10 seconds (reduced from 3s - webhooks handle real-time updates)
+}
+
+// Handle webhook updates for monitoring tab
+function handleMonitoringWebhookUpdate(event) {
+    const { taskId, status, progress, payload } = event.detail;
+    
+    console.log(`📨 Webhook update for task ${taskId}: ${status} (${progress}%)`);
+    
+    // Update progress in table if task row exists
+    const row = document.querySelector(`tr[data-task-id="${taskId}"]`);
+    if (row) {
+        // Update progress bar
+        const progressBar = row.querySelector('.progress-bar-fill');
+        const progressText = row.querySelector('.progress-text');
+        if (progressBar && progressText) {
+            progressBar.style.width = `${progress}%`;
+            progressText.textContent = `${progress}%`;
+            progressBar.style.background = progress < 50 ? '#ff9500' : progress < 80 ? '#0071e3' : '#34c759';
+        }
+        
+        // Update status badge
+        const statusBadge = row.querySelector('.status-badge');
+        if (statusBadge) {
+            statusBadge.className = `status-badge status-${status}`;
+            statusBadge.textContent = status.toUpperCase();
+        }
+    }
 }
 
 // Manual refresh

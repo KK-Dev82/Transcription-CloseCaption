@@ -219,7 +219,7 @@ async function startTest() {
                 // Check if we have task_ids
                 if (batchStatus.task_ids && batchStatus.task_ids.length > 0) {
                     testTaskIds = batchStatus.task_ids;
-                    console.log(`✅ Got ${testTaskIds.length} task IDs, starting refresh...`);
+                    console.log(`✅ Got ${testTaskIds.length} task IDs, subscribing to webhooks...`);
                     
                     // Clear loading message
                     const container = document.getElementById('testTasksContainer');
@@ -227,7 +227,17 @@ async function startTest() {
                         container.innerHTML = '<div class="loading">📡 กำลังโหลด task status...</div>';
                     }
                     
-                    // Start refresh loop immediately
+                    // Subscribe to webhooks for all tasks
+                    if (window.webhookService) {
+                        testTaskIds.forEach(taskId => {
+                            window.webhookService.subscribeTask(taskId, serverName);
+                        });
+                        
+                        // Listen for webhook events
+                        window.addEventListener('webhook:task-update', handleWebhookUpdate);
+                    }
+                    
+                    // Start fallback refresh (will be stopped when webhooks work)
                     startTestRefresh();
                 } else {
                     // Still waiting for tasks - poll again
@@ -284,6 +294,28 @@ function stopTestRefresh() {
     if (testRefreshInterval) {
         clearInterval(testRefreshInterval);
         testRefreshInterval = null;
+    }
+}
+
+// Handle webhook updates
+function handleWebhookUpdate(event) {
+    const { taskId, status, progress, payload } = event.detail;
+    
+    // Only handle if this task is in our test list
+    if (!testTaskIds.includes(taskId)) {
+        return;
+    }
+    
+    console.log(`📨 Webhook update for task ${taskId}: ${status} (${progress}%)`);
+    
+    // Refresh test results to show updated status
+    refreshTestResults();
+    
+    // If task is completed or failed, stop polling for this task
+    if (status === 'completed' || status === 'failed') {
+        if (window.webhookService) {
+            window.webhookService.stopFallbackPolling(taskId);
+        }
     }
 }
 

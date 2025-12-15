@@ -76,11 +76,28 @@ except ImportError:
     except ImportError:
         live_streaming_routes = None
 
+# Try to import webhook_routes (optional)
+try:
+    from .routes import webhook_routes
+except ImportError:
+    try:
+        from routes import webhook_routes
+    except ImportError:
+        webhook_routes = None
+
 app.include_router(server_routes.router)
 app.include_router(batch_routes.router)
 app.include_router(cleanup_routes.router)
 if management_routes:
     app.include_router(management_routes.router)
+
+# Include Webhook router (for receiving callbacks)
+if webhook_routes:
+    try:
+        app.include_router(webhook_routes.router)
+        logger.info("✅ Webhook routes included")
+    except Exception as e:
+        logger.debug(f"Webhook routes not available: {e}")
 
 # Include SQLite Admin router (if available)
 if sqlite_admin_routes:
