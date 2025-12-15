@@ -52,7 +52,7 @@ async def phpliteadmin(request: Request):
                 api_url = server_config["api_url"]
                 
                 # แปลง api_url เป็น dashboard URL (เปลี่ยน port)
-                # เช่น http://213.173.108.6:14237 -> http://213.173.108.6:8020
+                # เช่น http://213.173.108.6:13264 -> http://213.173.108.6:8020
                 import re
                 dashboard_url = re.sub(r':\d+$', ':8020', api_url)
                 
