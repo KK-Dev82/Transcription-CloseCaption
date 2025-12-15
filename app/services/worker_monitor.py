@@ -156,9 +156,9 @@ class WorkerMonitor:
                 cwd=str(script_path.parent.parent.parent)
             )
             
-            # Wait for completion (max 30 seconds)
+            # Wait for completion (max 90 seconds - restart script ใช้เวลานานเพราะ health check)
             try:
-                stdout, stderr = process.communicate(timeout=30)
+                stdout, stderr = process.communicate(timeout=90)
                 if process.returncode == 0:
                     logger.info("✅ Video Worker restarted successfully")
                     self.restart_history.append(datetime.now())
@@ -167,8 +167,8 @@ class WorkerMonitor:
                     logger.error(f"❌ Restart failed: {stderr.decode()}")
                     return False
             except subprocess.TimeoutExpired:
-                logger.warning("⚠️ Restart script timeout - process may still be running")
-                # Don't kill - let it continue
+                logger.warning("⚠️ Restart script timeout (90s) - process may still be running")
+                # Don't kill - let it continue (restart script ใช้เวลานานเพราะต้องรอ health check)
                 self.restart_history.append(datetime.now())
                 return True  # Assume success if script started
                 
