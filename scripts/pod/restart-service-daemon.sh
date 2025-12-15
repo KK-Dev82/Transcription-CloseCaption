@@ -32,38 +32,82 @@ echo "╚═══════════════════════�
 echo ""
 
 # Check FFmpeg installation (required for video-worker)
+# Priority: Persistent volume -> System PATH
 echo "🔍 Checking FFmpeg installation..."
-if ! command -v ffmpeg > /dev/null 2>&1; then
-    echo "❌ FFmpeg not found - installing..."
-    if command -v apt-get > /dev/null 2>&1; then
-        apt-get update -qq > /dev/null 2>&1
-        apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
-            echo "⚠️  Failed to install FFmpeg via apt-get"
-            echo "   Video worker may fail without FFmpeg"
-        }
-        if command -v ffmpeg > /dev/null 2>&1; then
-            FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
-            echo "✅ FFmpeg installed successfully (version: $FFMPEG_VERSION)"
-        else
-            echo "❌ FFmpeg installation failed - video worker will not work"
-        fi
-    else
-        echo "⚠️  apt-get not found - cannot install FFmpeg automatically"
-        echo "   Please install FFmpeg manually: apt-get install ffmpeg"
-    fi
-else
-    FFMPEG_PATH=$(which ffmpeg)
-    FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
-    echo "✅ FFmpeg already installed"
+FFMPEG_INSTALL_DIR="/workspace/.local/bin"
+mkdir -p "$FFMPEG_INSTALL_DIR"
+
+# Add persistent bin to PATH
+export PATH="${FFMPEG_INSTALL_DIR}:$PATH"
+
+FFMPEG_FOUND=false
+FFMPEG_PATH=""
+FFMPEG_VERSION=""
+
+# Check persistent volume first
+if [ -f "$FFMPEG_INSTALL_DIR/ffmpeg" ] && [ -x "$FFMPEG_INSTALL_DIR/ffmpeg" ]; then
+    FFMPEG_PATH="$FFMPEG_INSTALL_DIR/ffmpeg"
+    FFMPEG_VERSION=$("$FFMPEG_PATH" -version | head -n1 | awk '{print $3}' || echo "unknown")
+    FFMPEG_FOUND=true
+    echo "✅ FFmpeg found in persistent volume"
     echo "   Location: $FFMPEG_PATH"
     echo "   Version: $FFMPEG_VERSION"
+elif command -v ffmpeg > /dev/null 2>&1; then
+    # Check system PATH
+    FFMPEG_PATH=$(which ffmpeg)
+    FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
+    FFMPEG_FOUND=true
+    echo "✅ FFmpeg found in system PATH"
+    echo "   Location: $FFMPEG_PATH"
+    echo "   Version: $FFMPEG_VERSION"
+    echo "   ⚠️  Note: System FFmpeg will be lost after Pod restart"
+    echo "   💡 Consider installing to persistent volume: bash scripts/pod/install-ffmpeg-persistent.sh"
 fi
 
-# Check ffprobe (usually comes with ffmpeg)
-if ! command -v ffprobe > /dev/null 2>&1; then
-    echo "⚠️  ffprobe not found (usually comes with ffmpeg)"
+# Install to persistent volume if not found
+if [ "$FFMPEG_FOUND" = false ]; then
+    echo "❌ FFmpeg not found - installing to persistent volume..."
+    if [ -f "scripts/pod/install-ffmpeg-persistent.sh" ]; then
+        bash scripts/pod/install-ffmpeg-persistent.sh || {
+            echo "⚠️  Failed to install FFmpeg to persistent volume"
+            echo "   Trying apt-get as fallback..."
+            if command -v apt-get > /dev/null 2>&1; then
+                apt-get update -qq > /dev/null 2>&1
+                apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
+                    echo "⚠️  Failed to install FFmpeg via apt-get"
+                    echo "   Video worker may fail without FFmpeg"
+                }
+            fi
+        }
+        # Re-check after installation
+        if [ -f "$FFMPEG_INSTALL_DIR/ffmpeg" ] && [ -x "$FFMPEG_INSTALL_DIR/ffmpeg" ]; then
+            FFMPEG_PATH="$FFMPEG_INSTALL_DIR/ffmpeg"
+            FFMPEG_VERSION=$("$FFMPEG_PATH" -version | head -n1 | awk '{print $3}' || echo "unknown")
+            FFMPEG_FOUND=true
+            echo "✅ FFmpeg installed to persistent volume"
+            echo "   Location: $FFMPEG_PATH"
+            echo "   Version: $FFMPEG_VERSION"
+        fi
+    else
+        echo "⚠️  install-ffmpeg-persistent.sh not found"
+        echo "   Trying apt-get as fallback..."
+        if command -v apt-get > /dev/null 2>&1; then
+            apt-get update -qq > /dev/null 2>&1
+            apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
+                echo "⚠️  Failed to install FFmpeg via apt-get"
+                echo "   Video worker may fail without FFmpeg"
+            }
+        fi
+    fi
+fi
+
+# Check ffprobe
+if [ -f "$FFMPEG_INSTALL_DIR/ffprobe" ] && [ -x "$FFMPEG_INSTALL_DIR/ffprobe" ]; then
+    echo "✅ ffprobe found in persistent volume"
+elif command -v ffprobe > /dev/null 2>&1; then
+    echo "✅ ffprobe found in system PATH"
 else
-    echo "✅ ffprobe is available"
+    echo "⚠️  ffprobe not found (usually comes with ffmpeg)"
 fi
 echo ""
 
