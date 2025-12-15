@@ -370,52 +370,63 @@ class SQLiteStorage:
             results = []
             for row in cursor.fetchall():
                 try:
+                    # Helper function to safely get value from row (sqlite3.Row or dict)
+                    def get_row_val(key, default=None):
+                        if isinstance(row, dict):
+                            return row.get(key, default) if key in columns else default
+                        elif hasattr(row, 'keys') and key in row.keys() and key in columns:
+                            return row[key]
+                        else:
+                            return default
+                    
                     chunks = []
-                    if 'chunks_json' in columns and row.get('chunks_json'):
+                    chunks_json = get_row_val('chunks_json')
+                    if chunks_json:
                         try:
-                            chunks = json.loads(row['chunks_json'])
+                            chunks = json.loads(chunks_json)
                         except:
                             chunks = []
                     
                     # Return format compatible กับ JSONStorage
-                    # Use .get() with default values for safety
+                    # Use helper function with default values for safety
                     result = {
-                        "task_id": row.get('task_id', ''),
-                        "created_at": row.get('created_at'),
-                        "updated_at": row.get('updated_at'),
-                        "completed_at": row.get('completed_at') if 'completed_at' in columns else None,
-                        "file_path": row.get('file_path'),
-                        "file_url": row.get('file_url') if 'file_url' in columns else None,
-                        "file_name": row.get('file_name') if 'file_name' in columns else None,
-                        "language": row.get('language', 'th'),
-                        "total_duration": row.get('total_duration'),
+                        "task_id": get_row_val('task_id', ''),
+                        "created_at": get_row_val('created_at'),
+                        "updated_at": get_row_val('updated_at'),
+                        "completed_at": get_row_val('completed_at'),
+                        "file_path": get_row_val('file_path'),
+                        "file_url": get_row_val('file_url'),
+                        "file_name": get_row_val('file_name'),
+                        "language": get_row_val('language', 'th'),
+                        "total_duration": get_row_val('total_duration'),
                         "chunks": chunks,
-                        "full_text": row.get('full_text', ''),
-                        "original_text": row.get('original_text') if 'original_text' in columns else None,
-                        "corrected_text": row.get('corrected_text') if 'corrected_text' in columns else None,
-                        "partial_text": row.get('partial_text') if 'partial_text' in columns else None,
-                        "status": row.get('status', 'pending'),
-                        "progress": row.get('progress', 0) if 'progress' in columns else 0,
-                        "model_size": row.get('model_size'),
-                        "chunk_duration": row.get('chunk_duration'),
-                        "error_message": row.get('error_message'),
-                        "processing_time": row.get('processing_time') if 'processing_time' in columns else None,
-                        "transcription_time": row.get('transcription_time') if 'transcription_time' in columns else None,
-                        "audio_extraction_time": row.get('audio_extraction_time') if 'audio_extraction_time' in columns else None,
-                        "text_correction_time": row.get('text_correction_time') if 'text_correction_time' in columns else None,
-                        "current_stage": row.get('current_stage') if 'current_stage' in columns else None,
-                        "current_stage_description": row.get('current_stage_description') if 'current_stage_description' in columns else None,
-                        "stage_progress": row.get('stage_progress') if 'stage_progress' in columns else None,
-                        "job_id": row.get('job_id') if 'job_id' in columns else None,
-                        "user_id": row.get('user_id') if 'user_id' in columns else None,
-                        "callback_url": row.get('callback_url') if 'callback_url' in columns else None
+                        "full_text": get_row_val('full_text', ''),
+                        "original_text": get_row_val('original_text'),
+                        "corrected_text": get_row_val('corrected_text'),
+                        "partial_text": get_row_val('partial_text'),
+                        "status": get_row_val('status', 'pending'),
+                        "progress": get_row_val('progress', 0),
+                        "model_size": get_row_val('model_size'),
+                        "chunk_duration": get_row_val('chunk_duration'),
+                        "error_message": get_row_val('error_message'),
+                        "processing_time": get_row_val('processing_time'),
+                        "transcription_time": get_row_val('transcription_time'),
+                        "audio_extraction_time": get_row_val('audio_extraction_time'),
+                        "text_correction_time": get_row_val('text_correction_time'),
+                        "current_stage": get_row_val('current_stage'),
+                        "current_stage_description": get_row_val('current_stage_description'),
+                        "stage_progress": get_row_val('stage_progress'),
+                        "job_id": get_row_val('job_id'),
+                        "user_id": get_row_val('user_id'),
+                        "callback_url": get_row_val('callback_url')
                     }
                     results.append(result)
                 except Exception as e:
-                    logger.warning(f"Error processing transcription row: {e}")
+                    logger.warning(f"Error processing transcription row: {e}", exc_info=True)
                     continue
             
             # Fallback: เพิ่ม tasks จาก JSON storage ที่ยังไม่อยู่ใน SQLite
+            # results is now a list of dicts, so we can use .get()
             sqlite_task_ids = {r.get('task_id') for r in results if r.get('task_id')}
             try:
                 from .json_storage import JSONStorage
