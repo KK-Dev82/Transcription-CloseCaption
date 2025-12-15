@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from pathlib import Path
 import logging
 from typing import List, Optional
 from datetime import datetime
@@ -98,6 +99,53 @@ async def get_all_transcriptions():
         logger.error(f"Error getting all transcriptions: {e}", exc_info=True)
         # Return empty list instead of crashing
         return []
+
+
+@router.get("/{task_id}/chunk/{chunk_index}/audio")
+async def get_chunk_audio(task_id: str, chunk_index: int):
+    """Serve audio chunk file for playback"""
+    try:
+        # Get task details
+        task = transcription_service.get_task_status(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        chunks = task.chunks if hasattr(task, 'chunks') else []
+        if chunk_index >= len(chunks):
+            raise HTTPException(status_code=404, detail=f"Chunk {chunk_index} not found")
+        
+        chunk = chunks[chunk_index]
+        chunk_path = None
+        
+        # Try to get chunk_path from chunk data
+        if isinstance(chunk, dict):
+            chunk_path = chunk.get("chunk_path")
+        elif hasattr(chunk, 'chunk_path'):
+            chunk_path = chunk.chunk_path
+        elif hasattr(chunk, 'dict'):
+            chunk_dict = chunk.dict()
+            chunk_path = chunk_dict.get("chunk_path")
+        
+        if not chunk_path:
+            raise HTTPException(status_code=404, detail="Chunk path not found in chunk data")
+        
+        # Check if file exists
+        file_path = Path(chunk_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"Audio file not found: {chunk_path}")
+        
+        # Serve the file
+        return FileResponse(
+            path=str(file_path),
+            filename=file_path.name,
+            media_type='audio/wav'
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving chunk audio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cleanup")
 async def cleanup_transcription_tasks(request: CleanupRequest):
