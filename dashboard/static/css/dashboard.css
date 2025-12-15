@@ -1266,6 +1266,17 @@ a:hover {
 }
 
 .admin-table th {
+    user-select: none;
+}
+
+.admin-table th[onclick] {
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.admin-table th[onclick]:hover {
+    background-color: var(--apple-gray-1);
+}
     padding: 16px 12px;
     text-align: left;
     font-weight: 600;
