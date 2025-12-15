@@ -300,7 +300,7 @@ async function refreshOverviewServer(serverName, page = null) {
         }
         
         // Render as Table (Admin Dashboard Style)
-        container.innerHTML = `
+        const tableHtml = `
             <div class="admin-table-container">
                 <table class="admin-table">
                     <thead>
@@ -470,6 +470,9 @@ async function refreshOverviewServer(serverName, page = null) {
             </div>
             ${renderPagination(serverName, state.currentPage, totalPages, state.totalTasks)}
         `;
+        
+        // Set container HTML after building the table
+        container.innerHTML = tableHtml;
         
         if (displayedTasks.length === 0) {
             container.innerHTML = '<div class="empty">No tasks found</div>';
