@@ -118,11 +118,17 @@ if [ ! -f "$INSTALL_DIR/ffmpeg" ] || [ ! -x "$INSTALL_DIR/ffmpeg" ]; then
         fi
         
         if [ "$NETWORK_OK" = true ]; then
+            # Fix dpkg if interrupted
+            if dpkg --configure -a 2>&1 | grep -q "dpkg"; then
+                echo "   🔧 Fixing interrupted dpkg configuration..."
+                DEBIAN_FRONTEND=noninteractive dpkg --configure -a > /dev/null 2>&1 || true
+            fi
+            
             echo "   Updating package lists..."
             apt-get update -qq 2>&1 | grep -v "^$" | head -5 || echo "   ⚠️  apt-get update had issues (may continue)"
             
             echo "   Installing ffmpeg..."
-            if apt-get install -y -qq ffmpeg 2>&1 | grep -v "^$" | head -10; then
+            if DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg 2>&1 | grep -v "^$" | head -10; then
                 # Check if installation succeeded
                 if command -v ffmpeg > /dev/null 2>&1; then
                     FFMPEG_SYSTEM_PATH=$(which ffmpeg)
