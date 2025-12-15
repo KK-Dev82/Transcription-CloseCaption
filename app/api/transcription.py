@@ -107,10 +107,22 @@ async def get_all_transcriptions(
         # Sorting
         if sort_by in ['created_at', 'updated_at']:
             reverse = sort_order.lower() == 'desc'
-            all_tasks.sort(
-                key=lambda x: getattr(x, sort_by, None) or datetime.min,
-                reverse=reverse
-            )
+            def get_sort_value(task):
+                value = getattr(task, sort_by, None)
+                if value is None:
+                    return datetime.min.replace(tzinfo=None)
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, str):
+                    try:
+                        # Try parsing ISO format
+                        if '+' in value or 'Z' in value:
+                            value = value.replace('Z', '+00:00')
+                        return datetime.fromisoformat(value.replace('Z', ''))
+                    except:
+                        return datetime.min.replace(tzinfo=None)
+                return datetime.min.replace(tzinfo=None)
+            all_tasks.sort(key=get_sort_value, reverse=reverse)
         elif sort_by == 'status':
             reverse = sort_order.lower() == 'desc'
             all_tasks.sort(
