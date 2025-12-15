@@ -274,41 +274,54 @@ class SQLiteStorage:
             return None
         
         try:
-            chunks = json.loads(row['chunks_json']) if row.get('chunks_json') else []
-        except:
+            # sqlite3.Row doesn't have .get() method, use dict() or direct access
+            row_dict = dict(row) if hasattr(row, 'keys') else row
+            chunks_json = row_dict.get('chunks_json') if isinstance(row_dict, dict) else (row['chunks_json'] if 'chunks_json' in row.keys() else None)
+            chunks = json.loads(chunks_json) if chunks_json else []
+        except Exception as e:
+            logger.debug(f"Error parsing chunks_json: {e}")
             chunks = []
+        
+        # Helper function to safely get value from row (sqlite3.Row or dict)
+        def get_row_value(key, default=None):
+            if isinstance(row, dict):
+                return row.get(key, default)
+            elif hasattr(row, 'keys') and key in row.keys():
+                return row[key]
+            else:
+                return default
         
         # Return format compatible กับ JSONStorage
         return {
             "task_id": row['task_id'],
-            "created_at": row.get('created_at'),
-            "updated_at": row.get('updated_at'),
-            "completed_at": row.get('completed_at'),
-            "file_path": row.get('file_path'),
-            "file_url": row.get('file_url'),
-            "file_name": row.get('file_name'),
-            "language": row.get('language'),
-            "total_duration": row.get('total_duration'),
+            "created_at": get_row_value('created_at'),
+            "updated_at": get_row_value('updated_at'),
+            "completed_at": get_row_value('completed_at'),
+            "file_path": get_row_value('file_path'),
+            "file_url": get_row_value('file_url'),
+            "file_name": get_row_value('file_name'),
+            "language": get_row_value('language'),
+            "total_duration": get_row_value('total_duration'),
             "chunks": chunks,
-            "full_text": row.get('full_text', ''),
-            "original_text": row.get('original_text'),
-            "corrected_text": row.get('corrected_text'),
-            "partial_text": row.get('partial_text'),
-            "status": row.get('status', 'pending'),
-            "progress": row.get('progress', 0),
-            "model_size": row.get('model_size'),
-            "chunk_duration": row.get('chunk_duration'),
-            "error_message": row.get('error_message'),
-            "processing_time": row.get('processing_time'),
-            "transcription_time": row.get('transcription_time'),
-            "audio_extraction_time": row.get('audio_extraction_time'),
-            "text_correction_time": row.get('text_correction_time'),
-            "current_stage": row.get('current_stage'),
-            "current_stage_description": row.get('current_stage_description'),
-            "stage_progress": row.get('stage_progress'),
-            "job_id": row.get('job_id'),
-            "user_id": row.get('user_id'),
-            "callback_url": row.get('callback_url')
+            "full_text": get_row_value('full_text', ''),
+            "original_text": get_row_value('original_text'),
+            "corrected_text": get_row_value('corrected_text'),
+            "partial_text": get_row_value('partial_text'),
+            "status": get_row_value('status', 'pending'),
+            "progress": get_row_value('progress', 0),
+            "model_size": get_row_value('model_size'),
+            "chunk_duration": get_row_value('chunk_duration'),
+            "error_message": get_row_value('error_message'),
+            "processing_time": get_row_value('processing_time'),
+            "transcription_time": get_row_value('transcription_time'),
+            "audio_extraction_time": get_row_value('audio_extraction_time'),
+            "text_correction_time": get_row_value('text_correction_time'),
+            "current_stage": get_row_value('current_stage'),
+            "current_stage_description": get_row_value('current_stage_description'),
+            "stage_progress": get_row_value('stage_progress'),
+            "job_id": get_row_value('job_id'),
+            "user_id": get_row_value('user_id'),
+            "callback_url": get_row_value('callback_url')
         }
     
     def list_all_transcriptions(self) -> List[Dict]:
