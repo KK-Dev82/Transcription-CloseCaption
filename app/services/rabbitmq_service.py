@@ -79,7 +79,8 @@ class RabbitMQService:
                 self.transcription_request_queue,
                 max_length=max_request,
                 enable_dlx=True,
-                enable_quorum=True
+                enable_quorum=True,
+                enable_priority=True  # Enable priority for close caption
             )
             self.channel.queue_declare(
                 queue=self.transcription_request_queue,
@@ -95,7 +96,8 @@ class RabbitMQService:
                 self.audio_extraction_queue,
                 max_length=max_extraction,
                 enable_dlx=True,
-                enable_quorum=True
+                enable_quorum=True,
+                enable_priority=True  # Enable priority for close caption
             )
             self.channel.queue_declare(
                 queue=self.audio_extraction_queue,
@@ -145,7 +147,8 @@ class RabbitMQService:
         queue_name: str,
         max_length: int = 0,
         enable_dlx: bool = True,
-        enable_quorum: bool = True
+        enable_quorum: bool = True,
+        enable_priority: bool = True
     ) -> Dict[str, Any]:
         """
         สร้าง queue arguments สำหรับ quorum queue ตาม Final Architecture Design
@@ -155,6 +158,7 @@ class RabbitMQService:
             max_length: จำนวน messages สูงสุด (0 = no limit)
             enable_dlx: เปิดใช้งาน Dead Letter Exchange
             enable_quorum: ใช้ quorum queue type
+            enable_priority: เปิดใช้งาน Priority Queue (0-10)
         
         Returns:
             Dictionary ของ queue arguments
@@ -166,6 +170,14 @@ class RabbitMQService:
         if enable_quorum and use_quorum:
             arguments['x-queue-type'] = 'quorum'
             logger.debug(f"✅ Quorum queue enabled for {queue_name}")
+        
+        # Priority Queue (รองรับ priority 0-10)
+        # CloseCaption (realtime_chunks) → priority 10 (สูงสุด)
+        # Normal transcription → priority 5 (ปกติ)
+        if enable_priority:
+            max_priority = int(os.getenv('RABBITMQ_MAX_PRIORITY', '10'))
+            arguments['x-max-priority'] = max_priority
+            logger.debug(f"✅ Priority queue enabled for {queue_name}: max_priority={max_priority}")
         
         # Queue Max Length & Overflow
         if max_length > 0:
