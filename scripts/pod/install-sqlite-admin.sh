@@ -15,13 +15,32 @@ echo ""
 # Check PHP
 if ! command -v php &> /dev/null; then
     echo "📦 Installing PHP..."
+    
+    # Check if we're root or need sudo
+    if [ "$EUID" -eq 0 ]; then
+        # We're root, no need for sudo
+        USE_SUDO=""
+    elif command -v sudo &> /dev/null; then
+        # sudo is available
+        USE_SUDO="sudo"
+    else
+        # No sudo and not root - try without sudo (might work if user has permissions)
+        USE_SUDO=""
+        echo "⚠️  Warning: No sudo available and not root. Trying without sudo..."
+    fi
+    
     if command -v apt-get &> /dev/null; then
-        sudo apt-get update
-        sudo apt-get install -y php php-cli php-sqlite3
+        $USE_SUDO apt-get update
+        $USE_SUDO apt-get install -y php php-cli php-sqlite3
     elif command -v yum &> /dev/null; then
-        sudo yum install -y php php-cli php-pdo php-sqlite3
+        $USE_SUDO yum install -y php php-cli php-pdo php-sqlite3
     else
         echo "❌ Error: Cannot install PHP automatically. Please install PHP manually."
+        echo ""
+        echo "💡 Manual installation options:"
+        echo "   - Ubuntu/Debian: apt-get install -y php php-cli php-sqlite3"
+        echo "   - CentOS/RHEL: yum install -y php php-cli php-pdo php-sqlite3"
+        echo "   - Or use a container image that already has PHP installed"
         exit 1
     fi
 fi
