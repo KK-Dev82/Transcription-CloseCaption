@@ -288,10 +288,7 @@ async function refreshOverviewServer(serverName, page = null) {
         // Calculate row numbers (continuous across pages)
         const startRowNumber = startIndex + 1;
         
-        // Get sorting state
-        const sortState = sortingState[serverName] || { field: 'updated_at', direction: 'desc' };
-        
-        // Helper function to get sort icon
+        // Helper function to get sort icon (sortState already declared above)
         function getSortIcon(field) {
             if (sortState.field === field) {
                 return sortState.direction === 'asc' ? ' ↑' : ' ↓';
