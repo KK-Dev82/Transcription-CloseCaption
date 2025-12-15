@@ -271,6 +271,17 @@ async function refreshOverviewServer(serverName, page = null) {
         // Calculate row numbers (continuous across pages)
         const startRowNumber = startIndex + 1;
         
+        // Get sorting state
+        const sortState = sortingState[serverName] || { field: 'updated_at', direction: 'desc' };
+        
+        // Helper function to get sort icon
+        function getSortIcon(field) {
+            if (sortState.field === field) {
+                return sortState.direction === 'asc' ? ' ↑' : ' ↓';
+            }
+            return ' ↕️';
+        }
+        
         // Render as Table (Admin Dashboard Style)
         container.innerHTML = `
             <div class="admin-table-container">
@@ -283,8 +294,12 @@ async function refreshOverviewServer(serverName, page = null) {
                             <th style="width: 80px;">Progress</th>
                             <th style="width: 250px;">File Name</th>
                             <th style="width: 120px;">Duration</th>
-                            <th style="width: 150px;">Created</th>
-                            <th style="width: 150px;">Updated</th>
+                            <th style="width: 150px; cursor: pointer;" onclick="sortTasks('${serverName}', 'created_at')" title="Click to sort by Created">
+                                Created${getSortIcon('created_at')}
+                            </th>
+                            <th style="width: 150px; cursor: pointer;" onclick="sortTasks('${serverName}', 'updated_at')" title="Click to sort by Updated">
+                                Updated${getSortIcon('updated_at')}
+                            </th>
                             <th style="width: 120px;">Processing Time</th>
                             <th style="width: 150px;">Actions</th>
                         </tr>
