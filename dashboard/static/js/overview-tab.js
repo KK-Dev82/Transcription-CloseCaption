@@ -194,8 +194,9 @@ async function refreshOverviewServer(serverName, page = null) {
         if (state.allTasks.length === 0) {
             try {
                 console.log(`[Overview] Fetching tasks for ${serverName}...`);
+                // ลด limit จาก 1000 เป็น 500 เพื่อลด load
                 const data = await dashboardAPI.getServerTasks(serverName, {
-                    limit: 1000, // Load 1000 tasks for pagination
+                    limit: 500, // Load 500 tasks for pagination (ลดจาก 1000)
                     status: null, // Don't filter on server
                     timeout: 60
                 });

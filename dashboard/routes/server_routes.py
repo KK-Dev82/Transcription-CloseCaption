@@ -109,7 +109,7 @@ async def get_server_status(server_name: str):
 
 
 @router.get("/api/server/{server_name}/tasks")
-async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[str] = None):
+async def get_server_tasks(server_name: str, limit: Optional[int] = None, status: Optional[str] = None):
     """Get list of tasks from remote server with optional status filter"""
     if server_name not in SERVERS:
         raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
