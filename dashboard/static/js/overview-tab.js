@@ -547,12 +547,30 @@ async function viewTranscriptionText(serverName, taskId) {
             chunksDiv.innerHTML = task.chunks.map((chunk, index) => {
                 const startTime = chunk.start_time !== undefined ? formatTime(chunk.start_time) : 'N/A';
                 const endTime = chunk.end_time !== undefined ? formatTime(chunk.end_time) : 'N/A';
+                const chunkPath = chunk.chunk_path;
+                const hasAudio = chunkPath && chunkPath.trim() !== '';
+                
+                // Build audio player HTML if chunk_path exists
+                let audioPlayerHtml = '';
+                if (hasAudio) {
+                    const audioUrl = `/api/server/${serverName}/chunk-audio/${taskId}/${index}`;
+                    audioPlayerHtml = `
+                        <div class="chunk-audio-player" style="margin-top: 8px; padding: 8px; background: var(--apple-gray-1); border-radius: 4px;">
+                            <audio controls style="width: 100%; max-width: 500px;" preload="metadata">
+                                <source src="${audioUrl}" type="audio/wav">
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>
+                    `;
+                }
+                
                 return `
                     <div class="chunk-item">
                         <div class="chunk-item-header">
                             <span class="chunk-item-time">${startTime} - ${endTime}</span>
                             <span>Chunk #${index + 1}</span>
                         </div>
+                        ${audioPlayerHtml}
                         <div class="chunk-item-text">${chunk.text || ''}</div>
                     </div>
                 `;
