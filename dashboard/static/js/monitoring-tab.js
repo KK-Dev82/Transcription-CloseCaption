@@ -547,6 +547,37 @@ function openMonitoringInNewWindow() {
     }
 }
 
+// Restart Service Function
+async function restartTranscriptionService(serverName) {
+    if (!confirm(`ต้องการ restart service บน ${serverName} ใช่หรือไม่?`)) {
+        return;
+    }
+    
+    const button = event.target;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = '⏳ Restarting...';
+    
+    try {
+        const result = await dashboardAPI.restartService(serverName);
+        if (result.success !== false) {
+            alert(`✅ Service restart initiated on ${serverName}\n\nPlease wait 30-60 seconds for service to restart.`);
+            // Refresh status after a delay
+            setTimeout(() => {
+                refreshServerStatus();
+            }, 5000);
+        } else {
+            alert(`❌ Error: ${result.error || 'Failed to restart service'}`);
+        }
+    } catch (error) {
+        console.error('Error restarting service:', error);
+        alert(`❌ Error: ${error.message || 'Failed to restart service'}`);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
 // Export functions
 window.startMonitoringTab = startMonitoringTab;
 window.stopMonitoringTab = stopMonitoringTab;
@@ -557,4 +588,5 @@ window.openMonitoringInNewWindow = openMonitoringInNewWindow;
 window.clearLogs = clearLogs;
 window.toggleAutoScroll = toggleAutoScroll;
 window.startProgressTracking = startProgressTracking;
+window.restartTranscriptionService = restartTranscriptionService;
 
