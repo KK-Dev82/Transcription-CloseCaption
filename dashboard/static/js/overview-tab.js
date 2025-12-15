@@ -5,6 +5,13 @@
 // Current selected server
 let currentOverviewServer = '4000-ada-sc';
 
+// Sorting state per server
+const sortingState = {
+    '4000-ada-sc': { field: 'updated_at', direction: 'desc' },
+    '4000-ada': { field: 'updated_at', direction: 'desc' },
+    '5080': { field: 'updated_at', direction: 'desc' }
+};
+
 // Pagination state per server
 const paginationState = {
     '4000-ada-sc': { currentPage: 1, totalTasks: 0, tasksPerPage: 50, allTasks: [] },
@@ -208,6 +215,49 @@ async function refreshOverviewServer(serverName, page = null) {
                 return taskStatus === statusFilter.toLowerCase();
             });
         }
+        
+        // Client-side sorting
+        const sortState = sortingState[serverName] || { field: 'updated_at', direction: 'desc' };
+        tasks.sort((a, b) => {
+            const field = sortState.field;
+            const direction = sortState.direction === 'asc' ? 1 : -1;
+            
+            let aValue = a[field] || '';
+            let bValue = b[field] || '';
+            
+            // Parse datetime strings for proper comparison
+            if (field === 'created_at' || field === 'updated_at') {
+                const parseDate = (dateStr) => {
+                    if (!dateStr) return new Date(0);
+                    try {
+                        // Handle different formats
+                        let normalized = String(dateStr).trim();
+                        if (normalized.includes('+')) {
+                            normalized = normalized.split('+')[0];
+                        } else if (normalized.includes('Z')) {
+                            normalized = normalized.replace('Z', '');
+                        }
+                        // Try parsing
+                        if (normalized.includes('T')) {
+                            return new Date(normalized);
+                        } else if (normalized.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)) {
+                            return new Date(normalized.replace(' ', 'T'));
+                        }
+                        return new Date(normalized);
+                    } catch (e) {
+                        return new Date(0);
+                    }
+                };
+                const aDate = parseDate(aValue);
+                const bDate = parseDate(bValue);
+                return (aDate - bDate) * direction;
+            }
+            
+            // String comparison for other fields
+            if (aValue < bValue) return -1 * direction;
+            if (aValue > bValue) return 1 * direction;
+            return 0;
+        });
         
         // Update total tasks after filtering
         state.totalTasks = tasks.length;
