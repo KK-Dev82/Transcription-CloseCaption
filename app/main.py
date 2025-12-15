@@ -47,15 +47,28 @@ LOG_FILE = LOG_DIR / "api-service.log"
 ERROR_LOG_FILE = LOG_DIR / "api-service-errors.log"
 
 # Configure root logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.FileHandler(ERROR_LOG_FILE, encoding='utf-8', level=logging.ERROR)
-    ]
-)
+# Create handlers
+file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+
+error_file_handler = logging.FileHandler(ERROR_LOG_FILE, encoding='utf-8')
+error_file_handler.setLevel(logging.ERROR)
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
+file_handler.setFormatter(formatter)
+error_file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(error_file_handler)
+root_logger.addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
 # Log uncaught exceptions
