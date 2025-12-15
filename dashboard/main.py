@@ -67,6 +67,15 @@ except ImportError:
     except ImportError:
         sqlite_admin_routes = None
 
+# Try to import live_streaming_routes (optional)
+try:
+    from .routes import live_streaming_routes
+except ImportError:
+    try:
+        from routes import live_streaming_routes
+    except ImportError:
+        live_streaming_routes = None
+
 app.include_router(server_routes.router)
 app.include_router(batch_routes.router)
 app.include_router(cleanup_routes.router)
@@ -80,6 +89,14 @@ if sqlite_admin_routes:
         logger.info("✅ SQLite Admin routes included")
     except Exception as e:
         logger.debug(f"SQLite Admin routes not available: {e}")
+
+# Include Live Streaming router (if available)
+if live_streaming_routes:
+    try:
+        app.include_router(live_streaming_routes.router)
+        logger.info("✅ Live Streaming routes included")
+    except Exception as e:
+        logger.debug(f"Live Streaming routes not available: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
