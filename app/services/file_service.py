@@ -62,7 +62,7 @@ class FileService:
         
         return info
     
-    def create_chunks(self, file_path: str, chunk_duration: int = 30) -> List[Dict[str, any]]:
+    def create_chunks(self, file_path: str, chunk_duration: int = 30) -> List[Dict[str, Any]]:
         """แบ่งไฟล์เป็น chunks พร้อม metadata (start_time, end_time)"""
         chunks = []
         file_info = self.get_file_info(file_path)
