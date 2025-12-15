@@ -742,3 +742,4 @@ window.switchTranscriptionTab = switchTranscriptionTab;
 window.closeTranscriptionTextModal = closeTranscriptionTextModal;
 window.formatDate = formatDate;
 window.formatDuration = formatDuration;
+window.sortTasks = sortTasks;
