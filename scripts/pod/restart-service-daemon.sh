@@ -98,6 +98,74 @@ echo ""
 # Wait a moment for processes to fully stop
 sleep 2
 
+# Step 2.5: Purge RabbitMQ Queues (Clear old tasks)
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🗑️  Step 2.5: Purging RabbitMQ Queues (Clearing old tasks)..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Queues to purge
+QUEUES_TO_PURGE=(
+    "transcription_request_queue"
+    "audio_extraction_queue"
+    "transcription_queue"
+    "transcription_chunk_queue"
+)
+
+# Load environment variables if .env.runpod exists
+if [ -f ".env.runpod" ]; then
+    set -a
+    source .env.runpod
+    set +a
+fi
+
+RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
+RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+RABBITMQ_USER=${RABBITMQ_USER:-senate}
+RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
+RABBITMQ_MGMT_PORT=${RABBITMQ_MGMT_PORT:-15672}
+
+PURGED_COUNT=0
+for queue_name in "${QUEUES_TO_PURGE[@]}"; do
+    print_status "Purging queue: $queue_name"
+    
+    # Check if queue exists and get message count
+    QUEUE_INFO=$(curl -s -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" \
+        "http://${RABBITMQ_HOST}:${RABBITMQ_MGMT_PORT}/api/queues/%2F/${queue_name}" 2>/dev/null)
+    
+    if [ -z "$QUEUE_INFO" ] || echo "$QUEUE_INFO" | grep -q "Not Found\|404" 2>/dev/null; then
+        print_warning "⚠️  Queue '$queue_name' not found (may not exist yet)"
+        continue
+    fi
+    
+    MESSAGES=$(echo "$QUEUE_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('messages', 0))" 2>/dev/null || echo "0")
+    
+    if [ "$MESSAGES" -eq 0 ]; then
+        print_success "✅ Queue '$queue_name' is already empty"
+        continue
+    fi
+    
+    print_warning "⚠️  Queue '$queue_name' has $MESSAGES messages"
+    
+    # Purge queue
+    RESPONSE=$(curl -s -X DELETE -u "${RABBITMQ_USER}:${RABBITMQ_PASSWORD}" \
+        "http://${RABBITMQ_HOST}:${RABBITMQ_MGMT_PORT}/api/queues/%2F/${queue_name}/contents" 2>/dev/null)
+    
+    if [ $? -eq 0 ]; then
+        print_success "✅ Purged $MESSAGES messages from queue '$queue_name'"
+        PURGED_COUNT=$((PURGED_COUNT + MESSAGES))
+    else
+        print_warning "⚠️  Failed to purge queue '$queue_name' (may not be critical)"
+    fi
+done
+
+if [ $PURGED_COUNT -gt 0 ]; then
+    print_success "✅ Total purged: $PURGED_COUNT messages"
+else
+    print_status "ℹ️  No messages to purge"
+fi
+echo ""
+
 # Step 3: Start Services using start-service-daemon.sh
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 Step 3: Starting Services..."
