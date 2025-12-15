@@ -275,9 +275,28 @@ class FasterWhisperProvider(WhisperProvider):
             except (TimeoutError, Exception) as e:
                 last_error = e
                 error_msg = str(e).lower()
+                error_type = type(e).__name__
+                
+                # ตรวจสอบ GPU-related errors
+                is_gpu_error = any(keyword in error_msg for keyword in [
+                    'cuda', 'gpu', 'out of memory', 'oom', 'nvidia', 'cudnn',
+                    'cudaerror', 'cudaruntimeerror', 'cudaoomerror'
+                ])
                 
                 # ตรวจสอบว่าเป็น timeout error หรือไม่
                 is_timeout = isinstance(e, TimeoutError) or "timeout" in error_msg
+                
+                # Log error with details
+                if is_gpu_error:
+                    logger.error(
+                        f"[Faster Whisper] 🚨 GPU-related error detected! "
+                        f"Type: {error_type}, Message: {str(e)}",
+                        exc_info=True
+                    )
+                    logger.error(
+                        f"[Faster Whisper] 🚨 This may indicate GPU overload or memory issues. "
+                        f"Attempt: {attempt + 1}/{MAX_RETRY_ATTEMPTS}"
+                    )
                 
                 if is_timeout and attempt < MAX_RETRY_ATTEMPTS - 1:
                     logger.warning(
