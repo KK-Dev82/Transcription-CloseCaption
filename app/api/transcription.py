@@ -102,7 +102,10 @@ async def get_all_transcriptions(
     รองรับ pagination และ sorting
     """
     try:
-        all_tasks = transcription_service.get_all_tasks()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_tasks = await loop.run_in_executor(None, transcription_service.get_all_tasks)
         
         # Sorting
         if sort_by in ['created_at', 'updated_at']:
