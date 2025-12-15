@@ -8,7 +8,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import threading
 
 logger = logging.getLogger(__name__)
@@ -218,22 +218,99 @@ class SQLiteStorage:
         
         chunks_json = json.dumps(transcription_data.get("chunks", []), ensure_ascii=False)
         
+        # Helper function to get UTC timestamp
+        def get_utc_timestamp(value):
+            """Convert value to UTC ISO format string"""
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                # Ensure timezone-aware
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                return value.isoformat()
+            if isinstance(value, str):
+                # Try to parse and ensure UTC
+                try:
+                    if 'Z' in value:
+                        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    elif '+' in value or value.count('-') > 2:
+                        dt = datetime.fromisoformat(value)
+                    else:
+                        dt = datetime.fromisoformat(value.replace('Z', ''))
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.isoformat()
+                except:
+                    return value
+            if isinstance(value, (int, float)):
+                # Assume timestamp
+                try:
+                    dt = datetime.fromtimestamp(value, tz=timezone.utc)
+                    return dt.isoformat()
+                except:
+                    return None
+            return value
+        
+        # Get created_at - preserve existing or use UTC now
+        existing_data = self.load_transcription(task_id)
+        created_at = transcription_data.get("created_at") or (existing_data.get("created_at") if existing_data else None)
+        if created_at is None:
+            created_at = datetime.now(timezone.utc).isoformat()
+        else:
+            created_at = get_utc_timestamp(created_at)
+        
+        # Get updated_at - use UTC now
+        updated_at = transcription_data.get("updated_at")
+        if updated_at is None:
+            updated_at = datetime.now(timezone.utc).isoformat()
+        else:
+            updated_at = get_utc_timestamp(updated_at)
+        
+        # Get completed_at
+        completed_at = transcription_data.get("completed_at")
+        if completed_at:
+            completed_at = get_utc_timestamp(completed_at)
+        
         conn.execute("""
             INSERT OR REPLACE INTO transcriptions (
-                task_id, updated_at, file_path, language, total_duration,
-                full_text, chunks_json, status, model_size, chunk_duration
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                task_id, created_at, updated_at, completed_at, file_path, file_url, file_name,
+                language, total_duration, full_text, original_text, corrected_text, partial_text,
+                chunks_json, status, progress, model_size, chunk_duration, error_message,
+                processing_time, transcription_time, audio_extraction_time, text_correction_time,
+                current_stage, current_stage_description, stage_progress,
+                job_id, user_id, callback_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
-            datetime.now().isoformat(),
+            created_at,
+            updated_at,
+            completed_at,
             transcription_data.get("file_path"),
+            transcription_data.get("file_url"),
+            transcription_data.get("file_name"),
             transcription_data.get("language"),
             transcription_data.get("total_duration"),
             transcription_data.get("full_text", ""),
+            transcription_data.get("original_text"),
+            transcription_data.get("corrected_text"),
+            transcription_data.get("partial_text"),
             chunks_json,
             transcription_data.get("status", "completed"),
+            transcription_data.get("progress", 0),
             transcription_data.get("model_size"),
-            transcription_data.get("chunk_duration")
+            transcription_data.get("chunk_duration"),
+            transcription_data.get("error_message"),
+            transcription_data.get("processing_time"),
+            transcription_data.get("transcription_time"),
+            transcription_data.get("audio_extraction_time"),
+            transcription_data.get("text_correction_time"),
+            transcription_data.get("current_stage"),
+            transcription_data.get("current_stage_description"),
+            transcription_data.get("stage_progress"),
+            transcription_data.get("job_id"),
+            transcription_data.get("user_id"),
+            transcription_data.get("callback_url")
         ))
         
         conn.commit()
