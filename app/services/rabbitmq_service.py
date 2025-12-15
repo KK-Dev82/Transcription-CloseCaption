@@ -7,11 +7,13 @@ import logging
 import os
 from typing import Dict, Any, Optional
 import pika
-from pika.exceptions import AMQPConnectionError, AMQPChannelError
+from pika.exceptions import AMQPConnectionError, AMQPChannelError, ChannelClosedByBroker, UnroutableError
 from fastapi import HTTPException
 import uuid
 from datetime import datetime
 import time
+import threading
+import signal
 
 logger = logging.getLogger(__name__)
 
@@ -439,28 +441,107 @@ class RabbitMQService:
                 priority = 10 if display_mode == "realtime_chunks" else 5
                 
                 try:
-                    self.channel.basic_publish(
-                        exchange='',
-                        routing_key=self.transcription_request_queue,
-                        body=json.dumps(task_data),
-                        properties=pika.BasicProperties(
-                            delivery_mode=2,  # Persistent
-                            content_type='application/json',
-                            priority=priority  # Priority: 10 for CloseCaption, 5 for normal
-                        )
-                    )
+                    # Note: With x-overflow=reject-publish, RabbitMQ will reject publish when queue is full
+                    # This will raise ChannelClosedByBroker exception that we catch below
+                    # Add timeout for publish operation (1-2 seconds) to prevent API hang
+                    PUBLISH_TIMEOUT = int(os.getenv('RABBITMQ_PUBLISH_TIMEOUT', '2'))  # Default 2 seconds
+                    
+                    # Use threading to implement timeout for synchronous publish
+                    publish_success = [False]
+                    publish_error = [None]
+                    
+                    def publish_with_timeout():
+                        try:
+                            self.channel.basic_publish(
+                                exchange='',
+                                routing_key=self.transcription_request_queue,
+                                body=json.dumps(task_data),
+                                properties=pika.BasicProperties(
+                                    delivery_mode=2,  # Persistent
+                                    content_type='application/json',
+                                    priority=priority  # Priority: 10 for CloseCaption, 5 for normal
+                                )
+                            )
+                            publish_success[0] = True
+                        except Exception as e:
+                            publish_error[0] = e
+                    
+                    # Run publish in a thread with timeout
+                    publish_thread = threading.Thread(target=publish_with_timeout)
+                    publish_thread.daemon = True
+                    publish_thread.start()
+                    publish_thread.join(timeout=PUBLISH_TIMEOUT)
+                    
+                    if publish_thread.is_alive():
+                        # Timeout occurred
+                        logger.error(f"⏱️  Publish timeout after {PUBLISH_TIMEOUT}s for task {task_id}")
+                        raise TimeoutError(f"RabbitMQ publish timeout after {PUBLISH_TIMEOUT} seconds")
+                    
+                    if publish_error[0]:
+                        raise publish_error[0]
+                    
+                    if not publish_success[0]:
+                        raise Exception("Publish failed without error")
+                    
                     logger.info(f"📤 Published with priority={priority} (display_mode={display_mode})")
                     logger.info(f"✅ Sent to {self.transcription_request_queue}: {task_id}")
                     return task_id
+                except TimeoutError as timeout_error:
+                    # Publish timeout - RabbitMQ may be slow or unresponsive
+                    logger.error(f"⏱️  Publish timeout for task {task_id}: {timeout_error}")
+                    MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
+                    RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "error": "Service temporarily unavailable",
+                            "message": f"RabbitMQ publish timeout. Please try again later.",
+                            "queue_status": {
+                                "current": "unknown",
+                                "max": MAX_QUEUE_REQUEST,
+                                "available": "unknown"
+                            },
+                            "retry_after_seconds": RETRY_AFTER_SECONDS,
+                            "suggestion": "RabbitMQ may be slow or unresponsive. Please wait and retry, or check queue status at /api/queue/status"
+                        },
+                        headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                    ) from timeout_error
+                except (pika.exceptions.ChannelClosedByBroker, pika.exceptions.AMQPChannelError) as publish_error:
+                    # RabbitMQ closed channel - likely queue is full (max-length reached with reject-publish)
+                    error_str = str(publish_error).lower()
+                    logger.warning(f"⚠️ Queue is full (RabbitMQ rejected publish): {publish_error}")
+                    MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
+                    RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "error": "Service temporarily unavailable",
+                            "message": f"Request queue is full ({MAX_QUEUE_REQUEST} tasks). Please try again later.",
+                            "queue_status": {
+                                "current": MAX_QUEUE_REQUEST,
+                                "max": MAX_QUEUE_REQUEST,
+                                "available": 0
+                            },
+                            "retry_after_seconds": RETRY_AFTER_SECONDS,
+                            "suggestion": "Queue is full. Please wait and retry, or check queue status at /api/queue/status"
+                        },
+                        headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                    ) from publish_error
                 except Exception as publish_error:
                     error_str = str(publish_error).lower()
                     # ตรวจสอบว่าเป็น queue full error หรือไม่
-                    if 'resource_locked' in error_str or 'precondition_failed' in error_str:
+                    if 'resource_locked' in error_str or 'precondition_failed' in error_str or 'queue' in error_str:
                         logger.warning(f"⚠️ Queue may be full or locked: {publish_error}")
+                        MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
+                        RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
                         raise HTTPException(
                             status_code=503,
-                            detail=f"Queue is full. Please try again later.",
-                            headers={"Retry-After": str(os.getenv('RETRY_AFTER_SECONDS', '30'))}
+                            detail={
+                                "error": "Service temporarily unavailable",
+                                "message": f"Queue is full. Please try again later.",
+                                "retry_after_seconds": RETRY_AFTER_SECONDS
+                            },
+                            headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
                         ) from publish_error
                     raise
                 

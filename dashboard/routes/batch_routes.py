@@ -4,6 +4,7 @@ Batch transcription API routes
 import asyncio
 import logging
 import uuid
+import random
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
@@ -58,8 +59,8 @@ class BatchTaskStatus(BaseModel):
     total_duration: Optional[float] = None
 
 
-async def send_transcription_task(server_name: str, video_file: str, model_size: str, language: str, batch_id: str, callback_url: str = None):
-    """Send a single transcription task to remote server"""
+async def send_transcription_task(server_name: str, video_file: str, model_size: str, language: str, batch_id: str, callback_url: str = None, max_retries: int = 3):
+    """Send a single transcription task to remote server with retry logic for rate limiting"""
     if server_name not in SERVERS:
         logger.error(f"❌ Server {server_name} not found in SERVERS config")
         return None
@@ -71,55 +72,113 @@ async def send_transcription_task(server_name: str, video_file: str, model_size:
     logger.info(f"📤 Sending transcription task to server: {server_name} ({api_url})")
     logger.info(f"   File: {video_file}, Model: {model_size}, Language: {language}")
     
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            request_payload = {
-                "file_path": video_file,
-                "language": language,
-                "model_size": model_size,
-                "use_chunking": False
-            }
-            
-            # Add callback_url if provided
-            if callback_url:
-                request_payload["callback_url"] = callback_url
-                logger.debug(f"   Callback URL: {callback_url}")
-            logger.debug(f"   Request URL: {api_url}/transcribe")
-            logger.debug(f"   Request payload: {request_payload}")
-            
-            async with session.post(
-                f"{api_url}/transcribe",
-                json=request_payload,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    task_id = result.get("task_id")
-                    
-                    logger.info(f"✅ Successfully sent task to {server_name}: task_id={task_id}")
-                    
-                    # Update batch status
-                    if batch_id in batch_tasks_store:
-                        batch_tasks_store[batch_id].pending_tasks -= 1
-                        batch_tasks_store[batch_id].processing_tasks += 1
-                    
-                    return task_id
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ Error sending task to {server_name} (HTTP {response.status}): {error_text}")
-                    
-                    if batch_id in batch_tasks_store:
-                        batch_tasks_store[batch_id].pending_tasks -= 1
-                        batch_tasks_store[batch_id].failed_tasks += 1
-                    
-                    return None
-    except Exception as e:
-        logger.error(f"❌ Exception sending task to {server_name} ({api_url}): {e}", exc_info=True)
-        if batch_id in batch_tasks_store:
-            batch_tasks_store[batch_id].pending_tasks -= 1
-            batch_tasks_store[batch_id].failed_tasks += 1
-        return None
+    import aiohttp
+    import json
+    
+    request_payload = {
+        "file_path": video_file,
+        "language": language,
+        "model_size": model_size,
+        "use_chunking": False
+    }
+    
+    # Add callback_url if provided
+    if callback_url:
+        request_payload["callback_url"] = callback_url
+        logger.debug(f"   Callback URL: {callback_url}")
+    
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{api_url}/transcribe",
+                    json=request_payload,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        task_id = result.get("task_id")
+                        
+                        logger.info(f"✅ Successfully sent task to {server_name}: task_id={task_id}")
+                        
+                        # Update batch status
+                        if batch_id in batch_tasks_store:
+                            batch_tasks_store[batch_id].pending_tasks -= 1
+                            batch_tasks_store[batch_id].processing_tasks += 1
+                        
+                        return task_id
+                    elif response.status == 429:
+                        # Rate limit exceeded - retry after delay with exponential backoff + jitter
+                        retry_after = int(response.headers.get("Retry-After", "60"))
+                        error_data = await response.text()
+                        try:
+                            error_json = json.loads(error_data)
+                            error_detail = error_json.get("detail", "Rate limit exceeded")
+                        except:
+                            error_detail = error_data
+                        
+                        if attempt < max_retries - 1:
+                            # Exponential backoff: base * 2^attempt + jitter (±20%)
+                            base_delay = retry_after if retry_after > 0 else 3
+                            exponential_delay = base_delay * (2 ** attempt)
+                            jitter = exponential_delay * 0.2 * (2 * random.random() - 1)  # ±20% jitter
+                            delay = max(1, int(exponential_delay + jitter))
+                            
+                            logger.warning(f"⚠️  Rate limit exceeded (HTTP 429) for {server_name}, attempt {attempt + 1}/{max_retries}. Retrying after {delay} seconds (exponential backoff + jitter)...")
+                            logger.warning(f"   Error: {error_detail}")
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            logger.error(f"❌ Error sending task to {server_name} (HTTP 429 after {max_retries} attempts): {error_detail}")
+                            if batch_id in batch_tasks_store:
+                                batch_tasks_store[batch_id].pending_tasks -= 1
+                                batch_tasks_store[batch_id].failed_tasks += 1
+                            return None
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"❌ Error sending task to {server_name} (HTTP {response.status}): {error_text}")
+                        
+                        if batch_id in batch_tasks_store:
+                            batch_tasks_store[batch_id].pending_tasks -= 1
+                            batch_tasks_store[batch_id].failed_tasks += 1
+                        
+                        return None
+        except asyncio.TimeoutError:
+            if attempt < max_retries - 1:
+                # Exponential backoff + jitter for timeout errors
+                base_delay = 3
+                exponential_delay = base_delay * (2 ** attempt)
+                jitter = exponential_delay * 0.2 * (2 * random.random() - 1)  # ±20% jitter
+                delay = max(1, int(exponential_delay + jitter))
+                
+                logger.warning(f"⚠️  Timeout sending task to {server_name}, attempt {attempt + 1}/{max_retries}. Retrying after {delay} seconds (exponential backoff + jitter)...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                logger.error(f"❌ Timeout sending task to {server_name} after {max_retries} attempts")
+                if batch_id in batch_tasks_store:
+                    batch_tasks_store[batch_id].pending_tasks -= 1
+                    batch_tasks_store[batch_id].failed_tasks += 1
+                return None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                # Exponential backoff + jitter for general exceptions
+                base_delay = 3
+                exponential_delay = base_delay * (2 ** attempt)
+                jitter = exponential_delay * 0.2 * (2 * random.random() - 1)  # ±20% jitter
+                delay = max(1, int(exponential_delay + jitter))
+                
+                logger.warning(f"⚠️  Exception sending task to {server_name}, attempt {attempt + 1}/{max_retries}: {e}. Retrying after {delay} seconds (exponential backoff + jitter)...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                logger.error(f"❌ Exception sending task to {server_name} ({api_url}) after {max_retries} attempts: {e}", exc_info=True)
+                if batch_id in batch_tasks_store:
+                    batch_tasks_store[batch_id].pending_tasks -= 1
+                    batch_tasks_store[batch_id].failed_tasks += 1
+                return None
+    
+    return None
 
 
 async def send_all_tasks(
@@ -155,14 +214,20 @@ async def send_all_tasks(
         callback_url = f"{dashboard_base_url}/api/webhook/transcription"
         logger.info(f"📞 Using webhook callback URL: {callback_url}")
     
-    semaphore = asyncio.Semaphore(concurrency)
+    # Limit concurrency to avoid rate limiting (API limit is 60 requests/minute)
+    # Use lower concurrency to stay under rate limit
+    effective_concurrency = min(concurrency, 50)  # Cap at 50 to leave buffer for rate limit
+    semaphore = asyncio.Semaphore(effective_concurrency)
     task_ids = []
     
-    async def send_with_semaphore(video_file: str):
+    async def send_with_semaphore(video_file: str, index: int):
         async with semaphore:
+            # Add small delay between requests to avoid hitting rate limit
+            if index > 0 and index % 10 == 0:
+                await asyncio.sleep(1)  # Small delay every 10 requests
             return await send_transcription_task(server_name, video_file, model_size, language, batch_id, callback_url)
     
-    tasks = [send_with_semaphore(video_file) for video_file in video_files]
+    tasks = [send_with_semaphore(video_file, idx) for idx, video_file in enumerate(video_files)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     failed_tasks = []
