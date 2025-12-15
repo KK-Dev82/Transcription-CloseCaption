@@ -5,7 +5,7 @@ import asyncio
 import logging
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel, Field
 
 # Support both relative and absolute imports
@@ -58,7 +58,7 @@ class BatchTaskStatus(BaseModel):
     total_duration: Optional[float] = None
 
 
-async def send_transcription_task(server_name: str, video_file: str, model_size: str, language: str, batch_id: str):
+async def send_transcription_task(server_name: str, video_file: str, model_size: str, language: str, batch_id: str, callback_url: str = None):
     """Send a single transcription task to remote server"""
     if server_name not in SERVERS:
         logger.error(f"❌ Server {server_name} not found in SERVERS config")
@@ -80,6 +80,11 @@ async def send_transcription_task(server_name: str, video_file: str, model_size:
                 "model_size": model_size,
                 "use_chunking": False
             }
+            
+            # Add callback_url if provided
+            if callback_url:
+                request_payload["callback_url"] = callback_url
+                logger.debug(f"   Callback URL: {callback_url}")
             logger.debug(f"   Request URL: {api_url}/transcribe")
             logger.debug(f"   Request payload: {request_payload}")
             
@@ -123,10 +128,12 @@ async def send_all_tasks(
     model_size: str,
     language: str,
     concurrency: int,
-    batch_id: str
+    batch_id: str,
+    callback_url: str = None
 ):
     """Send all tasks concurrently"""
     from datetime import datetime, timezone
+    import os
     
     logger.info(f"🚀 Starting batch transcription: server={server_name}, files={len(video_files)}, concurrency={concurrency}")
     
@@ -142,12 +149,18 @@ async def send_all_tasks(
     api_url = server_config["api_url"]
     logger.info(f"📍 Target server: {server_name} -> {api_url}")
     
+    # Get webhook URL if not provided
+    if not callback_url:
+        dashboard_base_url = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8020")
+        callback_url = f"{dashboard_base_url}/api/webhook/transcription"
+        logger.info(f"📞 Using webhook callback URL: {callback_url}")
+    
     semaphore = asyncio.Semaphore(concurrency)
     task_ids = []
     
     async def send_with_semaphore(video_file: str):
         async with semaphore:
-            return await send_transcription_task(server_name, video_file, model_size, language, batch_id)
+            return await send_transcription_task(server_name, video_file, model_size, language, batch_id, callback_url)
     
     tasks = [send_with_semaphore(video_file) for video_file in video_files]
     results = await asyncio.gather(*tasks, return_exceptions=True)
