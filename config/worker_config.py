@@ -65,7 +65,7 @@ TZDIR = os.getenv('TZDIR', '/usr/share/zoneinfo')
 # ============================================================================
 # Queue Limits
 # ============================================================================
-MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))  # 50 video + 1 close caption
 MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
 MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
 RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))

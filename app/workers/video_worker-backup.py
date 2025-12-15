@@ -573,8 +573,8 @@ class VideoWorker:
         สร้าง Quorum Queues สำหรับ 3-Queue Architecture ตาม Final Design
         """
         try:
-            # 1. Transcription Request Queue (max 50)
-            max_request = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+            # 1. Transcription Request Queue (max 51: 50 video + 1 close caption)
+            max_request = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
             request_args = self._get_queue_arguments(
                 self.transcription_request_queue,
                 max_length=max_request,

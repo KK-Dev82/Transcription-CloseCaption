@@ -45,7 +45,7 @@ timezone:
 
 # Queue Limits
 queues:
-  max_request: ${MAX_QUEUE_REQUEST:-50}
+  max_request: ${MAX_QUEUE_REQUEST:-51}  # 50 video + 1 close caption
   max_extraction: ${MAX_QUEUE_EXTRACTION:-80}
   max_transcribe: ${MAX_QUEUE_TRANSCRIBE:-20}
   retry_after_seconds: ${RETRY_AFTER_SECONDS:-30}

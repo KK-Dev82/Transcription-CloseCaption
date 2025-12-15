@@ -102,7 +102,7 @@ class AsyncConsumerManager:
         # ใช้ _get_queue_arguments จาก connection ถ้ามี
         if hasattr(self.connection, '_get_queue_arguments'):
             if queue_name == self.transcription_request_queue_name:
-                max_request = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+                max_request = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
                 return self.connection._get_queue_arguments(
                     queue_name,
                     max_length=max_request,
