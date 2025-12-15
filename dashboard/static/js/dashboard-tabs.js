@@ -5,6 +5,23 @@
 
 // Tab switching
 function switchTab(tabName) {
+    // Auto-refresh Overview tab when switching to it
+    if (tabName === 'overview' && typeof refreshOverviewServer === 'function') {
+        // Small delay to ensure tab is visible
+        setTimeout(() => {
+            const currentServer = window.currentOverviewServer || '4000-ada-sc';
+            if (typeof manualRefreshOverview === 'function') {
+                // Clear cache to force reload
+                if (window.paginationState && window.paginationState[currentServer]) {
+                    window.paginationState[currentServer].allTasks = [];
+                    window.paginationState[currentServer].currentPage = 1;
+                }
+                manualRefreshOverview();
+            } else if (typeof refreshOverviewServer === 'function') {
+                refreshOverviewServer(currentServer);
+            }
+        }, 100);
+    }
     // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
