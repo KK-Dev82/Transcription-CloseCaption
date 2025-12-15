@@ -254,10 +254,25 @@ class TranscriptionService:
             original_text = " ".join(original_text_parts) if original_text_parts else None
             corrected_text = " ".join(corrected_text_parts) if corrected_text_parts else None
             
-            # ถ้า full_text มีอยู่แล้วและ chunks ไม่มี original_text ให้ใช้ full_text เป็น corrected_text
+            # ดึง full_text จาก storage
             full_text_value = data.get("full_text")
+            
+            # ถ้า full_text มีอยู่แล้วและ chunks ไม่มี original_text ให้ใช้ full_text เป็น corrected_text
             if full_text_value and not corrected_text:
                 corrected_text = full_text_value
+            
+            # ถ้า full_text ไม่มี แต่มี corrected_text ให้ใช้ corrected_text เป็น full_text
+            if not full_text_value and corrected_text:
+                full_text_value = corrected_text
+            
+            # ถ้า full_text และ corrected_text ไม่มี แต่มี chunks ให้สร้าง full_text จาก chunks
+            if not full_text_value and chunk_objects:
+                chunk_texts = [chunk.text for chunk in chunk_objects if chunk.text and chunk.text.strip()]
+                if chunk_texts:
+                    full_text_value = " ".join(chunk_texts).strip()
+                    # ถ้ายังไม่มี corrected_text ให้ใช้ full_text เป็น corrected_text
+                    if not corrected_text:
+                        corrected_text = full_text_value
             
             response = TranscriptionResponse(
                 task_id=task_id,
