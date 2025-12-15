@@ -23,7 +23,7 @@ function startMonitoringTab() {
         } else {
             stopMonitoringTab();
         }
-    }, 5000); // Refresh every 5 seconds
+    }, 15000); // Refresh every 15 seconds (ลดจาก 5 เป็น 15 เพื่อลด load)
 }
 
 function stopMonitoringTab() {
@@ -463,11 +463,20 @@ function startProgressTracking(serverName, tasks) {
     
     if (tasks.length === 0) return;
     
+    // เพิ่ม debounce และลด frequency (ทุก 10 วินาทีแทนที่จะเป็นทุก 5 วินาที)
+    let lastUpdateTime = {};
     progressTrackingIntervals[serverName] = setInterval(async () => {
         try {
+            const now = Date.now();
             for (const task of tasks) {
                 const taskId = task.task_id || task.id;
                 if (!taskId) continue;
+                
+                // Debounce: ตรวจสอบ task เดียวกันทุก 10 วินาที
+                if (lastUpdateTime[taskId] && (now - lastUpdateTime[taskId]) < 10000) {
+                    continue;
+                }
+                lastUpdateTime[taskId] = now;
                 
                 try {
                     // Use Dashboard API proxy to avoid CORS issues
