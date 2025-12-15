@@ -63,12 +63,60 @@ class WorkerMonitor:
             return True
         
         # 2. ตรวจสอบว่า queue มี consumer หรือไม่
+        # แต่ต้องรอให้ worker start เสร็จก่อน (worker ใช้เวลา ~10-15 วินาทีในการลงทะเบียน consumer)
+        # ตรวจสอบว่า worker process ทำงานมานานแค่ไหน
+        worker_age = self._get_worker_process_age()
+        if worker_age < 20:  # ถ้า worker start มาไม่ถึง 20 วินาที ให้รอ
+            logger.debug(f"⏳ Worker กำลัง start (age: {worker_age}s) - รอให้ลงทะเบียน consumer...")
+            return False
+        
         consumer_count = self.get_queue_consumer_count()
         if consumer_count == 0:
-            logger.warning(f"⚠️ Queue ไม่มี consumer (consumer_count={consumer_count})")
+            logger.warning(f"⚠️ Queue ไม่มี consumer (consumer_count={consumer_count}, worker_age={worker_age}s)")
             return True
         
         return False
+    
+    def _get_worker_process_age(self) -> float:
+        """ตรวจสอบว่า worker process ทำงานมานานแค่ไหน (วินาที)"""
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "etime=", "-p", str(self._get_worker_pid())],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Parse elapsed time (format: DD-HH:MM:SS or HH:MM:SS or MM:SS)
+                etime = result.stdout.strip()
+                parts = etime.split(':')
+                if len(parts) == 3:  # DD-HH:MM:SS
+                    days, hours, minutes = map(int, parts[0].split('-')) if '-' in parts[0] else (0, int(parts[0]), int(parts[1]))
+                    seconds = int(parts[2])
+                    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+                elif len(parts) == 2:  # MM:SS
+                    return int(parts[0]) * 60 + int(parts[1])
+                else:
+                    return int(parts[0])  # SS
+            return 0
+        except Exception as e:
+            logger.debug(f"Error getting worker age: {e}")
+            return 0
+    
+    def _get_worker_pid(self) -> Optional[int]:
+        """หา PID ของ Video Worker"""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "python.*video_worker"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip().split('\n')[0])
+            return None
+        except Exception:
+            return None
     
     def can_restart(self) -> bool:
         """ตรวจสอบว่าสามารถ restart ได้หรือไม่ (จำกัดจำนวนครั้ง)"""
