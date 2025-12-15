@@ -370,120 +370,135 @@ class TranscriptionService:
                 return existing_task.task_id
         
         # ============================================================
-        # Admission Control: ตรวจสอบ Queue sizes ก่อนรับ request
+        # Admission Control: Optional - Let RabbitMQ handle queue limits
         # ============================================================
         # ใช้ 3-Queue Architecture ถ้าเปิดใช้งาน
         use_3queue_architecture = os.getenv('USE_3QUEUE_ARCHITECTURE', 'true').lower() == 'true'
         
-        try:
-            from fastapi import HTTPException
-            
-            if use_3queue_architecture:
-                # 3-Queue Architecture: ตรวจสอบ transcription_request_queue
-                MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))  # 50 video + 1 close caption
-                MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
-                MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
-                RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+        # Admission Control Mode:
+        # - "api": API checks queue size before accepting (current behavior)
+        # - "rabbitmq": API accepts all, RabbitMQ rejects when queue is full (new behavior)
+        # - "disabled": No admission control (not recommended)
+        admission_control_mode = os.getenv('ADMISSION_CONTROL_MODE', 'rabbitmq').lower()
+        
+        if admission_control_mode == 'api':
+            # Original behavior: API checks queue size before accepting
+            try:
+                from fastapi import HTTPException
                 
-                # Run get_queue_info in executor to avoid blocking event loop
-                import asyncio
-                loop = asyncio.get_event_loop()
-                queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info)
-                
-                # Check transcription_request_queue
-                request_queue_info = queue_info.get('transcription_request_queue', {})
-                request_queue_size = request_queue_info.get('message_count', 0)
-                available_slots = MAX_QUEUE_REQUEST - request_queue_size
-                
-                if request_queue_size >= MAX_QUEUE_REQUEST:
-                    error_msg = (
-                        f"Request queue is full ({request_queue_size}/{MAX_QUEUE_REQUEST}). "
-                        f"Please try again later. Estimated wait time: {RETRY_AFTER_SECONDS} seconds."
-                    )
-                    logger.warning(f"⚠️ {error_msg}")
-                    raise HTTPException(
-                        status_code=503,
-                        detail={
-                            "error": "Service temporarily unavailable",
-                            "message": error_msg,
-                            "queue_status": {
-                                "current": request_queue_size,
-                                "max": MAX_QUEUE_REQUEST,
-                                "available": 0
+                if use_3queue_architecture:
+                    # 3-Queue Architecture: ตรวจสอบ transcription_request_queue
+                    MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))  # 50 video + 1 close caption
+                    MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+                    MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
+                    RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+                    
+                    # Run get_queue_info in executor to avoid blocking event loop
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info)
+                    
+                    # Check transcription_request_queue
+                    request_queue_info = queue_info.get('transcription_request_queue', {})
+                    request_queue_size = request_queue_info.get('message_count', 0)
+                    available_slots = MAX_QUEUE_REQUEST - request_queue_size
+                    
+                    if request_queue_size >= MAX_QUEUE_REQUEST:
+                        error_msg = (
+                            f"Request queue is full ({request_queue_size}/{MAX_QUEUE_REQUEST}). "
+                            f"Please try again later. Estimated wait time: {RETRY_AFTER_SECONDS} seconds."
+                        )
+                        logger.warning(f"⚠️ {error_msg}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail={
+                                "error": "Service temporarily unavailable",
+                                "message": error_msg,
+                                "queue_status": {
+                                    "current": request_queue_size,
+                                    "max": MAX_QUEUE_REQUEST,
+                                    "available": 0
+                                },
+                                "retry_after_seconds": RETRY_AFTER_SECONDS,
+                                "suggestion": "Please check queue status at /api/queue/status before submitting new requests"
                             },
-                            "retry_after_seconds": RETRY_AFTER_SECONDS,
-                            "suggestion": "Please check queue status at /api/queue/status before submitting new requests"
-                        },
-                        headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                            headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                        )
+                    elif available_slots <= 5:  # Warning when only 5 or fewer slots available
+                        logger.warning(
+                            f"⚠️ Queue nearly full: {request_queue_size}/{MAX_QUEUE_REQUEST} "
+                            f"({available_slots} slots available)"
+                        )
+                    
+                    # Check audio_extraction_queue (optional - for full admission control)
+                    extraction_queue_info = queue_info.get('audio_extraction_queue', {})
+                    extraction_queue_size = extraction_queue_info.get('message_count', 0)
+                    
+                    if extraction_queue_size >= MAX_QUEUE_EXTRACTION:
+                        error_msg = f"Audio extraction queue is full ({extraction_queue_size}/{MAX_QUEUE_EXTRACTION}). Please try again later."
+                        logger.warning(f"⚠️ {error_msg}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail=error_msg,
+                            headers={"Retry-After": "60"}
+                        )
+                    
+                    # Check transcription_queue (optional - for full admission control)
+                    transcription_queue_info = queue_info.get('transcription_queue', {})
+                    transcription_queue_size = transcription_queue_info.get('message_count', 0)
+                    
+                    if transcription_queue_size >= MAX_QUEUE_TRANSCRIBE:
+                        error_msg = f"Transcription queue is full ({transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}). Please try again later."
+                        logger.warning(f"⚠️ {error_msg}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail=error_msg,
+                            headers={"Retry-After": "120"}
+                        )
+                    
+                    logger.info(
+                        f"✅ Admission control passed - Request: {request_queue_size}/{MAX_QUEUE_REQUEST}, "
+                        f"Extraction: {extraction_queue_size}/{MAX_QUEUE_EXTRACTION}, "
+                        f"Transcription: {transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}"
                     )
-                elif available_slots <= 5:  # Warning when only 5 or fewer slots available
-                    logger.warning(
-                        f"⚠️ Queue nearly full: {request_queue_size}/{MAX_QUEUE_REQUEST} "
-                        f"({available_slots} slots available)"
-                    )
+                else:
+                    # Legacy: ตรวจสอบ transcription_queue เก่า
+                    MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
+                    
+                    # Run get_queue_info_thread_safe in executor to avoid blocking event loop
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info_thread_safe)
+                    transcription_queue_info = queue_info.get('transcription_queue', {})
+                    current_queue_size = transcription_queue_info.get('message_count', 0)
+                    
+                    if current_queue_size >= MAX_QUEUE_SIZE:
+                        error_msg = (
+                            f"Queue is full ({current_queue_size}/{MAX_QUEUE_SIZE}). "
+                            f"Please try again later."
+                        )
+                        logger.warning(f"⚠️ {error_msg}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail=error_msg
+                        )
+                    
+                    logger.info(f"✅ Queue size check passed: {current_queue_size}/{MAX_QUEUE_SIZE} messages")
                 
-                # Check audio_extraction_queue (optional - for full admission control)
-                extraction_queue_info = queue_info.get('audio_extraction_queue', {})
-                extraction_queue_size = extraction_queue_info.get('message_count', 0)
-                
-                if extraction_queue_size >= MAX_QUEUE_EXTRACTION:
-                    error_msg = f"Audio extraction queue is full ({extraction_queue_size}/{MAX_QUEUE_EXTRACTION}). Please try again later."
-                    logger.warning(f"⚠️ {error_msg}")
-                    raise HTTPException(
-                        status_code=503,
-                        detail=error_msg,
-                        headers={"Retry-After": "60"}
-                    )
-                
-                # Check transcription_queue (optional - for full admission control)
-                transcription_queue_info = queue_info.get('transcription_queue', {})
-                transcription_queue_size = transcription_queue_info.get('message_count', 0)
-                
-                if transcription_queue_size >= MAX_QUEUE_TRANSCRIBE:
-                    error_msg = f"Transcription queue is full ({transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}). Please try again later."
-                    logger.warning(f"⚠️ {error_msg}")
-                    raise HTTPException(
-                        status_code=503,
-                        detail=error_msg,
-                        headers={"Retry-After": "120"}
-                    )
-                
-                logger.info(
-                    f"✅ Admission control passed - Request: {request_queue_size}/{MAX_QUEUE_REQUEST}, "
-                    f"Extraction: {extraction_queue_size}/{MAX_QUEUE_EXTRACTION}, "
-                    f"Transcription: {transcription_queue_size}/{MAX_QUEUE_TRANSCRIBE}"
-                )
-            else:
-                # Legacy: ตรวจสอบ transcription_queue เก่า
-                MAX_QUEUE_SIZE = int(os.getenv('TRANSCRIPTION_MAX_QUEUE_SIZE', '50'))
-                
-                # Run get_queue_info_thread_safe in executor to avoid blocking event loop
-                # ใช้ thread-safe version ที่สร้าง connection ใหม่ในแต่ละ thread
-                import asyncio
-                loop = asyncio.get_event_loop()
-                queue_info = await loop.run_in_executor(None, self.rabbitmq_service.get_queue_info_thread_safe)
-                transcription_queue_info = queue_info.get('transcription_queue', {})
-                current_queue_size = transcription_queue_info.get('message_count', 0)
-                
-                if current_queue_size >= MAX_QUEUE_SIZE:
-                    error_msg = (
-                        f"Queue is full ({current_queue_size}/{MAX_QUEUE_SIZE}). "
-                        f"Please try again later."
-                    )
-                    logger.warning(f"⚠️ {error_msg}")
-                    raise HTTPException(
-                        status_code=503,
-                        detail=error_msg
-                    )
-                
-                logger.info(f"✅ Queue size check passed: {current_queue_size}/{MAX_QUEUE_SIZE} messages")
-            
-        except HTTPException:
-            # Re-raise HTTPException (503)
-            raise
-        except Exception as e:
-            # Log error but continue (don't block if queue check fails)
-            logger.warning(f"⚠️ Queue size check failed (continuing anyway): {e}")
+            except HTTPException:
+                # Re-raise HTTPException (503)
+                raise
+            except Exception as e:
+                # Log error but continue (don't block if queue check fails)
+                logger.warning(f"⚠️ Queue size check failed (continuing anyway): {e}")
+        elif admission_control_mode == 'rabbitmq':
+            # New behavior: API accepts all requests, RabbitMQ will reject when queue is full
+            # RabbitMQ queue has max-length with x-overflow: reject-publish
+            # This allows API to accept requests without checking, and RabbitMQ handles the queue limit
+            logger.info("✅ Admission control mode: rabbitmq - API accepts all, RabbitMQ handles queue limits")
+        else:
+            # Disabled: No admission control (not recommended for production)
+            logger.warning("⚠️ Admission control disabled - not recommended for production")
         
         # ============================================================
         # Build initial_prompt (ถ้าเปิดใช้งาน)
