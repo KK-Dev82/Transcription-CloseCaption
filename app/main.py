@@ -1,12 +1,20 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 import json
 from typing import List, Dict
 import asyncio
 import os
+import sys
+import signal
+import traceback
+import threading
 from pathlib import Path
+from datetime import datetime
 
 # Load .env.runpod if exists
 try:
@@ -32,12 +40,48 @@ from .services.caption_service import CaptionService
 from .services.video_service import VideoService
 from .utils.storage_factory import get_storage, StorageFactory
 
-# ตั้งค่า logging
+# ตั้งค่า logging - เพิ่ม file handler สำหรับ error logs
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "api-service.log"
+ERROR_LOG_FILE = LOG_DIR / "api-service-errors.log"
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.FileHandler(ERROR_LOG_FILE, encoding='utf-8', level=logging.ERROR)
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Log uncaught exceptions
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Handle uncaught exceptions"""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    logger.critical(
+        "Uncaught exception",
+        exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
+sys.excepthook = handle_exception
+
+# Signal handlers for graceful shutdown logging
+def signal_handler(signum, frame):
+    """Handle signals (SIGTERM, SIGINT)"""
+    signal_name = signal.Signals(signum).name
+    logger.warning(f"⚠️ Received signal {signal_name} (PID: {os.getpid()})")
+    logger.warning(f"⚠️ Stack trace: {''.join(traceback.format_stack(frame))}")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 # สร้าง FastAPI app
 app = FastAPI(
@@ -170,6 +214,78 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 rate_limit_per_minute = int(os.getenv('API_RATE_LIMIT_PER_MINUTE', '60'))
 app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit_per_minute)
 logger.info(f"✅ Rate limiting enabled: {rate_limit_per_minute} requests/minute per IP")
+
+# ============================================================
+# Global Exception Handlers
+# ============================================================
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to catch all unhandled exceptions"""
+    import traceback
+    
+    error_traceback = traceback.format_exc()
+    error_details = {
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+        "path": str(request.url.path),
+        "method": request.method,
+        "query_params": dict(request.query_params),
+        "timestamp": datetime.utcnow().isoformat(),
+        "traceback": error_traceback
+    }
+    
+    # Log to error log file
+    logger.critical(
+        f"💥 UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)}\n"
+        f"Path: {request.method} {request.url.path}\n"
+        f"Traceback:\n{error_traceback}",
+        exc_info=exc
+    )
+    
+    # Log to separate error file for easier debugging
+    try:
+        with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"Timestamp: {datetime.utcnow().isoformat()}\n")
+            f.write(f"Error Type: {type(exc).__name__}\n")
+            f.write(f"Error Message: {str(exc)}\n")
+            f.write(f"Request: {request.method} {request.url.path}\n")
+            f.write(f"Traceback:\n{error_traceback}\n")
+            f.write(f"{'='*80}\n\n")
+    except Exception as log_error:
+        logger.error(f"Failed to write to error log file: {log_error}")
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Handle HTTP exceptions"""
+    logger.warning(
+        f"HTTP {exc.status_code}: {exc.detail} - {request.method} {request.url.path}"
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors"""
+    logger.warning(
+        f"Validation error: {exc.errors()} - {request.method} {request.url.path}"
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "body": exc.body}
+    )
 
 # สร้าง services
 transcription_service = TranscriptionService()
@@ -552,12 +668,72 @@ async def cleanup_system():
 #         "timestamp": asyncio.get_event_loop().time()
 #     })
 
+# ============================================================
+# Resource Monitoring
+# ============================================================
+def log_resource_usage():
+    """Log current resource usage"""
+    try:
+        import psutil
+        
+        process = psutil.Process(os.getpid())
+        
+        # Memory
+        memory_info = process.memory_info()
+        memory_percent = process.memory_percent()
+        
+        # CPU
+        cpu_percent = process.cpu_percent(interval=1)
+        
+        # Thread count
+        thread_count = threading.active_count()
+        
+        # File descriptors
+        try:
+            fd_count = process.num_fds() if hasattr(process, 'num_fds') else 'N/A'
+        except Exception:
+            fd_count = 'N/A'
+        
+        logger.info(
+            f"📊 Resource Usage - "
+            f"Memory: {memory_info.rss / 1024 / 1024:.2f} MB ({memory_percent:.1f}%), "
+            f"CPU: {cpu_percent:.1f}%, "
+            f"Threads: {thread_count}, "
+            f"FDs: {fd_count}"
+        )
+    except ImportError:
+        logger.warning("psutil not available, skipping resource monitoring")
+    except Exception as e:
+        logger.warning(f"Error logging resource usage: {e}")
+
+# Periodic resource monitoring
+async def periodic_resource_monitor():
+    """Periodically log resource usage"""
+    while True:
+        try:
+            await asyncio.sleep(300)  # Every 5 minutes
+            log_resource_usage()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in resource monitor: {e}")
+
 # ฟังก์ชั่น startup สำหรับ cleanup temp folders เก่า
 @app.on_event("startup")
 async def startup_event():
     """เริ่มต้น application"""
     try:
         logger.info("🚀 เริ่มต้น Transcription Service API...")
+        logger.info(f"📁 Process ID: {os.getpid()}")
+        logger.info(f"📁 Python version: {sys.version}")
+        logger.info(f"📁 Working directory: {os.getcwd()}")
+        logger.info(f"📁 Log files: {LOG_FILE}, {ERROR_LOG_FILE}")
+        
+        # Log initial resource usage
+        log_resource_usage()
+        
+        # Start resource monitoring
+        asyncio.create_task(periodic_resource_monitor())
         
         # ============================================================
         # Phase 5: Cleanup Service - Startup Cleanup & Periodic Scheduler
@@ -606,13 +782,25 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup เมื่อ application shutdown"""
     logger.info("🛑 Shutting down Transcription Service API...")
+    logger.info(f"📁 Process ID: {os.getpid()}")
+    
+    # Log final resource usage
+    log_resource_usage()
     
     try:
         from .services.cleanup_service import cleanup_service
         cleanup_service.stop_periodic_cleanup()
         logger.info("✅ Cleanup Service stopped")
     except Exception as e:
-        logger.warning(f"⚠️ Error stopping Cleanup Service: {e}")
+        logger.warning(f"⚠️ Error stopping Cleanup Service: {e}", exc_info=True)
+    
+    try:
+        from .services.worker_monitor import get_worker_monitor
+        monitor = get_worker_monitor()
+        monitor.stop()
+        logger.info("✅ Worker Monitor stopped")
+    except Exception as e:
+        logger.warning(f"⚠️ Error stopping Worker Monitor: {e}", exc_info=True)
     
     logger.info("✅ API Server shutdown complete")
 

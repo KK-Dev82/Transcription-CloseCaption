@@ -57,7 +57,7 @@ fi
 
 # Prepare directories
 echo "📁 Preparing directories..."
-mkdir -p uploads storage temp models test-files
+mkdir -p uploads storage temp models test-files logs
 echo "✅ Directories ready"
 echo ""
 

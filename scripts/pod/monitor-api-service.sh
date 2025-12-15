@@ -130,6 +130,13 @@ while true; do
             tail -10 "$LOG_FILE" >> "$RESTART_LOG" 2>/dev/null || true
         fi
         
+        # Get last few lines of error log (if exists)
+        ERROR_LOG_FILE="logs/api-service-errors.log"
+        if [ -f "$ERROR_LOG_FILE" ]; then
+            echo "[$timestamp] Last 10 lines of error log:" >> "$RESTART_LOG"
+            tail -10 "$ERROR_LOG_FILE" >> "$RESTART_LOG" 2>/dev/null || true
+        fi
+        
         # Restart service
         restart_service
     else
