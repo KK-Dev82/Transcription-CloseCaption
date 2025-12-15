@@ -35,12 +35,49 @@ async def sqlite_admin_index():
 
 @router.get("/phpliteadmin.php")
 async def phpliteadmin(request: Request):
-    """Serve phpLiteAdmin through PHP"""
-    if not PHPLITEADMIN_FILE.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="SQLite Admin not installed. Run: bash scripts/pod/install-sqlite-admin.sh"
-        )
+    """
+    Serve phpLiteAdmin through PHP
+    หรือ proxy ไปที่ remote server ถ้า Dashboard อยู่ที่ local
+    """
+    # ตรวจสอบว่า Dashboard อยู่ที่ local หรือ server
+    # ถ้า PHPLITEADMIN_FILE ไม่มี ให้ proxy ไปที่ remote server
+    if not PHPLITEADMIN_FILE.exists() or PHPLITEADMIN_FILE.stat().st_size == 0:
+        # Proxy ไปที่ remote server (ใช้ server แรกใน SERVERS)
+        try:
+            from ..server_constants import SERVERS
+            if SERVERS:
+                # ใช้ server แรก
+                first_server = list(SERVERS.keys())[0]
+                server_config = SERVERS[first_server]
+                api_url = server_config["api_url"]
+                
+                # แปลง api_url เป็น dashboard URL (เปลี่ยน port)
+                # เช่น http://213.173.108.6:14237 -> http://213.173.108.6:8020
+                import re
+                dashboard_url = re.sub(r':\d+$', ':8020', api_url)
+                
+                # Proxy request
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    proxy_url = f"{dashboard_url}/sqlite-admin/phpliteadmin.php"
+                    if request.url.query:
+                        proxy_url += f"?{request.url.query}"
+                    
+                    async with session.get(proxy_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                        if response.status == 200:
+                            content = await response.text()
+                            return HTMLResponse(content=content)
+                        else:
+                            raise HTTPException(
+                                status_code=404,
+                                detail=f"SQLite Admin not available on remote server. Run: bash scripts/pod/install-sqlite-admin.sh on server"
+                            )
+        except Exception as e:
+            logger.error(f"Error proxying SQLite Admin: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=404,
+                detail="SQLite Admin not installed. Run: bash scripts/pod/install-sqlite-admin.sh"
+            )
     
     # Check if PHP is available
     try:
