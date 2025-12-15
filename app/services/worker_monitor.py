@@ -143,40 +143,63 @@ class WorkerMonitor:
         return True
     
     def restart_worker(self) -> bool:
-        """Restart Video Worker"""
+        """Restart Video Worker (เฉพาะ worker ไม่ restart API)"""
         try:
             logger.info("🔄 กำลัง restart Video Worker...")
             
-            # หา script path
-            script_path = Path(__file__).parent.parent.parent / "scripts" / "pod" / "restart-service-daemon.sh"
+            # หา script path - ใช้ start-service-daemon.sh แต่ restart เฉพาะ worker
+            script_path = Path(__file__).parent.parent.parent / "scripts" / "pod" / "start-service-daemon.sh"
             
             if not script_path.exists():
                 logger.error(f"❌ Script not found: {script_path}")
                 return False
             
-            # Execute restart script
-            process = subprocess.Popen(
-                ["bash", str(script_path), "8010"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=str(script_path.parent.parent.parent)
-            )
+            # Stop existing worker
+            worker_pid = self._get_worker_pid()
+            if worker_pid:
+                logger.info(f"Stopping existing worker (PID: {worker_pid})...")
+                try:
+                    subprocess.run(["kill", str(worker_pid)], timeout=5, check=False)
+                    time.sleep(2)
+                    if self.is_worker_running():
+                        subprocess.run(["pkill", "-9", "-f", "python.*video_worker"], timeout=5, check=False)
+                        time.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Error stopping worker: {e}")
             
-            # Wait for completion (max 90 seconds - restart script ใช้เวลานานเพราะ health check)
-            try:
-                stdout, stderr = process.communicate(timeout=90)
-                if process.returncode == 0:
-                    logger.info("✅ Video Worker restarted successfully")
-                    self.restart_history.append(datetime.now())
-                    return True
-                else:
-                    logger.error(f"❌ Restart failed: {stderr.decode()}")
-                    return False
-            except subprocess.TimeoutExpired:
-                logger.warning("⚠️ Restart script timeout (90s) - process may still be running")
-                # Don't kill - let it continue (restart script ใช้เวลานานเพราะต้องรอ health check)
+            # Start worker only (ไม่ restart API)
+            # ใช้ start-service-daemon.sh แต่ส่ง flag เพื่อ start เฉพาะ worker
+            # หรือเรียก worker script โดยตรง
+            worker_script = Path(__file__).parent.parent.parent / "scripts" / "pod" / "start-worker-daemon.sh"
+            if worker_script.exists():
+                process = subprocess.Popen(
+                    ["bash", str(worker_script)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=str(script_path.parent.parent.parent)
+                )
+            else:
+                # Fallback: ใช้ start-service-daemon.sh แต่จะ start ทั้ง API และ Worker
+                # แต่อย่างน้อยจะไม่ crash API ที่ทำงานอยู่
+                logger.warning("⚠️ start-worker-daemon.sh not found, using start-service-daemon.sh")
+                process = subprocess.Popen(
+                    ["bash", str(script_path), "8010"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=str(script_path.parent.parent.parent)
+                )
+            
+            # Wait for worker to start (ไม่ต้องรอ API)
+            time.sleep(5)
+            
+            # Check if worker is running
+            if self.is_worker_running():
+                logger.info("✅ Video Worker restarted successfully")
                 self.restart_history.append(datetime.now())
-                return True  # Assume success if script started
+                return True
+            else:
+                logger.error("❌ Worker did not start")
+                return False
                 
         except Exception as e:
             logger.error(f"❌ Error restarting worker: {e}", exc_info=True)
