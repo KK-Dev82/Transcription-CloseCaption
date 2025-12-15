@@ -88,9 +88,23 @@ if [ "$FFMPEG_FOUND" = false ]; then
     if [ "$FFMPEG_FOUND" = false ]; then
         echo "   Trying system installation (apt-get)..."
         if command -v apt-get > /dev/null 2>&1; then
-            # Check network first
-            if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+            # Check network (try HTTPS instead of ping - more reliable)
+            NETWORK_OK=false
+            if timeout 3 curl -I https://github.com > /dev/null 2>&1; then
+                NETWORK_OK=true
+                echo "   ✅ Network OK (HTTPS)"
+            elif ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+                NETWORK_OK=true
+                echo "   ✅ Network OK (ping)"
+            else
+                echo "   ⚠️  Ping failed but will try apt-get anyway"
+                NETWORK_OK=true  # Try anyway
+            fi
+            
+            if [ "$NETWORK_OK" = true ]; then
+                echo "   Updating package lists..."
                 apt-get update -qq > /dev/null 2>&1
+                echo "   Installing ffmpeg..."
                 if apt-get install -y -qq ffmpeg > /dev/null 2>&1; then
                     if command -v ffmpeg > /dev/null 2>&1; then
                         FFMPEG_PATH=$(which ffmpeg)
@@ -99,13 +113,18 @@ if [ "$FFMPEG_FOUND" = false ]; then
                         echo "✅ FFmpeg installed via apt-get (system package)"
                         echo "   Location: $FFMPEG_PATH"
                         echo "   Version: $FFMPEG_VERSION"
-                        echo "   ⚠️  Note: Will be lost after Pod restart (use persistent volume if needed)"
+                        echo "   ⚠️  Note: Will be lost after Pod restart (will auto-install on next start)"
+                        
+                        # Try to copy to persistent volume for next time
+                        if [ -w "$FFMPEG_INSTALL_DIR" ] && [ -f "$FFMPEG_PATH" ]; then
+                            cp "$FFMPEG_PATH" "$FFMPEG_INSTALL_DIR/ffmpeg" 2>/dev/null && chmod +x "$FFMPEG_INSTALL_DIR/ffmpeg" && {
+                                echo "   ✅ Also copied to persistent volume for next restart"
+                            } || true
+                        fi
                     fi
                 else
                     echo "⚠️  apt-get install failed"
                 fi
-            else
-                echo "⚠️  No network connectivity - cannot use apt-get"
             fi
         else
             echo "⚠️  apt-get not available"

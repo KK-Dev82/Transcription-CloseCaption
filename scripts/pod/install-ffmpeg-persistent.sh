@@ -99,34 +99,51 @@ else
     echo "   ⚠️  curl/wget not found, trying alternative method..."
 fi
 
-# Method 2: Try apt-get (fallback, but won't persist)
+# Method 2: Try apt-get (primary method - works even if ping fails)
 if [ ! -f "$INSTALL_DIR/ffmpeg" ] || [ ! -x "$INSTALL_DIR/ffmpeg" ]; then
     echo ""
-    echo "📥 Method 2: Trying apt-get (will copy to persistent volume)..."
+    echo "📥 Method 2: Installing via apt-get (will copy to persistent volume)..."
     if command -v apt-get > /dev/null 2>&1; then
-        # Check if we have network access
-        if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1 || ping -c 1 -W 2 1.1.1.1 > /dev/null 2>&1; then
-            echo "   Network connectivity OK"
-            # Install to system first
+        # Check network (try HTTPS instead of ping - more reliable)
+        NETWORK_OK=false
+        if timeout 3 curl -I https://github.com > /dev/null 2>&1; then
+            NETWORK_OK=true
+            echo "   ✅ Network connectivity OK (HTTPS)"
+        elif ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+            NETWORK_OK=true
+            echo "   ✅ Network connectivity OK (ping)"
+        else
+            echo "   ⚠️  Ping failed but will try apt-get anyway (may work)"
+            NETWORK_OK=true  # Try anyway
+        fi
+        
+        if [ "$NETWORK_OK" = true ]; then
             echo "   Updating package lists..."
-            apt-get update -qq 2>&1 | head -5 || echo "   ⚠️  apt-get update had issues (may continue)"
+            apt-get update -qq 2>&1 | grep -v "^$" | head -5 || echo "   ⚠️  apt-get update had issues (may continue)"
             
             echo "   Installing ffmpeg..."
             if apt-get install -y -qq ffmpeg 2>&1 | grep -v "^$" | head -10; then
                 # Check if installation succeeded
                 if command -v ffmpeg > /dev/null 2>&1; then
                     FFMPEG_SYSTEM_PATH=$(which ffmpeg)
+                    FFMPEG_VERSION=$(ffmpeg -version 2>&1 | head -1 | awk '{print $3}' || echo "unknown")
+                    echo "   ✅ FFmpeg installed successfully"
+                    echo "   System location: $FFMPEG_SYSTEM_PATH"
+                    echo "   Version: $FFMPEG_VERSION"
+                    
                     # Copy to persistent volume
-                    if [ -f "$FFMPEG_SYSTEM_PATH" ]; then
+                    if [ -f "$FFMPEG_SYSTEM_PATH" ] && [ -w "$INSTALL_DIR" ]; then
                         cp "$FFMPEG_SYSTEM_PATH" "$INSTALL_DIR/ffmpeg"
                         chmod +x "$INSTALL_DIR/ffmpeg"
-                        echo "   ✅ Copied ffmpeg to persistent volume from $FFMPEG_SYSTEM_PATH"
+                        echo "   ✅ Copied ffmpeg to persistent volume: $INSTALL_DIR/ffmpeg"
+                    else
+                        echo "   ⚠️  Could not copy to persistent volume (using system FFmpeg)"
                     fi
                     
                     # Try to find and copy ffprobe
                     if command -v ffprobe > /dev/null 2>&1; then
                         FFPROBE_SYSTEM_PATH=$(which ffprobe)
-                        if [ -f "$FFPROBE_SYSTEM_PATH" ]; then
+                        if [ -f "$FFPROBE_SYSTEM_PATH" ] && [ -w "$INSTALL_DIR" ]; then
                             cp "$FFPROBE_SYSTEM_PATH" "$INSTALL_DIR/ffprobe"
                             chmod +x "$INSTALL_DIR/ffprobe"
                             echo "   ✅ Copied ffprobe to persistent volume"

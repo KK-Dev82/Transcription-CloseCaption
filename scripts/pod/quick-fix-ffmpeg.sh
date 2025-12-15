@@ -44,42 +44,68 @@ for path in "${SEARCH_PATHS[@]}"; do
     fi
 done
 
-# Method 2: Try apt-get with verbose output
+# Method 2: Try apt-get (primary method - works even if ping fails)
 if [ "$FFMPEG_FOUND" = false ] && command -v apt-get > /dev/null 2>&1; then
     echo ""
-    echo "📥 Method 2: Trying apt-get with verbose output..."
+    echo "📥 Method 2: Installing via apt-get (system package)..."
     
-    # Check network
-    if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
-        echo "   ✅ Network connectivity OK"
-        
+    # Check network (try HTTPS instead of ping - more reliable)
+    NETWORK_OK=false
+    if timeout 3 curl -I https://github.com > /dev/null 2>&1; then
+        NETWORK_OK=true
+        echo "   ✅ Network connectivity OK (HTTPS)"
+    elif ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+        NETWORK_OK=true
+        echo "   ✅ Network connectivity OK (ping)"
+    else
+        echo "   ⚠️  Ping failed but will try apt-get anyway (may work)"
+        NETWORK_OK=true  # Try anyway
+    fi
+    
+    if [ "$NETWORK_OK" = true ]; then
         echo "   Updating package lists..."
-        apt-get update 2>&1 | head -20 || echo "   ⚠️  apt-get update had issues"
+        if apt-get update -qq 2>&1 | grep -v "^$" | head -10; then
+            echo "   ✅ Package lists updated"
+        else
+            echo "   ⚠️  apt-get update completed (checking for errors above)"
+        fi
         
         echo "   Installing ffmpeg..."
-        if apt-get install -y ffmpeg 2>&1 | tee /tmp/ffmpeg-install.log; then
+        if apt-get install -y -qq ffmpeg 2>&1 | grep -v "^$" | head -20; then
             # Check if installation succeeded
             if command -v ffmpeg > /dev/null 2>&1; then
                 FFMPEG_SYSTEM_PATH=$(which ffmpeg)
-                cp "$FFMPEG_SYSTEM_PATH" "$INSTALL_DIR/ffmpeg"
-                chmod +x "$INSTALL_DIR/ffmpeg"
-                echo "   ✅ Installed and copied to $INSTALL_DIR"
-                FFMPEG_FOUND=true
+                FFMPEG_VERSION=$(ffmpeg -version 2>&1 | head -1 | awk '{print $3}' || echo "unknown")
+                echo "   ✅ FFmpeg installed successfully"
+                echo "   Location: $FFMPEG_SYSTEM_PATH"
+                echo "   Version: $FFMPEG_VERSION"
+                
+                # Try to copy to persistent volume (if writable)
+                if [ -w "$INSTALL_DIR" ]; then
+                    cp "$FFMPEG_SYSTEM_PATH" "$INSTALL_DIR/ffmpeg" 2>/dev/null && chmod +x "$INSTALL_DIR/ffmpeg" && {
+                        echo "   ✅ Copied to persistent volume: $INSTALL_DIR/ffmpeg"
+                        FFMPEG_FOUND=true
+                    } || echo "   ⚠️  Could not copy to persistent volume (using system FFmpeg)"
+                fi
                 
                 # Copy ffprobe if available
                 if command -v ffprobe > /dev/null 2>&1; then
                     FFPROBE_SYSTEM_PATH=$(which ffprobe)
-                    cp "$FFPROBE_SYSTEM_PATH" "$INSTALL_DIR/ffprobe"
-                    chmod +x "$INSTALL_DIR/ffprobe"
-                    echo "   ✅ Copied ffprobe"
+                    if [ -w "$INSTALL_DIR" ]; then
+                        cp "$FFPROBE_SYSTEM_PATH" "$INSTALL_DIR/ffprobe" 2>/dev/null && chmod +x "$INSTALL_DIR/ffprobe" && {
+                            echo "   ✅ Copied ffprobe to persistent volume"
+                        }
+                    fi
                 fi
+                
+                # Mark as found (even if not in persistent volume)
+                FFMPEG_FOUND=true
+            else
+                echo "   ❌ apt-get install completed but ffmpeg not found in PATH"
             fi
         else
             echo "   ❌ apt-get install failed"
-            echo "   Check logs: cat /tmp/ffmpeg-install.log"
         fi
-    else
-        echo "   ❌ No network connectivity"
     fi
 fi
 
