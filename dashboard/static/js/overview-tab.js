@@ -703,6 +703,27 @@ function closeTranscriptionTextModal() {
     currentTranscriptionServer = null;
 }
 
+// Sorting function
+function sortTasks(serverName, field) {
+    const currentSort = sortingState[serverName] || { field: 'updated_at', direction: 'desc' };
+    
+    // Toggle direction if clicking the same field, otherwise set to desc
+    if (currentSort.field === field) {
+        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentSort.field = field;
+        currentSort.direction = 'desc';
+    }
+    
+    sortingState[serverName] = currentSort;
+    
+    // Reset to page 1 when sorting changes
+    paginationState[serverName].currentPage = 1;
+    
+    // Refresh the table with new sorting
+    refreshOverviewServer(serverName);
+}
+
 // Export functions
 window.startOverviewRefresh = startOverviewRefresh;
 window.stopOverviewRefresh = stopOverviewRefresh;
