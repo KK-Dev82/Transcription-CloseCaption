@@ -380,7 +380,7 @@ class TranscriptionService:
             
             if use_3queue_architecture:
                 # 3-Queue Architecture: ตรวจสอบ transcription_request_queue
-                MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '50'))
+                MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))  # 50 video + 1 close caption
                 MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
                 MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
                 RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
@@ -393,14 +393,33 @@ class TranscriptionService:
                 # Check transcription_request_queue
                 request_queue_info = queue_info.get('transcription_request_queue', {})
                 request_queue_size = request_queue_info.get('message_count', 0)
+                available_slots = MAX_QUEUE_REQUEST - request_queue_size
                 
                 if request_queue_size >= MAX_QUEUE_REQUEST:
-                    error_msg = f"Request queue is full ({request_queue_size}/{MAX_QUEUE_REQUEST}). Please try again later."
+                    error_msg = (
+                        f"Request queue is full ({request_queue_size}/{MAX_QUEUE_REQUEST}). "
+                        f"Please try again later. Estimated wait time: {RETRY_AFTER_SECONDS} seconds."
+                    )
                     logger.warning(f"⚠️ {error_msg}")
                     raise HTTPException(
                         status_code=503,
-                        detail=error_msg,
+                        detail={
+                            "error": "Service temporarily unavailable",
+                            "message": error_msg,
+                            "queue_status": {
+                                "current": request_queue_size,
+                                "max": MAX_QUEUE_REQUEST,
+                                "available": 0
+                            },
+                            "retry_after_seconds": RETRY_AFTER_SECONDS,
+                            "suggestion": "Please check queue status at /api/queue/status before submitting new requests"
+                        },
                         headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                    )
+                elif available_slots <= 5:  # Warning when only 5 or fewer slots available
+                    logger.warning(
+                        f"⚠️ Queue nearly full: {request_queue_size}/{MAX_QUEUE_REQUEST} "
+                        f"({available_slots} slots available)"
                     )
                 
                 # Check audio_extraction_queue (optional - for full admission control)

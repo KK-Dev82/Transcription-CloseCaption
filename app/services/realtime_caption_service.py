@@ -27,7 +27,7 @@ class RealtimeCaptionSession:
     """Session สำหรับ real-time caption"""
     def __init__(self, session_id: str, user_id: str, file_path: str, 
                  language: str = "th", model_size: str = "base", 
-                 chunk_duration: int = 5, delay_seconds: float = 0.0):
+                 chunk_duration: int = 3, delay_seconds: float = 0.0):  # 3s สำหรับ realtime close caption
         self.session_id = session_id
         self.user_id = user_id
         self.file_path = file_path
@@ -222,7 +222,7 @@ class RealtimeCaptionService:
     
     async def start_realtime_caption(self, user_id: str, file_path: str, 
                                    language: str = "th", model_size: str = "base",
-                                   chunk_duration: int = 5, delay_seconds: float = 0.0) -> str:
+                                   chunk_duration: int = 3, delay_seconds: float = 0.0) -> str:  # 3s สำหรับ realtime close caption
         """เริ่ม real-time caption session"""
         
         # สร้าง session

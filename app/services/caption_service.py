@@ -69,7 +69,7 @@ class CaptionService:
                 audio_path = self.file_service.extract_audio(file_path)
             
             # สำหรับ close caption ใช้ chunk เล็กกว่า (5-10 วินาที)
-            chunk_duration = 5 if model_size == "tiny" else 10
+            chunk_duration = 3 if model_size == "tiny" else 3  # 3s สำหรับ realtime close caption
             
             # สร้าง chunks
             logger.info("กำลังแบ่งไฟล์เป็น chunks...")
