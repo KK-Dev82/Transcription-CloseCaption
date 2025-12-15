@@ -437,11 +437,20 @@ class SQLiteStorage:
             select_clause = ", ".join(select_columns)
             
             # Determine order by column (use updated_at if available, else created_at)
-            order_by = 'updated_at' if 'updated_at' in columns else 'created_at'
+            # Use COALESCE to fallback to created_at if updated_at is NULL
+            if 'updated_at' in columns and 'created_at' in columns:
+                # Use COALESCE to prefer updated_at, fallback to created_at
+                order_by = 'COALESCE(updated_at, created_at) DESC, created_at DESC'
+            elif 'updated_at' in columns:
+                order_by = 'updated_at DESC'
+            elif 'created_at' in columns:
+                order_by = 'created_at DESC'
+            else:
+                order_by = 'task_id DESC'  # Fallback
             
             cursor = conn.execute(f"""
                 SELECT {select_clause} FROM transcriptions 
-                ORDER BY {order_by} DESC
+                ORDER BY {order_by}
             """)
             
             results = []
