@@ -485,9 +485,13 @@ class SQLiteStorage:
             else:
                 order_by = 'task_id DESC'  # Fallback
             
+            # ใช้ LIMIT เพื่อลด load เมื่อมี tasks เยอะ (default: 1000 tasks)
+            # ถ้าต้องการทั้งหมด ให้เรียกโดยไม่ระบุ limit
+            max_tasks = int(os.getenv('SQLITE_MAX_TASKS_PER_QUERY', '1000'))
             cursor = conn.execute(f"""
                 SELECT {select_clause} FROM transcriptions 
                 ORDER BY {order_by}
+                LIMIT {max_tasks}
             """)
             
             results = []

@@ -96,6 +96,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# เพิ่ม Rate Limiting Middleware (Simple in-memory rate limiter)
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+import time
+from collections import defaultdict
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Simple rate limiting middleware"""
+    def __init__(self, app, requests_per_minute: int = 60):
+        super().__init__(app)
+        self.requests_per_minute = requests_per_minute
+        self.request_counts = defaultdict(list)
+        self.cleanup_interval = 60  # Cleanup every 60 seconds
+        self.last_cleanup = time.time()
+    
+    async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for health checks
+        if request.url.path == "/health":
+            return await call_next(request)
+        
+        # Get client IP
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # Cleanup old entries periodically
+        current_time = time.time()
+        if current_time - self.last_cleanup > self.cleanup_interval:
+            self._cleanup_old_entries(current_time)
+            self.last_cleanup = current_time
+        
+        # Check rate limit
+        now = time.time()
+        minute_ago = now - 60
+        
+        # Remove requests older than 1 minute
+        self.request_counts[client_ip] = [
+            req_time for req_time in self.request_counts[client_ip]
+            if req_time > minute_ago
+        ]
+        
+        # Check if limit exceeded
+        if len(self.request_counts[client_ip]) >= self.requests_per_minute:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": f"Rate limit exceeded: {self.requests_per_minute} requests per minute",
+                    "retry_after": 60
+                },
+                headers={"Retry-After": "60"}
+            )
+        
+        # Record request
+        self.request_counts[client_ip].append(now)
+        
+        # Process request
+        response = await call_next(request)
+        return response
+    
+    def _cleanup_old_entries(self, current_time: float):
+        """Remove entries older than 1 minute"""
+        minute_ago = current_time - 60
+        for ip in list(self.request_counts.keys()):
+            self.request_counts[ip] = [
+                req_time for req_time in self.request_counts[ip]
+                if req_time > minute_ago
+            ]
+            if not self.request_counts[ip]:
+                del self.request_counts[ip]
+
+# เพิ่ม rate limiting middleware (60 requests per minute per IP)
+# สำหรับ endpoints ที่มี load สูง (เช่น /transcribe/, /api/server/*/tasks)
+rate_limit_per_minute = int(os.getenv('API_RATE_LIMIT_PER_MINUTE', '60'))
+app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit_per_minute)
+logger.info(f"✅ Rate limiting enabled: {rate_limit_per_minute} requests/minute per IP")
+
 # สร้าง services
 transcription_service = TranscriptionService()
 caption_service = CaptionService()
