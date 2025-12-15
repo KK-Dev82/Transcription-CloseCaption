@@ -26,6 +26,91 @@ async def get_queue_info():
         logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล queue: {e}")
         raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}")
 
+@router.get("/status")
+async def get_queue_status():
+    """
+    ตรวจสอบสถานะ queue และบอกว่าสามารถรับ request ใหม่ได้หรือไม่
+    
+    Returns:
+        - available: True ถ้ายังรับ request ได้
+        - slots_available: จำนวน slots ที่ว่าง
+        - estimated_wait_time: เวลาที่คาดว่าจะรอ (วินาที)
+    """
+    try:
+        import os
+        queue_info = rabbitmq_service.get_queue_info()
+        
+        # Get queue limits from env
+        MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
+        MAX_QUEUE_EXTRACTION = int(os.getenv('MAX_QUEUE_EXTRACTION', '80'))
+        MAX_QUEUE_TRANSCRIBE = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
+        
+        # Get current queue sizes
+        request_queue_info = queue_info.get('transcription_request_queue', {})
+        extraction_queue_info = queue_info.get('audio_extraction_queue', {})
+        transcription_queue_info = queue_info.get('transcription_queue', {})
+        
+        request_size = request_queue_info.get('message_count', 0)
+        extraction_size = extraction_queue_info.get('message_count', 0)
+        transcription_size = transcription_queue_info.get('message_count', 0)
+        
+        # Calculate available slots
+        request_slots = MAX_QUEUE_REQUEST - request_size
+        extraction_slots = MAX_QUEUE_EXTRACTION - extraction_size
+        transcription_slots = MAX_QUEUE_TRANSCRIBE - transcription_size
+        
+        # Determine if available (all queues must have slots)
+        available = (
+            request_slots > 0 and 
+            extraction_slots > 0 and 
+            transcription_slots > 0
+        )
+        
+        # Estimate wait time based on queue sizes and processing rate
+        # Assume: 2 concurrent GPU tasks, ~20 min per 40-min video
+        # Throughput: ~6 tasks/hour = 10 min/task average
+        estimated_wait_time = 0
+        if not available:
+            # Estimate based on longest queue
+            bottleneck_size = max(request_size, extraction_size, transcription_size)
+            bottleneck_max = max(MAX_QUEUE_REQUEST, MAX_QUEUE_EXTRACTION, MAX_QUEUE_TRANSCRIBE)
+            
+            # Rough estimate: 10 minutes per task, 2 concurrent = 5 min per task in queue
+            estimated_wait_time = (bottleneck_size * 5 * 60)  # seconds
+        
+        return {
+            "available": available,
+            "queues": {
+                "request": {
+                    "current": request_size,
+                    "max": MAX_QUEUE_REQUEST,
+                    "available_slots": request_slots,
+                    "percentage": round((request_size / MAX_QUEUE_REQUEST) * 100, 1)
+                },
+                "extraction": {
+                    "current": extraction_size,
+                    "max": MAX_QUEUE_EXTRACTION,
+                    "available_slots": extraction_slots,
+                    "percentage": round((extraction_size / MAX_QUEUE_EXTRACTION) * 100, 1)
+                },
+                "transcription": {
+                    "current": transcription_size,
+                    "max": MAX_QUEUE_TRANSCRIBE,
+                    "available_slots": transcription_slots,
+                    "percentage": round((transcription_size / MAX_QUEUE_TRANSCRIBE) * 100, 1)
+                }
+            },
+            "estimated_wait_time_seconds": estimated_wait_time,
+            "estimated_wait_time_minutes": round(estimated_wait_time / 60, 1),
+            "recommendation": (
+                "You can submit new requests" if available 
+                else f"Queue is full. Please wait approximately {round(estimated_wait_time / 60, 1)} minutes before retrying."
+            )
+        }
+    except Exception as e:
+        logger.error(f"Error getting queue status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting queue status: {str(e)}")
+
 @router.post("/purge/{queue_name}")
 async def purge_queue(queue_name: str):
     """ลบ messages ทั้งหมดใน queue"""
