@@ -66,14 +66,20 @@ class WorkerMonitor:
         # แต่ต้องรอให้ worker start เสร็จก่อน (worker ใช้เวลา ~10-15 วินาทีในการลงทะเบียน consumer)
         # ตรวจสอบว่า worker process ทำงานมานานแค่ไหน
         worker_age = self._get_worker_process_age()
-        if worker_age < 20:  # ถ้า worker start มาไม่ถึง 20 วินาที ให้รอ
-            logger.debug(f"⏳ Worker กำลัง start (age: {worker_age}s) - รอให้ลงทะเบียน consumer...")
+        WORKER_MIN_AGE_SECONDS = int(os.getenv('WORKER_MIN_AGE_SECONDS', '60'))  # เพิ่มจาก 20 เป็น 60
+        if worker_age < WORKER_MIN_AGE_SECONDS:
+            logger.debug(f"⏳ Worker กำลัง start (age: {worker_age}s < {WORKER_MIN_AGE_SECONDS}s) - รอให้ลงทะเบียน consumer...")
             return False
         
         consumer_count = self.get_queue_consumer_count()
+        worker_pid = self._get_worker_pid()
         if consumer_count == 0:
-            logger.warning(f"⚠️ Queue ไม่มี consumer (consumer_count={consumer_count}, worker_age={worker_age}s)")
-            return True
+            if worker_pid and worker_age >= WORKER_MIN_AGE_SECONDS:
+                logger.warning(f"⚠️ Queue ไม่มี consumer (consumer_count={consumer_count}, worker_age={worker_age}s, pid={worker_pid})")
+                return True
+            else:
+                logger.debug(f"Worker may still be starting (age={worker_age}s, pid={worker_pid}), skipping restart")
+                return False
         
         return False
     
