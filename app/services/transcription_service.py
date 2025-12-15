@@ -1122,6 +1122,7 @@ class TranscriptionService:
                     if current_progress != task.progress or current_status != task.status:
                         task.progress = current_progress
                         task.status = current_status
+                        task.updated_at = utc_now()  # อัปเดต updated_at เมื่อ progress หรือ status เปลี่ยน
                         self.json_storage.save_transcription(task_id, task.__dict__)
                         # Log เฉพาะเมื่อ progress หรือ status เปลี่ยน (ลด log spam)
                         if current_progress != last_logged_progress or current_status != last_logged_status:

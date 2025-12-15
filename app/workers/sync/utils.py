@@ -33,6 +33,8 @@ class WorkerUtils:
     def save_chunk_result(self, parent_task_id: str, chunk_index: int, chunk_data: Dict, total_chunks: int):
         """บันทึกผลลัพธ์ของ chunk ลง storage"""
         try:
+            from datetime import datetime, timezone
+            
             # Load parent task
             parent_task = self.worker.json_storage.get_transcription(parent_task_id)
             if not parent_task:
@@ -56,6 +58,9 @@ class WorkerUtils:
             # อัปเดต total_chunks และ completed_chunks
             parent_task['total_chunks'] = total_chunks
             parent_task['completed_chunks'] = completed_chunks
+            
+            # อัปเดต updated_at ทุกครั้งที่บันทึก chunk result (เพื่อให้ updated_at ไม่เท่ากับ created_at)
+            parent_task['updated_at'] = datetime.now(timezone.utc).isoformat()
             
             # อัปเดต total_tasks และ completed_tasks
             # total_tasks = 1 (audio extraction, ถ้ามีและไม่เป็น null) + total_chunks (transcription chunks)
@@ -98,6 +103,9 @@ class WorkerUtils:
             
             parent_task['progress'] = progress
             parent_task['status'] = f"processing_chunk_{completed_chunks}_of_{total_chunks}"
+            
+            # อัปเดต updated_at ทุกครั้งที่บันทึก chunk result (เพื่อให้ updated_at ไม่เท่ากับ created_at)
+            parent_task['updated_at'] = datetime.now(timezone.utc).isoformat()
             
             # Save to storage
             self.worker.json_storage.save_transcription(parent_task_id, parent_task)
