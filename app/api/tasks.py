@@ -69,7 +69,10 @@ async def get_tasks_by_date(
         target_date = parse_date(date)
         
         # Get all transcriptions
-        all_transcriptions = json_storage.list_all_transcriptions()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_transcriptions = await loop.run_in_executor(None, json_storage.list_all_transcriptions)
         
         # Filter by date
         filtered_tasks = []
@@ -163,7 +166,10 @@ async def get_tasks_summary(
             target_date = datetime.now().date()
         
         # Get all transcriptions
-        all_transcriptions = json_storage.list_all_transcriptions()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_transcriptions = await loop.run_in_executor(None, json_storage.list_all_transcriptions)
         
         # Filter by date
         tasks_by_date = []
@@ -203,7 +209,10 @@ async def get_available_dates():
     ดึงรายการวันที่ที่มี tasks
     """
     try:
-        all_transcriptions = json_storage.list_all_transcriptions()
+        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        all_transcriptions = await loop.run_in_executor(None, json_storage.list_all_transcriptions)
         
         dates = set()
         for task in all_transcriptions:
