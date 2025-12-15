@@ -182,6 +182,10 @@ class WorkerMonitor:
         logger.info(f"   Check interval: {self.check_interval} seconds")
         logger.info(f"   Max restart attempts: {self.max_restart_attempts} per hour")
         
+        # Wait initial grace period for worker to start (30 seconds)
+        logger.info("⏳ Waiting 30 seconds for worker to fully start...")
+        await asyncio.sleep(30)
+        
         while self.running:
             try:
                 if self.should_restart():
@@ -190,14 +194,15 @@ class WorkerMonitor:
                         success = self.restart_worker()
                         if success:
                             logger.info("✅ Worker restart initiated")
-                            # Wait longer after restart
-                            await asyncio.sleep(30)
+                            # Wait longer after restart (60 seconds for worker to fully start)
+                            logger.info("⏳ Waiting 60 seconds for worker to fully start after restart...")
+                            await asyncio.sleep(60)
                         else:
                             logger.error("❌ Failed to restart worker")
                     else:
                         logger.error(
                             "❌ Cannot restart worker - exceeded max attempts. "
-                            "Please check manually."
+                            f"({self.max_restart_attempts} attempts/hour)"
                         )
                 else:
                     logger.debug("✅ Worker health check passed")
