@@ -117,7 +117,7 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
     server_config = SERVERS[server_name]
     api_url = server_config["api_url"]
     
-    task_timeout = 60  # เพิ่ม timeout เป็น 60s สำหรับ server ที่มี tasks เยอะ
+    task_timeout = 120  # เพิ่ม timeout เป็น 120s สำหรับ server ที่มี tasks เยอะ
     
     try:
         import aiohttp

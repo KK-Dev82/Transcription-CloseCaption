@@ -21,6 +21,9 @@ class SQLiteStorage:
         # Thread-local storage สำหรับ connection
         self._local = threading.local()
         
+        # Flag เพื่อป้องกัน recursion ใน auto-migration
+        self._migrating_tasks = set()
+        
         # สร้าง database และ tables
         self._init_database()
         
@@ -197,9 +200,15 @@ class SQLiteStorage:
             existing_columns = [row[1] for row in cursor.fetchall()]
             
             if 'updated_at' in existing_columns:
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_updated_at ON transcriptions(updated_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_updated_at ON transcriptions(updated_at DESC)")
             if 'completed_at' in existing_columns:
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_completed_at ON transcriptions(completed_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_transcriptions_completed_at ON transcriptions(completed_at DESC)")
+            # เพิ่ม index สำหรับ created_at (ถ้ายังไม่มี)
+            if 'created_at' in existing_columns:
+                # ตรวจสอบว่า index มีอยู่แล้วหรือไม่
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_transcriptions_created_at'")
+                if not cursor.fetchone():
+                    conn.execute("CREATE INDEX idx_transcriptions_created_at ON transcriptions(created_at DESC)")
             
             conn.execute("CREATE INDEX IF NOT EXISTS idx_captions_status ON captions(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_video_tasks_status ON video_tasks(status)")
@@ -253,7 +262,11 @@ class SQLiteStorage:
             return value
         
         # Get created_at - preserve existing or use UTC now
-        existing_data = self.load_transcription(task_id)
+        # หลีกเลี่ยง recursion: ถ้ากำลัง migrate อยู่ ไม่ต้อง load
+        if task_id not in self._migrating_tasks:
+            existing_data = self.load_transcription(task_id, skip_migration=True)
+        else:
+            existing_data = None
         created_at = transcription_data.get("created_at") or (existing_data.get("created_at") if existing_data else None)
         if created_at is None:
             created_at = datetime.now(timezone.utc).isoformat()
@@ -317,10 +330,14 @@ class SQLiteStorage:
         logger.info(f"บันทึก transcription: {task_id}")
         return task_id
     
-    def load_transcription(self, task_id: str) -> Optional[Dict]:
+    def load_transcription(self, task_id: str, skip_migration: bool = False) -> Optional[Dict]:
         """
         โหลดข้อมูล transcription (return format compatible กับ JSONStorage)
         ถ้าไม่เจอใน SQLite จะลองอ่านจาก JSON เป็น fallback
+        
+        Args:
+            task_id: Task ID
+            skip_migration: ถ้า True จะไม่ทำ auto-migration (เพื่อป้องกัน recursion)
         """
         conn = self._get_connection()
         
@@ -332,18 +349,36 @@ class SQLiteStorage:
         
         if not row:
             # Fallback: ลองอ่านจาก JSON storage ถ้ามีไฟล์อยู่
+            # แต่ไม่ทำ auto-migration ถ้า skip_migration=True หรือกำลัง migrate อยู่
+            if skip_migration or task_id in self._migrating_tasks:
+                try:
+                    from .json_storage import JSONStorage
+                    json_storage = JSONStorage()
+                    json_data = json_storage.load_transcription(task_id)
+                    if json_data:
+                        logger.debug(f"📦 Found task {task_id} in JSON storage (skip migration)")
+                        return json_data
+                except Exception as e:
+                    logger.debug(f"JSON fallback not available for task {task_id}: {e}")
+                return None
+            
+            # Auto-migration (ถ้าไม่ skip)
             try:
                 from .json_storage import JSONStorage
                 json_storage = JSONStorage()
                 json_data = json_storage.load_transcription(task_id)
                 if json_data:
                     logger.info(f"📦 Found task {task_id} in JSON storage (fallback) - consider migrating to SQLite")
-                    # Optionally migrate to SQLite automatically
+                    # ป้องกัน recursion: เพิ่ม task_id เข้า migrating set
+                    self._migrating_tasks.add(task_id)
                     try:
                         self.save_transcription(task_id, json_data)
                         logger.info(f"✅ Auto-migrated task {task_id} from JSON to SQLite")
                     except Exception as migrate_error:
                         logger.warning(f"⚠️ Failed to auto-migrate task {task_id}: {migrate_error}")
+                    finally:
+                        # ลบ task_id ออกจาก migrating set
+                        self._migrating_tasks.discard(task_id)
                     return json_data
             except Exception as e:
                 logger.debug(f"JSON fallback not available for task {task_id}: {e}")
