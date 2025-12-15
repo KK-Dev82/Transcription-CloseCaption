@@ -767,7 +767,6 @@ async def startup_event():
         # ============================================================
         # Phase 6: Worker Monitor - Auto-restart Video Worker
         # ============================================================
-        import os
         if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
             try:
                 from .services.worker_monitor import get_worker_monitor
