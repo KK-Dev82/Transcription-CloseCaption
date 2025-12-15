@@ -362,14 +362,16 @@ class TaskProcessors:
                 end_time = start_time + chunk_duration
                 logger.warning(f"⚠️ ไม่มี timestamp จริงใน chunk_task, ใช้การคำนวณ: {start_time:.2f}s - {end_time:.2f}s")
             
-            # สร้าง chunk data
+            # สร้าง chunk data (รวม chunk_path เพื่อให้สามารถเล่น audio ได้)
+            chunk_path = chunk_task.get('chunk_path')
             chunk_data = {
                 "start_time": start_time,
                 "end_time": end_time,
                 "text": result.get("text", ""),
                 "segments": result.get("segments", []),
                 "confidence": result.get("avg_logprob"),
-                "processing_time": result.get("processing_time", 0)
+                "processing_time": result.get("processing_time", 0),
+                "chunk_path": chunk_path  # เพิ่ม chunk_path เพื่อให้สามารถเล่น audio ได้
             }
             
             # บันทึก chunk result ลง storage
