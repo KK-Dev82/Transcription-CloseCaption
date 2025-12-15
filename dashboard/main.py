@@ -58,11 +58,28 @@ except ImportError:
         from routes import server_routes, batch_routes, cleanup_routes
         management_routes = None
 
+# Try to import sqlite_admin_routes (optional)
+try:
+    from .routes import sqlite_admin_routes
+except ImportError:
+    try:
+        from routes import sqlite_admin_routes
+    except ImportError:
+        sqlite_admin_routes = None
+
 app.include_router(server_routes.router)
 app.include_router(batch_routes.router)
 app.include_router(cleanup_routes.router)
 if management_routes:
     app.include_router(management_routes.router)
+
+# Include SQLite Admin router (if available)
+if sqlite_admin_routes:
+    try:
+        app.include_router(sqlite_admin_routes.router)
+        logger.info("✅ SQLite Admin routes included")
+    except Exception as e:
+        logger.debug(f"SQLite Admin routes not available: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
