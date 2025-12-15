@@ -192,18 +192,35 @@ async function refreshOverviewServer(serverName, page = null) {
         
         // Fetch 1000 tasks if not cached or filter changed
         if (state.allTasks.length === 0) {
-            const data = await dashboardAPI.getServerTasks(serverName, {
-                limit: 1000, // Load 1000 tasks for pagination
-                status: null, // Don't filter on server
-                timeout: 60
-            });
+            try {
+                console.log(`[Overview] Fetching tasks for ${serverName}...`);
+                const data = await dashboardAPI.getServerTasks(serverName, {
+                    limit: 1000, // Load 1000 tasks for pagination
+                    status: null, // Don't filter on server
+                    timeout: 60
+                });
 
-            if (data.error) {
-                container.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                console.log(`[Overview] Received data:`, data);
+
+                if (data.error) {
+                    console.error(`[Overview] API error:`, data.error);
+                    container.innerHTML = `<div class="error">Error: ${data.error}${data.error_details ? '<br><small>' + data.error_details.substring(0, 200) + '</small>' : ''}</div>`;
+                    return;
+                }
+
+                if (!data || !data.tasks) {
+                    console.error(`[Overview] Invalid response format:`, data);
+                    container.innerHTML = `<div class="error">Error: Invalid response format. Expected 'tasks' array.</div>`;
+                    return;
+                }
+
+                state.allTasks = data.tasks || [];
+                console.log(`[Overview] Loaded ${state.allTasks.length} tasks`);
+            } catch (error) {
+                console.error(`[Overview] Error fetching tasks:`, error);
+                container.innerHTML = `<div class="error">Error: ${error.message || 'Failed to fetch tasks'}</div>`;
                 return;
             }
-
-            state.allTasks = data.tasks || [];
         }
         
         let tasks = [...state.allTasks];
