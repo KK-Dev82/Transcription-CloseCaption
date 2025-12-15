@@ -144,24 +144,21 @@ async def get_server_tasks(server_name: str, limit: int = 20, status: Optional[s
                         if "updated_at" not in task and "created_at" in task:
                             task["updated_at"] = task["created_at"]
                     
-                    # Sort และ limit - ถ้ามี tasks เยอะมาก ให้ limit ก่อนแล้วค่อย sort เพื่อประหยัดเวลา
-                    if len(tasks) > limit * 2:
-                        # Limit ก่อนแล้วค่อย sort (เร็วกว่า)
-                        tasks_to_sort = tasks[:limit * 2]
-                        tasks_sorted = sorted(
-                            tasks_to_sort,
-                            key=lambda x: x.get("updated_at", "") or "",
-                            reverse=True
-                        )
-                        limited_tasks = tasks_sorted[:limit]
-                    else:
-                        # ถ้ามี tasks น้อย ให้ sort ทั้งหมดก่อนแล้วค่อย limit
-                        tasks_sorted = sorted(
-                            tasks,
-                            key=lambda x: x.get("updated_at", "") or "",
-                            reverse=True
-                        )
-                        limited_tasks = tasks_sorted[:limit]
+                    # Sort และ limit - เรียงตาม updated_at DESC (ใหม่สุดก่อน) หรือ created_at DESC ถ้าไม่มี updated_at
+                    def get_sort_key(task):
+                        # ใช้ updated_at ถ้ามี ไม่เช่นนั้นใช้ created_at
+                        updated_at = task.get("updated_at") or ""
+                        created_at = task.get("created_at") or ""
+                        # เปรียบเทียบ updated_at ก่อน ถ้าไม่มีค่อยใช้ created_at
+                        return (updated_at or created_at) or ""
+                    
+                    # Sort ทั้งหมดก่อนแล้วค่อย limit เพื่อให้ได้ tasks ใหม่ที่สุด
+                    tasks_sorted = sorted(
+                        tasks,
+                        key=get_sort_key,
+                        reverse=True
+                    )
+                    limited_tasks = tasks_sorted[:limit]
                     
                     # For completed tasks, ensure full_text is available
                     # Try to construct from chunks if not present
