@@ -233,7 +233,11 @@ echo "🎬 Starting Video Worker..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-WORKER_LOG="/tmp/video-worker.log"
+# Use logs/ directory for worker logs (consistent with API service)
+WORKER_LOG_DIR="logs"
+mkdir -p "$WORKER_LOG_DIR"
+WORKER_LOG="$WORKER_LOG_DIR/video-worker.log"
+WORKER_ERROR_LOG="$WORKER_LOG_DIR/video-worker-errors.log"
 WORKER_PID_FILE="/tmp/video-worker.pid"
 
 # Check if worker is already running
@@ -294,6 +298,7 @@ else
     echo "   📁 Final LD_LIBRARY_PATH: $LD_LIBRARY_PATH_VAL"
     
     # Start worker with nohup
+    # Redirect stdout to main log, stderr to error log
     nohup env TZ="${TZ:-Asia/Bangkok}" \
              TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
              PYTHONUSERBASE="/workspace/.local" \
@@ -309,7 +314,7 @@ else
              GPU_CONCURRENCY="${GPU_CONCURRENCY:-10}" \
              LD_LIBRARY_PATH="${LD_LIBRARY_PATH_VAL}" \
              python3 -m app.workers.video_worker \
-        > "$WORKER_LOG" 2>&1 &
+        > "$WORKER_LOG" 2> "$WORKER_ERROR_LOG" &
     
     WORKER_PID=$!
     echo $WORKER_PID > "$WORKER_PID_FILE"
