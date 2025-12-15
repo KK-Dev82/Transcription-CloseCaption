@@ -2,7 +2,7 @@ import os
 import uuid
 import aiofiles
 import ffmpeg
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 import logging
 
