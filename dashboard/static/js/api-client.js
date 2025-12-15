@@ -233,6 +233,19 @@ class DashboardAPI extends APIClient {
             return { success: false, error: error.message };
         }
     }
+
+    async restartService(serverName) {
+        try {
+            const response = await this.post(`/api/server/${serverName}/management/execute`, {
+                command: "bash scripts/pod/restart-service-daemon.sh",
+                timeout: 60
+            }, { timeout: 70 });
+            return response;
+        } catch (error) {
+            console.error(`Error restarting service on ${serverName}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
 }
 
 /**

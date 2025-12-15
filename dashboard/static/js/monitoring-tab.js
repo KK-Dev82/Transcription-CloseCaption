@@ -168,12 +168,29 @@ async function refreshServerStatus() {
         
         let html = '';
         
-        // Health Status
+        // Health Status with Restart Button
         if (status && status.health) {
+            const healthStatus = status.health === 'healthy' ? 'success' : (status.health === 'unhealthy' ? 'error' : 'warning');
             html += `
-                <div class="status-card ${status.health === 'healthy' ? 'success' : 'warning'}">
-                    <h4>Health</h4>
+                <div class="status-card ${healthStatus}">
+                    <h4>Health Status</h4>
                     <p>${status.health || 'unknown'}</p>
+                    <button class="btn-restart-service" onclick="restartTranscriptionService('${serverName}')" 
+                            style="margin-top: 8px; padding: 6px 12px; background: #0071e3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        🔄 Restart Service
+                    </button>
+                </div>
+            `;
+        } else {
+            // Show health check even if status is not available
+            html += `
+                <div class="status-card warning">
+                    <h4>Health Status</h4>
+                    <p>Checking...</p>
+                    <button class="btn-restart-service" onclick="restartTranscriptionService('${serverName}')" 
+                            style="margin-top: 8px; padding: 6px 12px; background: #0071e3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        🔄 Restart Service
+                    </button>
                 </div>
             `;
         }
