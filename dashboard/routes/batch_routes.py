@@ -152,13 +152,24 @@ async def send_all_tasks(
     tasks = [send_with_semaphore(video_file) for video_file in video_files]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    for result in results:
+    failed_tasks = []
+    for idx, (video_file, result) in enumerate(zip(video_files, results)):
         if result and not isinstance(result, Exception):
             task_ids.append(result)
+            logger.debug(f"✅ Task {idx + 1}/{len(video_files)}: {video_file} -> task_id={result}")
         elif isinstance(result, Exception):
-            logger.error(f"❌ Task failed with exception: {result}")
+            logger.error(f"❌ Task {idx + 1}/{len(video_files)} failed with exception: {result}")
+            failed_tasks.append((idx + 1, video_file, str(result)))
+        else:
+            # result is None - task failed to send
+            logger.error(f"❌ Task {idx + 1}/{len(video_files)} failed: {video_file} -> No task_id returned")
+            failed_tasks.append((idx + 1, video_file, "No task_id returned from server"))
     
     logger.info(f"✅ Batch complete: {len(task_ids)}/{len(video_files)} tasks sent successfully to {server_name}")
+    if failed_tasks:
+        logger.warning(f"⚠️  Failed tasks ({len(failed_tasks)}):")
+        for task_num, video_file, error in failed_tasks:
+            logger.warning(f"   - Task {task_num}: {video_file} - {error}")
     
     # Update batch status
     if batch_id in batch_tasks_store:
