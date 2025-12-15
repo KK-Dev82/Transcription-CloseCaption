@@ -831,7 +831,7 @@ class VideoService:
 
     def extract_audio_chunks(self, video_path: str, chunk_duration: int = 30, 
                            overlap: int = 5, audio_format: str = "wav", 
-                           sample_rate: int = 48000) -> List[Dict[str, any]]:
+                           sample_rate: int = 48000) -> List[Dict[str, Any]]:
         """แปลงวิดีโอเป็น audio chunks พร้อม metadata (start_time, end_time)"""
         
         try:
