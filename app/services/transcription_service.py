@@ -189,8 +189,16 @@ class TranscriptionService:
             chunk_entries = data.get("chunks") or []
             chunk_objects: List[TranscriptionChunk] = []
             for chunk in chunk_entries:
-                start_value = chunk.get("start_time", chunk.get("start"))
-                end_value = chunk.get("end_time", chunk.get("end"))
+                # รองรับทั้ง start_time/end_time และ start/end
+                start_value = chunk.get("start_time") or chunk.get("start")
+                end_value = chunk.get("end_time") or chunk.get("end")
+                
+                # ถ้ายังไม่มี timestamp ให้ใช้ค่า default
+                if start_value is None:
+                    start_value = 0.0
+                if end_value is None:
+                    end_value = start_value + 30.0  # Default 30 seconds chunk
+                
                 chunk_objects.append(
                     TranscriptionChunk(
                         start_time=self._normalize_time_value(start_value),
