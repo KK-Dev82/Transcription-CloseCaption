@@ -16,9 +16,33 @@ const paginationState = {
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
     try {
-        const date = new Date(dateString);
+        // Parse date string - handle UTC and timezone-aware strings
+        let date;
+        if (typeof dateString === 'string') {
+            // If string doesn't have timezone info, assume UTC
+            let normalizedString = dateString.trim();
+            if (!normalizedString.includes('Z') && !normalizedString.includes('+') && !normalizedString.includes('-', 10)) {
+                // No timezone indicator - assume UTC and add 'Z'
+                // Format: YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD HH:MM:SS
+                if (normalizedString.includes('T')) {
+                    normalizedString = normalizedString + 'Z';
+                } else if (normalizedString.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)) {
+                    normalizedString = normalizedString.replace(' ', 'T') + 'Z';
+                } else {
+                    normalizedString = normalizedString + 'Z';
+                }
+            }
+            date = new Date(normalizedString);
+        } else {
+            date = new Date(dateString);
+        }
+        
+        // Check if date is valid
+        if (isNaN(date.getTime())) {
+            return dateString; // Return original string if invalid
+        }
+        
         // Convert to UTC+7 (Thailand timezone) for display
-        // toLocaleString with 'th-TH' should automatically use UTC+7
         return date.toLocaleString('th-TH', {
             year: 'numeric',
             month: 'short',
