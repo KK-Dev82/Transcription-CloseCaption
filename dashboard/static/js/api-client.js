@@ -8,7 +8,7 @@
 // This file is kept for backward compatibility and will be injected from backend
 const SERVER_CONFIGS = {
     '4000-ada': { name: '4000-ada', api_url: 'http://87.197.119.40:40134' },
-    '4000-ada-sc': { name: '4000-ada-sc', api_url: 'http://213.173.108.6:14237' },
+    '4000-ada-sc': { name: '4000-ada-sc', api_url: 'http://213.173.108.6:13264' },
     '5080': { name: '5080', api_url: 'http://213.144.200.206:15267' }
 };
 

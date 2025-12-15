@@ -3,7 +3,8 @@
  */
 
 let testRefreshInterval = null;
-const TEST_REFRESH_INTERVAL = 5000; // 5 seconds for test tasks
+const TEST_REFRESH_INTERVAL = 30000; // 30 seconds - Reduced frequency, webhooks handle real-time updates
+let webhookActive = false; // Track if webhooks are working
 
 let testTaskIds = [];
 
@@ -235,9 +236,12 @@ async function startTest() {
                         
                         // Listen for webhook events
                         window.addEventListener('webhook:task-update', handleWebhookUpdate);
+                        webhookActive = true;
+                        console.log(`✅ Webhook subscriptions active for ${testTaskIds.length} tasks`);
                     }
                     
-                    // Start fallback refresh (will be stopped when webhooks work)
+                    // Start fallback refresh with reduced frequency (only if webhooks fail)
+                    // Polling will be stopped when webhook events are received
                     startTestRefresh();
                 } else {
                     // Still waiting for tasks - poll again
@@ -284,10 +288,25 @@ function startTestRefresh() {
     stopTestRefresh();
     if (testTaskIds.length === 0) return;
     
+    // Initial refresh
     refreshTestResults();
-    testRefreshInterval = setInterval(() => {
-        refreshTestResults();
-    }, TEST_REFRESH_INTERVAL);
+    
+    // Only start polling if webhooks are not active
+    // Polling will be used as fallback only
+    if (!webhookActive) {
+        console.log('⚠️ Webhooks not active, using fallback polling (30s interval)');
+        testRefreshInterval = setInterval(() => {
+            refreshTestResults();
+        }, TEST_REFRESH_INTERVAL);
+    } else {
+        console.log('✅ Webhooks active, polling disabled (will use webhook updates)');
+        // Still do one refresh after 10 seconds to ensure initial state is loaded
+        setTimeout(() => {
+            if (webhookActive) {
+                refreshTestResults();
+            }
+        }, 10000);
+    }
 }
 
 function stopTestRefresh() {
@@ -308,6 +327,15 @@ function handleWebhookUpdate(event) {
     
     console.log(`📨 Webhook update for task ${taskId}: ${status} (${progress}%)`);
     
+    // Mark webhook as active (working)
+    webhookActive = true;
+    
+    // Stop polling if webhooks are working
+    if (testRefreshInterval) {
+        console.log('✅ Webhooks working, stopping fallback polling');
+        stopTestRefresh();
+    }
+    
     // Refresh test results to show updated status
     refreshTestResults();
     
@@ -317,6 +345,12 @@ function handleWebhookUpdate(event) {
             window.webhookService.stopFallbackPolling(taskId);
         }
     }
+    
+    // Check if all tasks are completed/failed - stop polling completely
+    const allCompleted = testTaskIds.every(id => {
+        // This will be checked in refreshTestResults
+        return false; // Placeholder, actual check happens in refresh
+    });
 }
 
 async function refreshTestResults() {

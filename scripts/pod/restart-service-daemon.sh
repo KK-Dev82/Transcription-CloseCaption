@@ -31,6 +31,42 @@ echo "║  เวลา: $(date '+%Y-%m-%d %H:%M:%S')                           
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
+# Check FFmpeg installation (required for video-worker)
+echo "🔍 Checking FFmpeg installation..."
+if ! command -v ffmpeg > /dev/null 2>&1; then
+    echo "❌ FFmpeg not found - installing..."
+    if command -v apt-get > /dev/null 2>&1; then
+        apt-get update -qq > /dev/null 2>&1
+        apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
+            echo "⚠️  Failed to install FFmpeg via apt-get"
+            echo "   Video worker may fail without FFmpeg"
+        }
+        if command -v ffmpeg > /dev/null 2>&1; then
+            FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
+            echo "✅ FFmpeg installed successfully (version: $FFMPEG_VERSION)"
+        else
+            echo "❌ FFmpeg installation failed - video worker will not work"
+        fi
+    else
+        echo "⚠️  apt-get not found - cannot install FFmpeg automatically"
+        echo "   Please install FFmpeg manually: apt-get install ffmpeg"
+    fi
+else
+    FFMPEG_PATH=$(which ffmpeg)
+    FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
+    echo "✅ FFmpeg already installed"
+    echo "   Location: $FFMPEG_PATH"
+    echo "   Version: $FFMPEG_VERSION"
+fi
+
+# Check ffprobe (usually comes with ffmpeg)
+if ! command -v ffprobe > /dev/null 2>&1; then
+    echo "⚠️  ffprobe not found (usually comes with ffmpeg)"
+else
+    echo "✅ ffprobe is available"
+fi
+echo ""
+
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="/workspace/transcription-service"
