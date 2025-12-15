@@ -349,9 +349,20 @@ class AsyncTaskProcessors:
                 logger.warning(f"⚠️ Chunk {chunk_index+1} returned empty result")
                 result = {"text": "", "segments": []}
             
-            # คำนวณ start_time และ end_time
-            start_time = chunk_index * chunk_duration
-            end_time = start_time + chunk_duration
+            # ใช้ timestamp จริงจาก chunk_task ถ้ามี (แก้ไขปัญหา chunk timing)
+            chunk_start_time = chunk_task.get('chunk_start_time')
+            chunk_end_time = chunk_task.get('chunk_end_time')
+            
+            if chunk_start_time is not None and chunk_end_time is not None:
+                # ใช้ timestamp จริงจาก chunk metadata
+                start_time = chunk_start_time
+                end_time = chunk_end_time
+                logger.info(f"📌 ใช้ timestamp จริง: {start_time:.2f}s - {end_time:.2f}s")
+            else:
+                # Fallback: คำนวณแบบเดิม (backward compatibility)
+                start_time = chunk_index * chunk_duration
+                end_time = start_time + chunk_duration
+                logger.warning(f"⚠️ ไม่มี timestamp จริงใน chunk_task, ใช้การคำนวณ: {start_time:.2f}s - {end_time:.2f}s")
             
             # สร้าง chunk data
             chunk_data = {
