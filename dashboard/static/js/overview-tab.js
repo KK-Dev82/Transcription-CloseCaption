@@ -17,13 +17,16 @@ function formatDate(dateString) {
     if (!dateString) return 'N/A';
     try {
         const date = new Date(dateString);
+        // Convert to UTC+7 (Thailand timezone) for display
+        // toLocaleString with 'th-TH' should automatically use UTC+7
         return date.toLocaleString('th-TH', {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit',
-            second: '2-digit'
+            second: '2-digit',
+            timeZone: 'Asia/Bangkok'  // Explicitly set timezone to UTC+7
         });
     } catch (e) {
         return dateString;
@@ -280,17 +283,25 @@ async function refreshOverviewServer(serverName, page = null) {
                 >⏹️ Stop</button>`;
             }
             
-            // Calculate processing time
+            // Calculate processing time - แสดงรายละเอียด audio extraction และ transcription time
             let processingTimeStr = 'N/A';
             if (status === 'completed') {
                 const audioTime = task.audio_extraction_time || task.audio_extraction_time === 0 ? parseFloat(task.audio_extraction_time) : null;
                 const transcribeTime = task.transcription_time || task.transcription_time === 0 ? parseFloat(task.transcription_time) : null;
                 const totalTime = task.processing_time || task.time_used || (task.processing_time === 0 ? 0 : null);
                 
+                // สร้างรายละเอียดเวลา
+                const timeParts = [];
+                if (audioTime !== null && !isNaN(audioTime) && audioTime > 0) {
+                    timeParts.push(`🎵 ${formatTimeDuration(audioTime)}`);
+                }
                 if (transcribeTime !== null && !isNaN(transcribeTime) && transcribeTime > 0) {
-                    processingTimeStr = formatTimeDuration(transcribeTime);
+                    timeParts.push(`🎤 ${formatTimeDuration(transcribeTime)}`);
+                }
+                if (timeParts.length > 0) {
+                    processingTimeStr = timeParts.join(' + ');
                 } else if (totalTime !== null && !isNaN(totalTime) && totalTime > 0) {
-                    processingTimeStr = formatTimeDuration(totalTime);
+                    processingTimeStr = `⏱️ ${formatTimeDuration(totalTime)}`;
                 }
             } else if (status === 'processing' || status === 'pending') {
                 processingTimeStr = '<span class="processing-indicator">⏳ Processing...</span>';
