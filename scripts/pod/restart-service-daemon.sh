@@ -64,22 +64,16 @@ elif command -v ffmpeg > /dev/null 2>&1; then
     echo "   💡 Consider installing to persistent volume: bash scripts/pod/install-ffmpeg-persistent.sh"
 fi
 
-# Install to persistent volume if not found
+# Install FFmpeg if not found
 if [ "$FFMPEG_FOUND" = false ]; then
-    echo "❌ FFmpeg not found - installing to persistent volume..."
+    echo "❌ FFmpeg not found - attempting installation..."
+    
+    # Try persistent volume first (if supported)
     if [ -f "scripts/pod/install-ffmpeg-persistent.sh" ]; then
-        bash scripts/pod/install-ffmpeg-persistent.sh || {
-            echo "⚠️  Failed to install FFmpeg to persistent volume"
-            echo "   Trying apt-get as fallback..."
-            if command -v apt-get > /dev/null 2>&1; then
-                apt-get update -qq > /dev/null 2>&1
-                apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
-                    echo "⚠️  Failed to install FFmpeg via apt-get"
-                    echo "   Video worker may fail without FFmpeg"
-                }
-            fi
-        }
-        # Re-check after installation
+        echo "   Trying persistent volume installation..."
+        bash scripts/pod/install-ffmpeg-persistent.sh > /dev/null 2>&1
+        
+        # Check if persistent installation succeeded
         if [ -f "$FFMPEG_INSTALL_DIR/ffmpeg" ] && [ -x "$FFMPEG_INSTALL_DIR/ffmpeg" ]; then
             FFMPEG_PATH="$FFMPEG_INSTALL_DIR/ffmpeg"
             FFMPEG_VERSION=$("$FFMPEG_PATH" -version | head -n1 | awk '{print $3}' || echo "unknown")
@@ -88,16 +82,40 @@ if [ "$FFMPEG_FOUND" = false ]; then
             echo "   Location: $FFMPEG_PATH"
             echo "   Version: $FFMPEG_VERSION"
         fi
-    else
-        echo "⚠️  install-ffmpeg-persistent.sh not found"
-        echo "   Trying apt-get as fallback..."
+    fi
+    
+    # Fallback to system installation (if persistent failed or not supported)
+    if [ "$FFMPEG_FOUND" = false ]; then
+        echo "   Trying system installation (apt-get)..."
         if command -v apt-get > /dev/null 2>&1; then
-            apt-get update -qq > /dev/null 2>&1
-            apt-get install -y -qq ffmpeg > /dev/null 2>&1 || {
-                echo "⚠️  Failed to install FFmpeg via apt-get"
-                echo "   Video worker may fail without FFmpeg"
-            }
+            # Check network first
+            if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+                apt-get update -qq > /dev/null 2>&1
+                if apt-get install -y -qq ffmpeg > /dev/null 2>&1; then
+                    if command -v ffmpeg > /dev/null 2>&1; then
+                        FFMPEG_PATH=$(which ffmpeg)
+                        FFMPEG_VERSION=$(ffmpeg -version | head -n1 | awk '{print $3}' || echo "unknown")
+                        FFMPEG_FOUND=true
+                        echo "✅ FFmpeg installed via apt-get (system package)"
+                        echo "   Location: $FFMPEG_PATH"
+                        echo "   Version: $FFMPEG_VERSION"
+                        echo "   ⚠️  Note: Will be lost after Pod restart (use persistent volume if needed)"
+                    fi
+                else
+                    echo "⚠️  apt-get install failed"
+                fi
+            else
+                echo "⚠️  No network connectivity - cannot use apt-get"
+            fi
+        else
+            echo "⚠️  apt-get not available"
         fi
+    fi
+    
+    # Final check
+    if [ "$FFMPEG_FOUND" = false ]; then
+        echo "❌ FFmpeg installation failed - video worker may not work"
+        echo "   💡 Manual installation required"
     fi
 fi
 

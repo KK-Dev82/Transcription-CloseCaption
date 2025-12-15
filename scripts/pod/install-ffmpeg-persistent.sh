@@ -104,21 +104,45 @@ if [ ! -f "$INSTALL_DIR/ffmpeg" ] || [ ! -x "$INSTALL_DIR/ffmpeg" ]; then
     echo ""
     echo "📥 Method 2: Trying apt-get (will copy to persistent volume)..."
     if command -v apt-get > /dev/null 2>&1; then
-        # Install to system first
-        apt-get update -qq > /dev/null 2>&1
-        if apt-get install -y -qq ffmpeg > /dev/null 2>&1; then
-            # Copy to persistent volume
-            if [ -f "/usr/bin/ffmpeg" ]; then
-                cp /usr/bin/ffmpeg "$INSTALL_DIR/ffmpeg"
-                chmod +x "$INSTALL_DIR/ffmpeg"
-                echo "   ✅ Copied ffmpeg to persistent volume"
+        # Check if we have network access
+        if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1 || ping -c 1 -W 2 1.1.1.1 > /dev/null 2>&1; then
+            echo "   Network connectivity OK"
+            # Install to system first
+            echo "   Updating package lists..."
+            apt-get update -qq 2>&1 | head -5 || echo "   ⚠️  apt-get update had issues (may continue)"
+            
+            echo "   Installing ffmpeg..."
+            if apt-get install -y -qq ffmpeg 2>&1 | grep -v "^$" | head -10; then
+                # Check if installation succeeded
+                if command -v ffmpeg > /dev/null 2>&1; then
+                    FFMPEG_SYSTEM_PATH=$(which ffmpeg)
+                    # Copy to persistent volume
+                    if [ -f "$FFMPEG_SYSTEM_PATH" ]; then
+                        cp "$FFMPEG_SYSTEM_PATH" "$INSTALL_DIR/ffmpeg"
+                        chmod +x "$INSTALL_DIR/ffmpeg"
+                        echo "   ✅ Copied ffmpeg to persistent volume from $FFMPEG_SYSTEM_PATH"
+                    fi
+                    
+                    # Try to find and copy ffprobe
+                    if command -v ffprobe > /dev/null 2>&1; then
+                        FFPROBE_SYSTEM_PATH=$(which ffprobe)
+                        if [ -f "$FFPROBE_SYSTEM_PATH" ]; then
+                            cp "$FFPROBE_SYSTEM_PATH" "$INSTALL_DIR/ffprobe"
+                            chmod +x "$INSTALL_DIR/ffprobe"
+                            echo "   ✅ Copied ffprobe to persistent volume"
+                        fi
+                    fi
+                else
+                    echo "   ⚠️  apt-get install completed but ffmpeg not found in PATH"
+                fi
+            else
+                echo "   ⚠️  apt-get install failed (check logs above)"
             fi
-            if [ -f "/usr/bin/ffprobe" ]; then
-                cp /usr/bin/ffprobe "$INSTALL_DIR/ffprobe"
-                chmod +x "$INSTALL_DIR/ffprobe"
-                echo "   ✅ Copied ffprobe to persistent volume"
-            fi
+        else
+            echo "   ⚠️  No network connectivity - cannot use apt-get"
         fi
+    else
+        echo "   ⚠️  apt-get not available"
     fi
 fi
 
@@ -156,14 +180,39 @@ else
     echo ""
     echo "❌ Failed to install FFmpeg"
     echo ""
-    echo "💡 Manual installation options:"
-    echo "   1. Download static binary manually:"
-    echo "      wget https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0.1/ffmpeg-linux-${FFMPEG_ARCH}"
-    echo "      mv ffmpeg-linux-${FFMPEG_ARCH} $INSTALL_DIR/ffmpeg"
-    echo "      chmod +x $INSTALL_DIR/ffmpeg"
+    echo "🔍 Debugging information:"
+    echo "   Architecture: $ARCH ($FFMPEG_ARCH)"
+    echo "   OS: $OS"
+    echo "   Install directory: $INSTALL_DIR"
+    echo "   Network check:"
+    if ping -c 1 -W 2 8.8.8.8 > /dev/null 2>&1; then
+        echo "      ✅ Internet connectivity OK"
+    else
+        echo "      ❌ No internet connectivity"
+    fi
+    echo "   Tools available:"
+    command -v curl > /dev/null 2>&1 && echo "      ✅ curl" || echo "      ❌ curl"
+    command -v wget > /dev/null 2>&1 && echo "      ✅ wget" || echo "      ❌ wget"
+    command -v apt-get > /dev/null 2>&1 && echo "      ✅ apt-get" || echo "      ❌ apt-get"
     echo ""
-    echo "   2. Use conda/mamba (if available):"
+    echo "💡 Manual installation options:"
+    echo "   1. Download static binary manually (if you have network access from another machine):"
+    echo "      # On your local machine:"
+    echo "      wget https://github.com/eugeneware/ffmpeg-static/releases/download/b6.0.1/ffmpeg-linux-${FFMPEG_ARCH}"
+    echo "      # Then upload to Pod:"
+    echo "      scp -P <port> ffmpeg-linux-${FFMPEG_ARCH} <user>@<host>:/workspace/.local/bin/ffmpeg"
+    echo "      ssh -p <port> <user>@<host> 'chmod +x /workspace/.local/bin/ffmpeg'"
+    echo ""
+    echo "   2. Use conda/mamba (if available in container):"
     echo "      conda install -c conda-forge ffmpeg -y"
+    echo ""
+    echo "   3. Check if FFmpeg is already in container but not in PATH:"
+    echo "      find /usr -name ffmpeg 2>/dev/null"
+    echo "      find /opt -name ffmpeg 2>/dev/null"
+    echo ""
+    echo "   4. Build from source (if all else fails):"
+    echo "      # This requires build tools and takes time"
+    echo "      # See: https://trac.ffmpeg.org/wiki/CompilationGuide"
     echo ""
     exit 1
 fi
