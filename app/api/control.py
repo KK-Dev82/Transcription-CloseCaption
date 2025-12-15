@@ -76,7 +76,10 @@ async def get_service_status():
                 pass
         
         # ตรวจสอบ Video Worker
+        # Check multiple patterns to catch different worker process names
+        worker_pid = None
         try:
+            # Pattern 1: python.*video_worker
             result = subprocess.run(
                 ["pgrep", "-f", "python.*video_worker"],
                 capture_output=True,
@@ -85,8 +88,50 @@ async def get_service_status():
             if result.returncode == 0 and result.stdout.strip():
                 worker_pid = int(result.stdout.strip().split('\n')[0])
                 worker_running = True
+            else:
+                # Pattern 2: app.workers.video_worker
+                result = subprocess.run(
+                    ["pgrep", "-f", "app.workers.video_worker"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    worker_pid = int(result.stdout.strip().split('\n')[0])
+                    worker_running = True
+                else:
+                    # Pattern 3: app.workers.async.video_worker
+                    result = subprocess.run(
+                        ["pgrep", "-f", "app.workers.async.video_worker"],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        worker_pid = int(result.stdout.strip().split('\n')[0])
+                        worker_running = True
         except Exception:
             pass
+        
+        # Return worker status with more details
+        worker_details = {
+            "is_running": worker_running,
+            "pid": worker_pid
+        }
+        
+        if worker_running and worker_pid:
+            try:
+                # Get worker uptime using ps command
+                import time
+                result = subprocess.run(
+                    ["ps", "-o", "etime=", "-p", str(worker_pid)],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    worker_details["uptime"] = result.stdout.strip()
+                else:
+                    worker_details["uptime"] = "N/A"
+            except Exception:
+                worker_details["uptime"] = "N/A"
         
         if api_running and worker_running:
             return ServiceStatusResponse(
@@ -95,7 +140,8 @@ async def get_service_status():
                 details={
                     "api_running": api_running,
                     "worker_running": worker_running,
-                    "api_pid": api_pid
+                    "api_pid": api_pid,
+                    "worker": worker_details
                 }
             )
         else:
@@ -104,7 +150,9 @@ async def get_service_status():
                 message="Some services are not running",
                 details={
                     "api_running": api_running,
-                    "worker_running": worker_running
+                    "worker_running": worker_running,
+                    "api_pid": api_pid,
+                    "worker": worker_details
                 }
             )
             
