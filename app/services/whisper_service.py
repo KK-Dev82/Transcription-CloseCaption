@@ -370,14 +370,13 @@ class WhisperService:
     
     def merge_transcriptions(self, transcriptions: List[Dict], 
                            chunk_duration: int = 30) -> Dict:
-        """รวมผลลัพธ์จากหลาย chunks"""
+        """รวมผลลัพธ์จากหลาย chunks โดยใช้ timestamp จริงจาก chunk data"""
         merged = {
             "text": "",
             "segments": [],
             "language": "th"
         }
         
-        current_time = 0
         total_transcriptions = len(transcriptions)
         logger.info(f"📊 Starting merge_transcriptions: {total_transcriptions} transcriptions, chunk_duration={chunk_duration}s")
         
@@ -386,7 +385,19 @@ class WhisperService:
                 logger.warning(f"⚠️  Transcription {i+1}/{total_transcriptions} has error: {trans.get('error')}, skipping...")
                 continue
             
-            logger.info(f"📝 Processing transcription {i+1}/{total_transcriptions}: has_text={bool(trans.get('text'))}, has_segments={bool(trans.get('segments'))}")
+            # ใช้ timestamp จริงจาก chunk data ถ้ามี (แก้ไขปัญหา chunk timing)
+            chunk_start_time = trans.get('start_time')
+            chunk_end_time = trans.get('end_time')
+            
+            if chunk_start_time is not None and chunk_end_time is not None:
+                # ใช้ timestamp จริงจาก chunk data
+                current_time = chunk_start_time
+                logger.info(f"📝 Processing transcription {i+1}/{total_transcriptions}: chunk_time={chunk_start_time:.2f}s-{chunk_end_time:.2f}s, has_text={bool(trans.get('text'))}, has_segments={bool(trans.get('segments'))}")
+            else:
+                # Fallback: คำนวณแบบเดิม (backward compatibility)
+                current_time = i * chunk_duration
+                logger.warning(f"⚠️  Transcription {i+1} ไม่มี timestamp จริง, ใช้การคำนวณ: {current_time:.2f}s")
+                logger.info(f"📝 Processing transcription {i+1}/{total_transcriptions}: calculated_time={current_time:.2f}s, has_text={bool(trans.get('text'))}, has_segments={bool(trans.get('segments'))}")
                 
             # รวมข้อความ
             if "text" in trans:
@@ -417,7 +428,7 @@ class WhisperService:
                     start_seconds = self._timestamp_to_seconds(start_value)
                     end_seconds = self._timestamp_to_seconds(end_value)
                     
-                    # ปรับเวลาให้ต่อเนื่องกับ chunks ก่อนหน้า
+                    # ปรับเวลาให้ต่อเนื่องกับ chunks ก่อนหน้า (ใช้ timestamp จริง)
                     adjusted_start = start_seconds + current_time
                     adjusted_end = end_seconds + current_time
                     adjusted_segment["start"] = adjusted_start
@@ -434,8 +445,6 @@ class WhisperService:
             
             if segments_count > 0:
                 logger.info(f"   ✅ Added {segments_count} segments from transcription {i+1}")
-            
-            current_time += chunk_duration
         
         # ทำความสะอาดข้อความ
         merged["text"] = merged["text"].strip()

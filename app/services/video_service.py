@@ -831,8 +831,8 @@ class VideoService:
 
     def extract_audio_chunks(self, video_path: str, chunk_duration: int = 30, 
                            overlap: int = 5, audio_format: str = "wav", 
-                           sample_rate: int = 48000) -> List[str]:
-        """แปลงวิดีโอเป็น audio chunks"""
+                           sample_rate: int = 48000) -> List[Dict[str, any]]:
+        """แปลงวิดีโอเป็น audio chunks พร้อม metadata (start_time, end_time)"""
         
         try:
             video_path = Path(video_path)
@@ -845,7 +845,7 @@ class VideoService:
             
             logger.info(f"เริ่มแปลงวิดีโอเป็น audio chunks: {video_path} (duration: {duration}s)")
             
-            chunk_paths = []
+            chunk_metadata = []
             # สร้าง temp directory แยกตาม task_id หรือใช้ timestamp
             task_folder = f"task_{int(time.time())}_{video_path.stem}"
             temp_dir = Path("temp") / task_folder
@@ -876,7 +876,7 @@ class VideoService:
                 chunk_filename = f"chunk_{i}_{video_path.stem}_audio.{audio_format}"
                 chunk_path = temp_dir / chunk_filename
                 
-                logger.info(f"สร้าง audio chunk {i+1}: {start_time}s - {end_time}s")
+                logger.info(f"สร้าง audio chunk {i+1}: {start_time}s - {end_time}s (duration: {end_time-start_time:.2f}s)")
                 logger.info(f"ไฟล์ chunk path: {chunk_path}")
                 
                 # ใช้ ffmpeg ตัด audio chunk และแปลงเป็น format ที่ Whisper รองรับ
@@ -888,13 +888,29 @@ class VideoService:
                 
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
                 
-                # ตรวจสอบว่าไฟล์ถูกสร้างหรือไม่
+                # ตรวจสอบว่าไฟล์ถูกสร้างหรือไม่ และตรวจสอบ duration จริง
+                actual_duration = end_time - start_time
                 if chunk_path.exists():
-                    logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes)")
+                    # ตรวจสอบ duration จริงของไฟล์ chunk (ถ้าเป็นไปได้)
+                    try:
+                        chunk_probe = ffmpeg.probe(str(chunk_path))
+                        actual_duration = float(chunk_probe['format'].get('duration', actual_duration))
+                        logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes, duration: {actual_duration:.2f}s)")
+                    except Exception as probe_error:
+                        logger.debug(f"ไม่สามารถ probe chunk duration ได้: {probe_error}, ใช้ calculated duration: {actual_duration:.2f}s")
+                        logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes)")
                 else:
                     logger.error(f"ไฟล์ chunk {i+1} ไม่ถูกสร้าง: {chunk_path}")
+                    continue
                 
-                chunk_paths.append(str(chunk_path))
+                # เก็บ metadata พร้อม timestamp จริง
+                chunk_metadata.append({
+                    "path": str(chunk_path),
+                    "start_time": start_time,
+                    "end_time": start_time + actual_duration,  # ใช้ actual_duration แทน end_time เพื่อความแม่นยำ
+                    "chunk_index": i,
+                    "duration": actual_duration
+                })
                 
                 # เลื่อนไปยัง chunk ถัดไป (ลบ overlap)
                 new_start_time = end_time - overlap
@@ -915,8 +931,12 @@ class VideoService:
             if i >= max_chunks:
                 logger.warning(f"⚠️ ถึง max_chunks limit ({max_chunks}), หยุด loop (duration: {duration}s, chunk_duration: {chunk_duration}s, overlap: {overlap}s)")
             
-            logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_paths)} chunks")
-            return chunk_paths
+            logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_metadata)} chunks")
+            # Log summary
+            for chunk_info in chunk_metadata[:3]:  # Log แค่ 3 chunks แรก
+                logger.info(f"   Chunk {chunk_info['chunk_index']+1}: {chunk_info['start_time']:.2f}s - {chunk_info['end_time']:.2f}s")
+            
+            return chunk_metadata
             
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดในการสร้าง audio chunks: {e}")

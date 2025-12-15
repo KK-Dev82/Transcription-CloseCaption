@@ -1026,12 +1026,27 @@ class TranscriptionService:
             self.json_storage.save_transcription(task_id, task_data)
             
             # ส่งแต่ละ chunk ไปยัง queue
-            for i, chunk_path in enumerate(chunks):
+            for i, chunk_info in enumerate(chunks):
+                # รองรับทั้งรูปแบบเก่า (string) และรูปแบบใหม่ (dict)
+                if isinstance(chunk_info, dict):
+                    chunk_path = chunk_info.get("path")
+                    chunk_start_time = chunk_info.get("start_time", i * chunk_duration)
+                    chunk_end_time = chunk_info.get("end_time", (i + 1) * chunk_duration)
+                    chunk_index = chunk_info.get("chunk_index", i)
+                else:
+                    # Backward compatibility: ถ้าเป็น string ให้ใช้การคำนวณแบบเดิม
+                    chunk_path = chunk_info
+                    chunk_start_time = i * chunk_duration
+                    chunk_end_time = (i + 1) * chunk_duration
+                    chunk_index = i
+                
                 chunk_task = {
-                    "task_id": f"{task_id}_chunk_{i}",
+                    "task_id": f"{task_id}_chunk_{chunk_index}",
                     "parent_task_id": task_id,
                     "chunk_path": chunk_path,
-                    "chunk_index": i,
+                    "chunk_index": chunk_index,
+                    "chunk_start_time": chunk_start_time,  # เพิ่ม timestamp จริง
+                    "chunk_end_time": chunk_end_time,      # เพิ่ม timestamp จริง
                     "total_chunks": total_chunks,
                     "chunk_duration": chunk_duration,
                     "model_size": model_size,

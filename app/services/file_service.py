@@ -62,27 +62,27 @@ class FileService:
         
         return info
     
-    def create_chunks(self, file_path: str, chunk_duration: int = 30) -> List[str]:
-        """แบ่งไฟล์เป็น chunks"""
+    def create_chunks(self, file_path: str, chunk_duration: int = 30) -> List[Dict[str, any]]:
+        """แบ่งไฟล์เป็น chunks พร้อม metadata (start_time, end_time)"""
         chunks = []
         file_info = self.get_file_info(file_path)
         duration = file_info.get("duration")
         
         if not duration:
             # ถ้าไม่สามารถดึง duration ได้ ให้ใช้ไฟล์เดียว
-            return [file_path]
+            return [{"path": file_path, "start_time": 0.0, "end_time": duration or 0.0, "chunk_index": 0, "duration": duration or 0.0}]
         
         num_chunks = int(duration // chunk_duration) + 1
+        
+        # สร้าง temp directory แยกตาม timestamp
+        import time
+        task_folder = f"task_{int(time.time())}_{Path(file_path).stem}"
+        temp_task_dir = self.temp_dir / task_folder
+        temp_task_dir.mkdir(parents=True, exist_ok=True)
         
         for i in range(num_chunks):
             start_time = i * chunk_duration
             end_time = min((i + 1) * chunk_duration, duration)
-            
-            # สร้าง temp directory แยกตาม timestamp
-            import time
-            task_folder = f"task_{int(time.time())}_{Path(file_path).stem}"
-            temp_task_dir = self.temp_dir / task_folder
-            temp_task_dir.mkdir(parents=True, exist_ok=True)
             
             chunk_path = temp_task_dir / f"chunk_{i}_{Path(file_path).name}"
             
@@ -93,7 +93,24 @@ class FileService:
                 stream = ffmpeg.output(stream, str(chunk_path), acodec='pcm_s16le', ar=48000)
                 ffmpeg.run(stream, overwrite_output=True, quiet=True)
                 
-                chunks.append(str(chunk_path))
+                # ตรวจสอบ duration จริงของไฟล์ chunk
+                actual_duration = end_time - start_time
+                if chunk_path.exists():
+                    try:
+                        chunk_probe = ffmpeg.probe(str(chunk_path))
+                        actual_duration = float(chunk_probe['format'].get('duration', actual_duration))
+                    except Exception:
+                        pass  # ใช้ calculated duration ถ้า probe ไม่ได้
+                
+                chunks.append({
+                    "path": str(chunk_path),
+                    "start_time": start_time,
+                    "end_time": start_time + actual_duration,  # ใช้ actual_duration เพื่อความแม่นยำ
+                    "chunk_index": i,
+                    "duration": actual_duration
+                })
+                
+                logger.debug(f"สร้าง chunk {i+1}: {start_time}s - {start_time + actual_duration:.2f}s (duration: {actual_duration:.2f}s)")
             except Exception as e:
                 logger.error(f"เกิดข้อผิดพลาดในการสร้าง chunk {i}: {e}")
                 continue
