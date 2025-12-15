@@ -352,7 +352,7 @@ async function refreshOverviewServer(serverName, page = null) {
                         </div>
                     </td>
                     <td>${durationInfo || 'N/A'}</td>
-                    <td class="time-cell">${formatDate(task.created_at || created_at)}</td>
+                    <td class="time-cell">${formatDate(task.created_at)}</td>
                     <td class="time-cell">${formatDate(updatedAt)}</td>
                     <td class="time-cell">${processingTimeStr}</td>
                     <td class="actions-cell">${actionsHtml}</td>
