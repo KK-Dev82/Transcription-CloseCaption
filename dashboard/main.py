@@ -34,6 +34,12 @@ if not (static_dir / "index.html").exists():
 templates = Jinja2Templates(directory=str(templates_dir))
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+# Mount SQLite Admin (phpLiteAdmin) if exists
+sqlite_admin_dir = Path(__file__).parent / "sqlite_admin"
+if sqlite_admin_dir.exists() and (sqlite_admin_dir / "phpliteadmin.php").exists():
+    app.mount("/sqlite-admin", StaticFiles(directory=str(sqlite_admin_dir)), name="sqlite_admin")
+    logger.info(f"✅ SQLite Admin mounted at /sqlite-admin")
+
 # Import and include routers
 # Support both relative (package) and absolute (direct run) imports
 try:
