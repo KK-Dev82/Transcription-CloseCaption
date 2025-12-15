@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import sys
+import psutil
 from pathlib import Path
 
 # เพิ่ม app directory เข้าไปใน Python path
@@ -250,14 +251,44 @@ class VideoWorkerAsync:
 
 async def main():
     """Main async function สำหรับรัน worker"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    # Setup logging with separate error log file
+    LOG_DIR = Path("logs")
+    LOG_DIR.mkdir(exist_ok=True)
+    WORKER_LOG_FILE = LOG_DIR / "video-worker.log"
+    WORKER_ERROR_LOG_FILE = LOG_DIR / "video-worker-errors.log"
+    
+    # Create formatters
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
     )
+    error_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s\n%(pathname)s:%(lineno)d\n%(funcName)s\n%(exc_info)s'
+    )
+    
+    # Create handlers
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    
+    file_handler = logging.FileHandler(WORKER_LOG_FILE, encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    
+    error_file_handler = logging.FileHandler(WORKER_ERROR_LOG_FILE, encoding='utf-8')
+    error_file_handler.setLevel(logging.ERROR)
+    error_file_handler.setFormatter(error_formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(error_file_handler)
     
     logger.info("=" * 80)
     logger.info("🚀 Starting Video Worker (aio-pika - Async)")
     logger.info("=" * 80)
+    logger.info(f"📁 Log files: {WORKER_LOG_FILE}, {WORKER_ERROR_LOG_FILE}")
     
     # Infinite retry loop for worker crashes
     while True:
@@ -277,7 +308,15 @@ async def main():
             logger.info("ได้รับ interrupt signal - Shutting down...")
             break
         except Exception as e:
+            # Log to error file with full traceback
             logger.error(f"❌ Fatal error in worker: {e}", exc_info=True)
+            logger.error(f"❌ Worker crash details: type={type(e).__name__}, message={str(e)}", exc_info=True)
+            
+            # Check for GPU-related errors
+            error_str = str(e).lower()
+            if any(keyword in error_str for keyword in ['cuda', 'gpu', 'out of memory', 'oom', 'nvidia', 'cudnn']):
+                logger.error("🚨 GPU-related error detected! This may indicate GPU overload or memory issues.")
+            
             logger.warning("⚠️ Worker crashed, restarting in 10 seconds...")
             await asyncio.sleep(10)
 
