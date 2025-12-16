@@ -47,6 +47,11 @@ class AsyncRabbitMQConnection:
         self.transcription_request_queue_name = 'transcription_request_queue'
         self.audio_extraction_queue_name = 'audio_extraction_queue'
         
+        # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+        self.close_caption_request_queue_name = 'close_caption_request_queue'
+        self.close_caption_extraction_queue_name = 'close_caption_extraction_queue'
+        self.close_caption_queue_name = 'close_caption_queue'
+        
         # Transcription exchange
         self.transcription_exchange_name = 'transcription.exchange'
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
@@ -177,10 +182,14 @@ class AsyncRabbitMQConnection:
         # Priority Queue (รองรับ priority 0-10)
         # CloseCaption (realtime_chunks) → priority 10
         # Normal transcription → priority 5
-        if enable_priority:
+        # ⚠️ หมายเหตุ: Quorum queues ไม่รองรับ x-max-priority
+        # ต้องใช้ classic queue ถ้าต้องการ priority queue
+        if enable_priority and not (enable_quorum and use_quorum):
             max_priority = int(os.getenv('RABBITMQ_MAX_PRIORITY', '10'))
             arguments['x-max-priority'] = max_priority
             logger.debug(f"✅ Priority queue enabled for {queue_name}: max_priority={max_priority}")
+        elif enable_priority and enable_quorum and use_quorum:
+            logger.warning(f"⚠️  Priority queue disabled for {queue_name} (quorum queues don't support x-max-priority)")
         
         # Dead Letter Exchange (DLX)
         enable_dlx_flag = os.getenv('ENABLE_DLX', 'true').lower() == 'true'
@@ -275,7 +284,63 @@ class AsyncRabbitMQConnection:
             await self._setup_dlx_for_queue(self.audio_extraction_queue_name)
             logger.info(f"✅ Created {self.audio_extraction_queue_name} (max: {max_extraction}, quorum: {extraction_args.get('x-queue-type', 'classic')})")
             
+            # ============================================================
+            # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+            # ============================================================
+            
+            # 1. Close Caption Request Queue (max 10)
+            max_close_caption_request = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
+            close_caption_request_args = self._get_queue_arguments(
+                self.close_caption_request_queue_name,
+                max_length=max_close_caption_request,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            await self.channel.declare_queue(
+                self.close_caption_request_queue_name,
+                durable=True,
+                arguments=close_caption_request_args if close_caption_request_args else None
+            )
+            await self._setup_dlx_for_queue(self.close_caption_request_queue_name)
+            logger.info(f"✅ Created {self.close_caption_request_queue_name} (max: {max_close_caption_request}, quorum: {close_caption_request_args.get('x-queue-type', 'classic')})")
+            
+            # 2. Close Caption Extraction Queue (max 20)
+            max_close_caption_extraction = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_EXTRACTION', '20'))
+            close_caption_extraction_args = self._get_queue_arguments(
+                self.close_caption_extraction_queue_name,
+                max_length=max_close_caption_extraction,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            await self.channel.declare_queue(
+                self.close_caption_extraction_queue_name,
+                durable=True,
+                arguments=close_caption_extraction_args if close_caption_extraction_args else None
+            )
+            await self._setup_dlx_for_queue(self.close_caption_extraction_queue_name)
+            logger.info(f"✅ Created {self.close_caption_extraction_queue_name} (max: {max_close_caption_extraction}, quorum: {close_caption_extraction_args.get('x-queue-type', 'classic')})")
+            
+            # 3. Close Caption Queue (max 10)
+            max_close_caption = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION', '10'))
+            close_caption_args = self._get_queue_arguments(
+                self.close_caption_queue_name,
+                max_length=max_close_caption,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            await self.channel.declare_queue(
+                self.close_caption_queue_name,
+                durable=True,
+                arguments=close_caption_args if close_caption_args else None
+            )
+            await self._setup_dlx_for_queue(self.close_caption_queue_name)
+            logger.info(f"✅ Created {self.close_caption_queue_name} (max: {max_close_caption}, quorum: {close_caption_args.get('x-queue-type', 'classic')})")
+            
             logger.info("📋 3-Queue Architecture: Queues declared successfully")
+            logger.info("📋 Close Caption Queues: 3-Queue (close_caption_request → close_caption_extraction → close_caption)")
             
         except Exception as e:
             logger.error(f"❌ Failed to declare quorum queues: {e}", exc_info=True)

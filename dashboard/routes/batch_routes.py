@@ -91,9 +91,10 @@ async def send_transcription_task(server_name: str, video_file: str, model_size:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{api_url}/transcribe",
+                    f"{api_url}/transcribe/",  # Add trailing slash to avoid 307 redirect
                     json=request_payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True  # Follow redirects if any
                 ) as response:
                     if response.status == 200:
                         result = await response.json()

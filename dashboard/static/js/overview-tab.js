@@ -5,6 +5,37 @@
 // Current selected server
 let currentOverviewServer = '4000-ada-sc';
 
+// Listen for webhook events to update task status in real-time
+window.addEventListener('webhook:task-update', async (event) => {
+    const { taskId, status, progress, payload } = event.detail;
+    
+    // Find the task in the current view and update it
+    const serverName = currentOverviewServer;
+    const pagination = paginationState[serverName];
+    
+    if (pagination && pagination.allTasks) {
+        const taskIndex = pagination.allTasks.findIndex(t => t.task_id === taskId);
+        if (taskIndex !== -1) {
+            // Update task data
+            const task = pagination.allTasks[taskIndex];
+            task.status = status;
+            task.progress = progress;
+            
+            // Update other fields from payload if available
+            if (payload) {
+                if (payload.stage) task.current_stage = payload.stage;
+                if (payload.stageDescription) task.current_stage_description = payload.stageDescription;
+                if (payload.updatedAt) task.updated_at = payload.updatedAt;
+            }
+            
+            // Refresh the current view to show updated status
+            await refreshOverviewServer(serverName);
+            
+            console.log(`✅ Updated task ${taskId} from webhook: status=${status}, progress=${progress}%`);
+        }
+    }
+});
+
 // Sorting state per server
 const sortingState = {
     '4000-ada-sc': { field: 'updated_at', direction: 'desc' },
@@ -649,17 +680,39 @@ async function viewTranscriptionText(serverName, taskId) {
         
         fulltextDiv.textContent = fullText || 'No text available';
         
+        // Check if full audio file is available (from file_path)
+        const hasFullAudio = task.file_path && task.file_path.endsWith('.wav');
+        let fullAudioPlayerHtml = '';
+        if (hasFullAudio) {
+            const fullAudioUrl = `/api/server/${serverName}/task-audio/${taskId}`;
+            fullAudioPlayerHtml = `
+                <div class="full-audio-player" style="margin-bottom: 24px; padding: 16px; background: var(--apple-gray-1); border-radius: 8px; border: 2px solid var(--apple-blue);">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                        <span style="font-weight: 600; color: var(--apple-blue);">🎵 Full Audio File</span>
+                        <span style="font-size: 12px; color: var(--apple-gray-3);">(${task.file_path.split('/').pop()})</span>
+                    </div>
+                    <audio controls style="width: 100%; max-width: 600px;" preload="metadata">
+                        <source src="${fullAudioUrl}" type="audio/wav">
+                        Your browser does not support the audio element.
+                    </audio>
+                    <div style="margin-top: 8px; font-size: 12px; color: var(--apple-gray-3);">
+                        💡 ใช้ audio player นี้เพื่อฟังเสียงทั้งไฟล์และเทียบกับ chunks ด้านล่าง
+                    </div>
+                </div>
+            `;
+        }
+        
         // Render chunks
         if (task.chunks && task.chunks.length > 0) {
-            chunksDiv.innerHTML = task.chunks.map((chunk, index) => {
+            chunksDiv.innerHTML = fullAudioPlayerHtml + task.chunks.map((chunk, index) => {
                 const startTime = chunk.start_time !== undefined ? formatTime(chunk.start_time) : 'N/A';
                 const endTime = chunk.end_time !== undefined ? formatTime(chunk.end_time) : 'N/A';
                 const chunkPath = chunk.chunk_path;
-                const hasAudio = chunkPath && chunkPath.trim() !== '';
+                const hasChunkAudio = chunkPath && chunkPath.trim() !== '';
                 
                 // Build audio player HTML if chunk_path exists
                 let audioPlayerHtml = '';
-                if (hasAudio) {
+                if (hasChunkAudio) {
                     const audioUrl = `/api/server/${serverName}/chunk-audio/${taskId}/${index}`;
                     audioPlayerHtml = `
                         <div class="chunk-audio-player" style="margin-top: 8px; padding: 8px; background: var(--apple-gray-1); border-radius: 4px;">
@@ -667,6 +720,13 @@ async function viewTranscriptionText(serverName, taskId) {
                                 <source src="${audioUrl}" type="audio/wav">
                                 Your browser does not support the audio element.
                             </audio>
+                        </div>
+                    `;
+                } else if (hasFullAudio) {
+                    // If no chunk audio but full audio exists, show note to use full audio player
+                    audioPlayerHtml = `
+                        <div style="margin-top: 8px; padding: 8px; background: var(--apple-gray-1); border-radius: 4px; font-size: 12px; color: var(--apple-gray-3);">
+                            💡 ใช้ Full Audio Player ด้านบนเพื่อฟังช่วงเวลานี้ (${startTime} - ${endTime})
                         </div>
                     `;
                 }
@@ -683,7 +743,12 @@ async function viewTranscriptionText(serverName, taskId) {
                 `;
             }).join('');
         } else {
-            chunksDiv.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--apple-gray-3);">No chunks available</div>';
+            // Show full audio player even if no chunks
+            if (hasFullAudio) {
+                chunksDiv.innerHTML = fullAudioPlayerHtml + '<div style="text-align: center; padding: 24px; color: var(--apple-gray-3);">No chunks available, but full audio file is available above.</div>';
+            } else {
+                chunksDiv.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--apple-gray-3);">No chunks available</div>';
+            }
         }
     } catch (error) {
         console.error('Error loading transcription text:', error);

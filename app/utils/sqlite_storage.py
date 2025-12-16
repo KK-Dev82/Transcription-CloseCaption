@@ -6,6 +6,7 @@ SQLite Storage Service
 import sqlite3
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone

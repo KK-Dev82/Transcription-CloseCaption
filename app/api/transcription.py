@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
 import logging
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from ..models.transcription import TranscriptionRequest, TranscriptionResponse
@@ -113,19 +113,70 @@ async def get_all_transcriptions(
             def get_sort_value(task):
                 value = getattr(task, sort_by, None)
                 if value is None:
-                    return datetime.min.replace(tzinfo=None)
+                    # Return timezone-aware datetime.min for consistent comparison
+                    return datetime.min.replace(tzinfo=timezone.utc)
                 if isinstance(value, datetime):
-                    return value
+                    # Normalize to timezone-aware UTC for comparison
+                    if value.tzinfo is None:
+                        # Timezone-naive: assume UTC
+                        return value.replace(tzinfo=timezone.utc)
+                    else:
+                        # Timezone-aware: convert to UTC
+                        return value.astimezone(timezone.utc)
                 if isinstance(value, str):
                     try:
                         # Try parsing ISO format
+                        parsed = None
                         if '+' in value or 'Z' in value:
-                            value = value.replace('Z', '+00:00')
-                        return datetime.fromisoformat(value.replace('Z', ''))
-                    except:
-                        return datetime.min.replace(tzinfo=None)
-                return datetime.min.replace(tzinfo=None)
-            all_tasks.sort(key=get_sort_value, reverse=reverse)
+                            # Timezone-aware
+                            value_clean = value.replace('Z', '+00:00')
+                            parsed = datetime.fromisoformat(value_clean)
+                        else:
+                            # Timezone-naive: assume UTC
+                            parsed = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+                        
+                        # Ensure timezone-aware UTC
+                        if parsed:
+                            if parsed.tzinfo is None:
+                                parsed = parsed.replace(tzinfo=timezone.utc)
+                            else:
+                                parsed = parsed.astimezone(timezone.utc)
+                            return parsed
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                    except Exception as e:
+                        logger.debug(f"Error parsing datetime '{value}': {e}")
+                        return datetime.min.replace(tzinfo=timezone.utc)
+                return datetime.min.replace(tzinfo=timezone.utc)
+            
+            # Sort with error handling
+            try:
+                all_tasks.sort(key=get_sort_value, reverse=reverse)
+            except TypeError as e:
+                # Fallback: convert all to timestamp for comparison
+                logger.warning(f"Datetime comparison error, using timestamp fallback: {e}")
+                def get_timestamp(task):
+                    value = getattr(task, sort_by, None)
+                    if value is None:
+                        return 0.0
+                    if isinstance(value, datetime):
+                        # Convert to timestamp
+                        if value.tzinfo is None:
+                            value = value.replace(tzinfo=timezone.utc)
+                        return value.timestamp()
+                    if isinstance(value, str):
+                        try:
+                            if '+' in value or 'Z' in value:
+                                value_clean = value.replace('Z', '+00:00')
+                                parsed = datetime.fromisoformat(value_clean)
+                            else:
+                                parsed = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+                            if parsed.tzinfo is None:
+                                parsed = parsed.replace(tzinfo=timezone.utc)
+                            return parsed.timestamp()
+                        except Exception:
+                            return 0.0
+                    return 0.0
+                all_tasks.sort(key=get_timestamp, reverse=reverse)
         elif sort_by == 'status':
             reverse = sort_order.lower() == 'desc'
             all_tasks.sort(
@@ -146,6 +197,58 @@ async def get_all_transcriptions(
         # Return empty list instead of crashing
         return []
 
+
+@router.get("/{task_id}/audio")
+async def get_task_audio(task_id: str):
+    """Serve full audio file for playback"""
+    try:
+        # Get task details
+        task = transcription_service.get_task_status(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Get audio file path from task
+        audio_path = None
+        
+        # Try to get from task attributes
+        if hasattr(task, 'file_path'):
+            audio_path = task.file_path
+        elif hasattr(task, 'dict'):
+            task_dict = task.dict()
+            audio_path = task_dict.get('file_path')
+        
+        # If file_path is audio file (ends with .wav), use it directly
+        if audio_path and audio_path.endswith('.wav'):
+            file_path = Path(audio_path)
+            if file_path.exists():
+                return FileResponse(
+                    path=str(file_path),
+                    filename=file_path.name,
+                    media_type='audio/wav'
+                )
+        
+        # Try to get from storage
+        from ..utils.storage_factory import get_storage
+        storage = get_storage()
+        task_data = storage.get_transcription(task_id)
+        if task_data:
+            audio_path = task_data.get('file_path')
+            if audio_path and audio_path.endswith('.wav'):
+                file_path = Path(audio_path)
+                if file_path.exists():
+                    return FileResponse(
+                        path=str(file_path),
+                        filename=file_path.name,
+                        media_type='audio/wav'
+                    )
+        
+        raise HTTPException(status_code=404, detail="Audio file not found for this task")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving task audio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{task_id}/chunk/{chunk_index}/audio")
 async def get_chunk_audio(task_id: str, chunk_index: int):

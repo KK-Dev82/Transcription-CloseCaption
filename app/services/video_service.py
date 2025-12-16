@@ -10,6 +10,7 @@ import ffmpeg
 import json
 import os
 import time
+import shutil
 
 from .file_service import FileService
 from .rabbitmq_service import RabbitMQService
@@ -18,6 +19,44 @@ from .whisper_service import WhisperService
 # from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
+
+# FFmpeg binary path detection
+def find_ffmpeg_binary():
+    """
+    หา FFmpeg binary path โดยตรวจสอบตามลำดับ:
+    1. Environment variable FFMPEG_BINARY
+    2. /usr/bin/ffmpeg (system package)
+    3. /usr/local/bin/ffmpeg (local installation)
+    4. /workspace/.local/bin/ffmpeg (persistent volume)
+    5. shutil.which('ffmpeg') (PATH)
+    """
+    # 1. Check environment variable
+    ffmpeg_binary = os.getenv('FFMPEG_BINARY')
+    if ffmpeg_binary and os.path.exists(ffmpeg_binary) and os.access(ffmpeg_binary, os.X_OK):
+        logger.info(f"✅ Using FFmpeg from FFMPEG_BINARY: {ffmpeg_binary}")
+        return ffmpeg_binary
+    
+    # 2. Check common system paths
+    common_paths = [
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/workspace/.local/bin/ffmpeg',
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path) and os.access(path, os.X_OK):
+            logger.info(f"✅ Found FFmpeg at: {path}")
+            return path
+    
+    # 3. Fallback to PATH
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        logger.info(f"✅ Found FFmpeg in PATH: {ffmpeg_path}")
+        return ffmpeg_path
+    
+    # 4. Not found
+    logger.warning("⚠️  FFmpeg not found in common paths or PATH")
+    return None
 
 class VideoService:
     def __init__(self):
@@ -29,6 +68,15 @@ class VideoService:
         self.whisper_service = WhisperService()
         self.tasks: Dict[str, Dict] = {}
         self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
+        
+        # หา FFmpeg binary path
+        self.ffmpeg_binary = find_ffmpeg_binary()
+        if self.ffmpeg_binary:
+            # Set FFmpeg binary path สำหรับ python-ffmpeg library
+            ffmpeg.FFMPEG_BINARY = self.ffmpeg_binary
+            logger.info(f"✅ Configured FFmpeg binary: {self.ffmpeg_binary}")
+        else:
+            logger.warning("⚠️  FFmpeg binary not found - audio extraction may fail")
         
         # Thread Pool สำหรับ Audio Extraction (จำกัด concurrent extractions)
         max_workers = int(os.getenv('AUDIO_EXTRACTION_MAX_WORKERS', '3'))
@@ -721,18 +769,42 @@ class VideoService:
                 # Extract audio ทั้งไฟล์ (48kHz mono WAV)
                 # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น
                 # Whisper จะ downsample เองตามที่ต้องการ (ดีกว่า FFmpeg downsample)
-                (
-                    ffmpeg
-                    .input(video_path)
-                    .output(
-                        output_path,
-                        acodec='pcm_s16le',
-                        ac=1,  # Mono
-                        ar=48000  # 48kHz (เพิ่มจาก 16kHz เพื่อคุณภาพดีขึ้น)
-                    )
-                    .overwrite_output()
-                    .run(quiet=True)
+                # ใช้ FFmpeg binary path ที่หาได้ (ไม่พึ่งพา PATH)
+                ffmpeg_binary = self.ffmpeg_binary or '/usr/bin/ffmpeg'
+                
+                # ตั้งค่า FFmpeg binary สำหรับ python-ffmpeg library
+                # python-ffmpeg ใช้ get_ffmpeg_executable() ซึ่งจะหา 'ffmpeg' จาก PATH
+                # แต่เราต้องการใช้ absolute path แทน
+                import subprocess
+                import shutil
+                
+                # ใช้ subprocess โดยตรงแทน python-ffmpeg library เพื่อใช้ absolute path
+                ffmpeg_cmd = [
+                    ffmpeg_binary,
+                    '-i', video_path,
+                    '-acodec', 'pcm_s16le',
+                    '-ac', '1',  # Mono
+                    '-ar', '48000',  # 48kHz
+                    '-y',  # Overwrite output
+                    output_path
+                ]
+                
+                logger.debug(f"   [FFmpeg Command] {' '.join(ffmpeg_cmd)}")
+                result = subprocess.run(
+                    ffmpeg_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minutes timeout
                 )
+                
+                if result.returncode != 0:
+                    error_msg = result.stderr or result.stdout or "Unknown error"
+                    logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error: {error_msg[:500]}")
+                    raise Exception(f"FFmpeg failed: {error_msg[:200]}")
+                
+                # Alternative: ใช้ python-ffmpeg library ถ้า FFMPEG_BINARY ถูกตั้งค่าแล้ว
+                # แต่เนื่องจาก library ไม่รองรับ FFMPEG_BINARY attribute
+                # จึงใช้ subprocess โดยตรงแทน
                 
                 logger.info(f"   [Audio Extraction Thread] Extract audio สำเร็จ: {output_path}")
                 return output_path

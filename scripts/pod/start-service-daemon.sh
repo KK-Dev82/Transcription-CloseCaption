@@ -77,29 +77,55 @@ if ! pgrep -x "redis-server" > /dev/null; then
 fi
 
 # Install/check timezone data (required for pythainlp)
+# ใช้ persistent volume เพื่อไม่ต้องติดตั้งใหม่ทุกครั้งหลัง restart
+PERSISTENT_ZONEINFO="/workspace/.local/share/zoneinfo"
+SYSTEM_ZONEINFO="/usr/share/zoneinfo"
+
 echo "📋 Checking timezone data..."
-if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
+if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+    # ใช้ timezone data จาก persistent volume
+    export TZDIR="$PERSISTENT_ZONEINFO"
+    echo "✅ Using timezone data from persistent volume: $TZDIR"
+elif [ -d "$SYSTEM_ZONEINFO" ] && [ -f "$SYSTEM_ZONEINFO/Asia/Bangkok" ]; then
+    # Fallback: ใช้ system timezone และ copy ไป persistent volume
+    echo "📦 Copying timezone data to persistent volume..."
+    mkdir -p "$PERSISTENT_ZONEINFO"
+    cp -r "$SYSTEM_ZONEINFO"/* "$PERSISTENT_ZONEINFO/" 2>/dev/null || {
+        echo "⚠️  Some files may have failed to copy (this is usually OK)"
+    }
+    if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+        export TZDIR="$PERSISTENT_ZONEINFO"
+        echo "✅ Timezone data copied to persistent volume: $TZDIR"
+    else
+        export TZDIR="$SYSTEM_ZONEINFO"
+        echo "⚠️  Using system timezone (persistent copy failed): $TZDIR"
+    fi
+else
+    # ติดตั้ง tzdata และ copy ไป persistent volume
     echo "📦 Installing tzdata..."
     apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 || {
         echo "⚠️  Failed to install tzdata (may continue anyway)"
     }
-    # Verify installation succeeded
-    if [ -d "/usr/share/zoneinfo" ] && [ -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-        echo "✅ tzdata installed successfully"
+    if [ -d "$SYSTEM_ZONEINFO" ] && [ -f "$SYSTEM_ZONEINFO/Asia/Bangkok" ]; then
+        mkdir -p "$PERSISTENT_ZONEINFO"
+        cp -r "$SYSTEM_ZONEINFO"/* "$PERSISTENT_ZONEINFO/" 2>/dev/null || {
+            echo "⚠️  Some files may have failed to copy (this is usually OK)"
+        }
+        if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+            export TZDIR="$PERSISTENT_ZONEINFO"
+            echo "✅ Timezone data installed and copied to persistent volume: $TZDIR"
+        else
+            export TZDIR="$SYSTEM_ZONEINFO"
+            echo "⚠️  Using system timezone (persistent copy failed): $TZDIR"
+        fi
     else
-        echo "⚠️  tzdata installation may have failed, but continuing..."
+        echo "⚠️  Timezone data not found"
+        export TZDIR="${TZDIR:-/usr/share/zoneinfo}"
     fi
-else
-    echo "✅ Timezone data already available (skipping installation)"
-fi
-if [ -d "/usr/share/zoneinfo" ]; then
-    export TZDIR=/usr/share/zoneinfo
-    echo "✅ Timezone data ready"
-else
-    echo "⚠️  Timezone data not found"
 fi
 export TZ=Asia/Bangkok
 echo "   TZ=$TZ"
+echo "   TZDIR=$TZDIR"
 echo ""
 
 # Load environment variables

@@ -154,6 +154,10 @@ class VideoWorkerAsync:
             'audio_chunk_extracted': self.handlers.handle_audio_chunk_extracted,
             'transcription_request': self.handlers.handle_transcription_request,
             'audio_extraction': self.handlers.handle_audio_extraction,
+            # Close Caption handlers (แยกจาก transcription เพื่อลัดคิว)
+            'close_caption_request': self.handlers.handle_close_caption_request,
+            'close_caption_extraction': self.handlers.handle_close_caption_extraction,
+            'close_caption': self.handlers.handle_close_caption,
         }
     
     async def _monitor_stuck_tasks(self):

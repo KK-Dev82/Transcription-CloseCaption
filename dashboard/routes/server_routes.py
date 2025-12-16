@@ -650,6 +650,45 @@ async def clear_tasks(server_name: str, request: ClearTasksRequest):
         return {"success": False, "message": str(e), "server": server_name}
 
 
+@router.get("/api/server/{server_name}/task-audio/{task_id}")
+async def get_task_audio(server_name: str, task_id: str):
+    """Proxy full audio file from transcription service"""
+    if server_name not in SERVERS:
+        raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
+    
+    server_config = SERVERS[server_name]
+    api_url = server_config["api_url"]
+    
+    try:
+        import aiohttp
+        # Proxy file from transcription service
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{api_url}/transcribe/{task_id}/audio",
+                timeout=aiohttp.ClientTimeout(total=120)  # Longer timeout for large audio files
+            ) as audio_response:
+                if audio_response.status != 200:
+                    error_text = await audio_response.text()
+                    raise HTTPException(
+                        status_code=audio_response.status,
+                        detail=f"Failed to get audio: {error_text}"
+                    )
+                
+                # Stream the audio file
+                return StreamingResponse(
+                    audio_response.content.iter_chunked(8192),
+                    media_type=audio_response.headers.get('Content-Type', 'audio/wav'),
+                    headers={
+                        'Content-Disposition': audio_response.headers.get('Content-Disposition', f'inline; filename="task_{task_id}.wav"')
+                    }
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task audio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/api/server/{server_name}/chunk-audio/{task_id}/{chunk_index}")
 async def get_chunk_audio(server_name: str, task_id: str, chunk_index: int):
     """Proxy audio chunk file from transcription service"""

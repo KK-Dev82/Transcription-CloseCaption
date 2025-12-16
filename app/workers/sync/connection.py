@@ -48,6 +48,11 @@ class RabbitMQConnection:
         self.transcription_request_queue = 'transcription_request_queue'
         self.audio_extraction_queue = 'audio_extraction_queue'
         
+        # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+        self.close_caption_request_queue = 'close_caption_request_queue'
+        self.close_caption_extraction_queue = 'close_caption_extraction_queue'
+        self.close_caption_queue = 'close_caption_queue'
+        
         # Transcription exchange
         self.transcription_exchange = 'transcription.exchange'
         self.transcription_chunk_completed_routing_key = 'transcription.chunk.completed'
@@ -395,7 +400,63 @@ class RabbitMQConnection:
             # 3. Transcription Queue (max 20) - Note: ยังใช้ queue เดิม (backward compatible)
             # Queue เดิมจะยังทำงาน แต่ถ้าต้องการ quorum จะต้องสร้าง queue ใหม่
             
+            # ============================================================
+            # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+            # ============================================================
+            
+            # 1. Close Caption Request Queue (max 10)
+            max_close_caption_request = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
+            close_caption_request_args = self._get_queue_arguments(
+                self.close_caption_request_queue,
+                max_length=max_close_caption_request,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_request_queue,
+                durable=True,
+                arguments=close_caption_request_args if close_caption_request_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_request_queue)
+            logger.info(f"✅ Created {self.close_caption_request_queue} (max: {max_close_caption_request}, quorum: {close_caption_request_args.get('x-queue-type', 'classic')})")
+            
+            # 2. Close Caption Extraction Queue (max 20)
+            max_close_caption_extraction = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_EXTRACTION', '20'))
+            close_caption_extraction_args = self._get_queue_arguments(
+                self.close_caption_extraction_queue,
+                max_length=max_close_caption_extraction,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_extraction_queue,
+                durable=True,
+                arguments=close_caption_extraction_args if close_caption_extraction_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_extraction_queue)
+            logger.info(f"✅ Created {self.close_caption_extraction_queue} (max: {max_close_caption_extraction}, quorum: {close_caption_extraction_args.get('x-queue-type', 'classic')})")
+            
+            # 3. Close Caption Queue (max 10)
+            max_close_caption = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION', '10'))
+            close_caption_args = self._get_queue_arguments(
+                self.close_caption_queue,
+                max_length=max_close_caption,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_queue,
+                durable=True,
+                arguments=close_caption_args if close_caption_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_queue)
+            logger.info(f"✅ Created {self.close_caption_queue} (max: {max_close_caption}, quorum: {close_caption_args.get('x-queue-type', 'classic')})")
+            
             logger.info("📋 3-Queue Architecture: Queues declared successfully")
+            logger.info("📋 Close Caption Queues: 3-Queue (close_caption_request → close_caption_extraction → close_caption)")
             
         except Exception as e:
             logger.error(f"❌ Failed to declare quorum queues: {e}", exc_info=True)

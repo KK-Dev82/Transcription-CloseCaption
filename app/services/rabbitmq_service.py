@@ -28,9 +28,9 @@ class RabbitMQService:
         self.password = os.getenv("RABBITMQ_PASSWORD", "admin123")
         self.virtual_host = os.getenv("RABBITMQ_VHOST", "/")
         
-        # เพิ่ม JSON storage
-        from ..utils.json_storage import JSONStorage
-        self.json_storage = JSONStorage()
+        # ใช้ Storage Factory เพื่อเลือก storage type (SQLite หรือ JSON)
+        from ..utils.storage_factory import get_storage
+        self.json_storage = get_storage()  # จะ return SQLiteStorage หรือ JSONStorage ตาม STORAGE_TYPE
         
         # Queue names
         self.trim_queue = 'video_trim_queue'
@@ -44,6 +44,11 @@ class RabbitMQService:
         self.transcription_request_queue = 'transcription_request_queue'
         self.audio_extraction_queue = 'audio_extraction_queue'
         # transcription_queue ใช้ queue เดิม (backward compatible)
+        
+        # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+        self.close_caption_request_queue = 'close_caption_request_queue'
+        self.close_caption_extraction_queue = 'close_caption_extraction_queue'
+        self.close_caption_queue = 'close_caption_queue'
     
     def _connect(self):
         """เชื่อมต่อกับ RabbitMQ"""
@@ -115,8 +120,64 @@ class RabbitMQService:
             # จะต้องสร้าง queue ใหม่หรือใช้ queue เดิม (backward compatible)
             # สำหรับตอนนี้ ยังใช้ queue เดิมไว้ก่อน
             
+            # ============================================================
+            # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+            # ============================================================
+            
+            # 1. Close Caption Request Queue (max 10 - สำหรับ close caption)
+            max_close_caption_request = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
+            close_caption_request_args = self._get_queue_arguments(
+                self.close_caption_request_queue,
+                max_length=max_close_caption_request,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False  # ไม่ต้องใช้ priority เพราะแยก queue แล้ว
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_request_queue,
+                durable=True,
+                arguments=close_caption_request_args if close_caption_request_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_request_queue)
+            logger.info(f"✅ Created {self.close_caption_request_queue} (max: {max_close_caption_request}, quorum: {close_caption_request_args.get('x-queue-type', 'classic')})")
+            
+            # 2. Close Caption Extraction Queue (max 20 - สำหรับ close caption)
+            max_close_caption_extraction = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_EXTRACTION', '20'))
+            close_caption_extraction_args = self._get_queue_arguments(
+                self.close_caption_extraction_queue,
+                max_length=max_close_caption_extraction,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False  # ไม่ต้องใช้ priority เพราะแยก queue แล้ว
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_extraction_queue,
+                durable=True,
+                arguments=close_caption_extraction_args if close_caption_extraction_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_extraction_queue)
+            logger.info(f"✅ Created {self.close_caption_extraction_queue} (max: {max_close_caption_extraction}, quorum: {close_caption_extraction_args.get('x-queue-type', 'classic')})")
+            
+            # 3. Close Caption Queue (max 10 - สำหรับ close caption transcription)
+            max_close_caption = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION', '10'))
+            close_caption_args = self._get_queue_arguments(
+                self.close_caption_queue,
+                max_length=max_close_caption,
+                enable_dlx=True,
+                enable_quorum=True,
+                enable_priority=False  # ไม่ต้องใช้ priority เพราะแยก queue แล้ว
+            )
+            self.channel.queue_declare(
+                queue=self.close_caption_queue,
+                durable=True,
+                arguments=close_caption_args if close_caption_args else None
+            )
+            self._setup_dlx_for_queue(self.close_caption_queue)
+            logger.info(f"✅ Created {self.close_caption_queue} (max: {max_close_caption}, quorum: {close_caption_args.get('x-queue-type', 'classic')})")
+            
             logger.info("เชื่อมต่อ RabbitMQ สำเร็จ")
             logger.info("📋 Queue Architecture: 3-Queue (request → extraction → transcription)")
+            logger.info("📋 Close Caption Queues: 3-Queue (close_caption_request → close_caption_extraction → close_caption)")
             
         except AMQPConnectionError as e:
             logger.error(f"ไม่สามารถเชื่อมต่อ RabbitMQ: {e}")
@@ -176,10 +237,14 @@ class RabbitMQService:
         # Priority Queue (รองรับ priority 0-10)
         # CloseCaption (realtime_chunks) → priority 10 (สูงสุด)
         # Normal transcription → priority 5 (ปกติ)
-        if enable_priority:
+        # ⚠️ หมายเหตุ: Quorum queues ไม่รองรับ x-max-priority
+        # ต้องใช้ classic queue ถ้าต้องการ priority queue
+        if enable_priority and not (enable_quorum and use_quorum):
             max_priority = int(os.getenv('RABBITMQ_MAX_PRIORITY', '10'))
             arguments['x-max-priority'] = max_priority
             logger.debug(f"✅ Priority queue enabled for {queue_name}: max_priority={max_priority}")
+        elif enable_priority and enable_quorum and use_quorum:
+            logger.warning(f"⚠️  Priority queue disabled for {queue_name} (quorum queues don't support x-max-priority)")
         
         # Queue Max Length & Overflow
         if max_length > 0:
@@ -632,6 +697,197 @@ class RabbitMQService:
             raise
         finally:
             if connection and not connection.is_closed:
+                try:
+                    connection.close()
+                except:
+                    pass
+    
+    def send_close_caption_request_task(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 3,  # Close caption ใช้ chunk เล็กกว่า (3 วินาที)
+        use_chunking: bool = True,  # Close caption ต้องใช้ chunking
+        display_mode: str = "realtime_chunks",
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        initial_prompt: Optional[str] = None
+    ) -> str:
+        """
+        ส่งงาน close caption ไปยัง close_caption_request_queue (แยกจาก transcription)
+        """
+        max_retries = 3
+        retry_delay = 1
+        
+        task_id = None
+        for attempt in range(max_retries):
+            try:
+                self._ensure_connection()
+                
+                if task_id is None:
+                    task_id = str(uuid.uuid4())
+                
+                task_data = {
+                    "task_id": task_id,
+                    "task_type": "close_caption_request",
+                    "file_path": file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "display_mode": display_mode,
+                    "status": "pending",
+                    "created_at": time.time(),
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "initial_prompt": initial_prompt
+                }
+                
+                # บันทึก task ลง storage
+                self.json_storage.save_transcription(task_id, task_data)
+                
+                # ส่งไปยัง close_caption_request_queue
+                logger.info(f"📤 Publishing to {self.close_caption_request_queue}: {task_id}")
+                
+                PUBLISH_TIMEOUT = int(os.getenv('RABBITMQ_PUBLISH_TIMEOUT', '2'))
+                publish_success = [False]
+                publish_error = [None]
+                
+                def publish_with_timeout():
+                    try:
+                        self.channel.basic_publish(
+                            exchange='',
+                            routing_key=self.close_caption_request_queue,
+                            body=json.dumps(task_data),
+                            properties=pika.BasicProperties(
+                                delivery_mode=2,  # Persistent
+                                content_type='application/json'
+                            )
+                        )
+                        publish_success[0] = True
+                    except Exception as e:
+                        publish_error[0] = e
+                
+                publish_thread = threading.Thread(target=publish_with_timeout)
+                publish_thread.daemon = True
+                publish_thread.start()
+                publish_thread.join(timeout=PUBLISH_TIMEOUT)
+                
+                if publish_thread.is_alive():
+                    logger.error(f"⏱️  Publish timeout after {PUBLISH_TIMEOUT}s for task {task_id}")
+                    raise TimeoutError(f"RabbitMQ publish timeout after {PUBLISH_TIMEOUT} seconds")
+                
+                if publish_error[0]:
+                    raise publish_error[0]
+                
+                if not publish_success[0]:
+                    raise Exception("Publish failed without error")
+                
+                logger.info(f"✅ Sent to {self.close_caption_request_queue}: {task_id}")
+                return task_id
+                
+            except (ChannelClosedByBroker, UnroutableError) as publish_error:
+                logger.error(f"❌ Queue full or rejected for task {task_id}: {publish_error}")
+                MAX_QUEUE_CLOSE_CAPTION_REQUEST = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
+                RETRY_AFTER_SECONDS = int(os.getenv('RETRY_AFTER_SECONDS', '30'))
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "Service temporarily unavailable",
+                        "message": f"Close caption queue is full. Please try again later.",
+                        "retry_after_seconds": RETRY_AFTER_SECONDS
+                    },
+                    headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+                ) from publish_error
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"❌ Attempt {attempt + 1}/{max_retries} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    self._reset_connection()
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    if task_id:
+                        try:
+                            task_data['status'] = 'failed'
+                            task_data['error_message'] = str(e)
+                            self.json_storage.save_transcription(task_id, task_data)
+                        except Exception:
+                            pass
+                    raise
+    
+    def send_close_caption_request_task_thread_safe(
+        self,
+        file_path: Optional[str] = None,
+        file_url: Optional[str] = None,
+        file_name: Optional[str] = None,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 3,
+        use_chunking: bool = True,
+        display_mode: str = "realtime_chunks",
+        callback_url: Optional[str] = None,
+        job_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        initial_prompt: Optional[str] = None
+    ) -> str:
+        """
+        Thread-safe version: สร้าง connection ใหม่ใน thread
+        """
+        connection = None
+        try:
+            connection, channel = self._create_thread_safe_connection()
+            
+            task_id = str(uuid.uuid4())
+            task_data = {
+                "task_id": task_id,
+                "task_type": "close_caption_request",
+                "file_path": file_path,
+                "file_url": file_url,
+                "file_name": file_name,
+                "language": language,
+                "model_size": model_size,
+                "chunk_duration": chunk_duration,
+                "use_chunking": use_chunking,
+                "display_mode": display_mode,
+                "status": "pending",
+                "created_at": time.time(),
+                "callback_url": callback_url,
+                "job_id": job_id,
+                "user_id": user_id,
+                "initial_prompt": initial_prompt
+            }
+            
+            # บันทึก task ลง storage
+            self.json_storage.save_transcription(task_id, task_data)
+            
+            # ส่งไปยัง close_caption_request_queue
+            channel.basic_publish(
+                exchange='',
+                routing_key=self.close_caption_request_queue,
+                body=json.dumps(task_data),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,
+                    content_type='application/json'
+                )
+            )
+            
+            logger.info(f"✅ Thread-safe: Sent to {self.close_caption_request_queue}: {task_id}")
+            return task_id
+            
+        except Exception as e:
+            logger.error(f"❌ Error in thread-safe close caption request: {e}")
+            raise
+        finally:
+            if connection:
                 try:
                     connection.close()
                 except:
