@@ -39,6 +39,11 @@ class AsyncConsumerManager:
         self.transcription_request_queue_name = 'transcription_request_queue'
         self.audio_extraction_queue_name = 'audio_extraction_queue'
         
+        # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+        self.close_caption_request_queue_name = 'close_caption_request_queue'
+        self.close_caption_extraction_queue_name = 'close_caption_extraction_queue'
+        self.close_caption_queue_name = 'close_caption_queue'
+        
         # Store queue objects
         self.queues: Dict[str, Queue] = {}
     
@@ -81,6 +86,11 @@ class AsyncConsumerManager:
         await self._setup_queue_consumer(self.transcription_request_queue_name, self.handlers.get('transcription_request'))
         await self._setup_queue_consumer(self.audio_extraction_queue_name, self.handlers.get('audio_extraction'))
         
+        # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
+        await self._setup_queue_consumer(self.close_caption_request_queue_name, self.handlers.get('close_caption_request'))
+        await self._setup_queue_consumer(self.close_caption_extraction_queue_name, self.handlers.get('close_caption_extraction'))
+        await self._setup_queue_consumer(self.close_caption_queue_name, self.handlers.get('close_caption'))
+        
         logger.info("✅ ตั้งค่า async consumers เสร็จสิ้น")
         logger.info(f"📋 Listening to {len(self.queues)} queues:")
         for queue_name in self.queues.keys():
@@ -116,6 +126,33 @@ class AsyncConsumerManager:
                     max_length=max_extraction,
                     enable_dlx=True,
                     enable_quorum=True
+                )
+            elif queue_name == self.close_caption_request_queue_name:
+                max_close_caption_request = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
+                return self.connection._get_queue_arguments(
+                    queue_name,
+                    max_length=max_close_caption_request,
+                    enable_dlx=True,
+                    enable_quorum=True,
+                    enable_priority=False
+                )
+            elif queue_name == self.close_caption_extraction_queue_name:
+                max_close_caption_extraction = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_EXTRACTION', '20'))
+                return self.connection._get_queue_arguments(
+                    queue_name,
+                    max_length=max_close_caption_extraction,
+                    enable_dlx=True,
+                    enable_quorum=True,
+                    enable_priority=False
+                )
+            elif queue_name == self.close_caption_queue_name:
+                max_close_caption = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION', '10'))
+                return self.connection._get_queue_arguments(
+                    queue_name,
+                    max_length=max_close_caption,
+                    enable_dlx=True,
+                    enable_quorum=True,
+                    enable_priority=False
                 )
         
         return None

@@ -661,6 +661,21 @@ class AsyncTaskProcessors:
             logger.info(f"💾 Saving transcription data: full_text length={len(task_data.get('full_text', ''))}, chunks count={len(task_data.get('chunks', []))}")
             self.worker.json_storage.save_transcription(task_data['task_id'], task_data)
             
+            # ส่ง webhook callback เมื่อ completed
+            callback_url = task_data.get('callback_url')
+            if callback_url:
+                from .handlers import send_webhook_callback
+                await send_webhook_callback(
+                    callback_url=callback_url,
+                    task_id=task_id,
+                    status='completed',
+                    progress=100,
+                    job_id=task_data.get('job_id'),
+                    task_data=task_data,
+                    stage='finalizing',
+                    stage_description='การแปลงเสียงเสร็จสมบูรณ์'
+                )
+            
             logger.info(f"✅ Transcription completed successfully: {task_id}")
             
         except Exception as e:

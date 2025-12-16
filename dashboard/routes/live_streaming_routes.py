@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from typing import Optional, List, Dict
 import logging
+import os
 import aiohttp
 import asyncio
 from datetime import datetime
@@ -18,7 +19,16 @@ router = APIRouter(prefix="/api/live-streaming", tags=["live-streaming"])
 RTMP_SERVER_URL = "http://143.198.77.135:8080"
 RTMP_PUSH_URL = "rtmp://143.198.77.135:1935/live"
 HLS_BASE_URL = "http://143.198.77.135:80/hls"
-TRANSCRIPTION_API_URL = "http://localhost:8010"  # หรือใช้ environment variable
+
+# Transcription API URL - ใช้ internal port ถ้า Dashboard ทำงานบน Pod เดียวกัน
+try:
+    from ..server_constants import USE_INTERNAL_PORT, INTERNAL_API_URL
+    if USE_INTERNAL_PORT:
+        TRANSCRIPTION_API_URL = INTERNAL_API_URL
+    else:
+        TRANSCRIPTION_API_URL = os.getenv("TRANSCRIPTION_API_URL", "http://localhost:8010")
+except ImportError:
+    TRANSCRIPTION_API_URL = os.getenv("TRANSCRIPTION_API_URL", "http://localhost:8010")
 
 @router.get("/status")
 async def get_streaming_status():

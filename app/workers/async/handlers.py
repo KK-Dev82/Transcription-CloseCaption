@@ -11,14 +11,82 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import aio_pika
 from aio_pika import IncomingMessage
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
 # Import timeout decorator
 from .utils import with_timeout
+
+
+async def send_webhook_callback(
+    callback_url: Optional[str],
+    task_id: str,
+    status: str,
+    progress: Optional[int] = None,
+    job_id: Optional[str] = None,
+    task_data: Optional[Dict[str, Any]] = None,
+    stage: Optional[str] = None,
+    stage_description: Optional[str] = None
+):
+    """
+    ส่ง webhook callback เมื่อสถานะเปลี่ยน
+    
+    Args:
+        callback_url: URL สำหรับ callback (ถ้า None จะไม่ส่ง)
+        task_id: Task ID
+        status: สถานะ (pending, downloading, in_queue, extracting_audio, transcribing, completed, failed)
+        progress: Progress percentage (0-100)
+        job_id: Job ID (optional)
+        task_data: Task data dictionary (optional, สำหรับดึงข้อมูลเพิ่มเติม)
+        stage: Current stage (optional)
+        stage_description: Stage description (optional)
+    """
+    if not callback_url:
+        return
+    
+    try:
+        # เตรียม payload
+        payload = {
+            "taskId": task_id,
+            "status": status,
+            "progress": progress or 0,
+            "updatedAt": datetime.now(timezone.utc).isoformat()
+        }
+        
+        if job_id:
+            payload["jobId"] = job_id
+        
+        if stage:
+            payload["stage"] = stage
+        
+        if stage_description:
+            payload["stageDescription"] = stage_description
+        
+        # เพิ่มข้อมูลจาก task_data ถ้ามี
+        if task_data:
+            if "file_path" in task_data:
+                payload["filePath"] = task_data["file_path"]
+            if "file_name" in task_data:
+                payload["fileName"] = task_data["file_name"]
+            if "language" in task_data:
+                payload["language"] = task_data["language"]
+            if "model_size" in task_data:
+                payload["modelSize"] = task_data["model_size"]
+        
+        # ส่ง callback
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.post(callback_url, json=payload) as response:
+                if response.status == 200:
+                    logger.debug(f"✅ Webhook callback sent: {status} for task {task_id}")
+                else:
+                    logger.warning(f"⚠️ Webhook callback failed: {response.status} for task {task_id}")
+    except Exception as e:
+        # ไม่ raise error เพื่อไม่ให้กระทบการทำงานหลัก
+        logger.debug(f"⚠️ Failed to send webhook callback for task {task_id}: {e}")
 
 
 class AsyncMessageHandlers:
@@ -220,6 +288,18 @@ class AsyncMessageHandlers:
                 task_data['stage_progress'] = 0
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
+                # ส่ง webhook callback
+                await send_webhook_callback(
+                    callback_url=callback_url,
+                    task_id=task_id,
+                    status='extracting_audio',
+                    progress=15,
+                    job_id=job_id,
+                    task_data=task_data,
+                    stage='extracting_audio',
+                    stage_description='กำลังแยกเสียงจากวิดีโอ'
+                )
+                
                 # Check file exists
                 if not video_file_path or not Path(video_file_path).exists():
                     raise FileNotFoundError(f"Video file not found: {video_file_path}")
@@ -269,6 +349,18 @@ class AsyncMessageHandlers:
                 task_data['current_stage_description'] = 'กำลังเตรียมแปลงเสียง'
                 task_data['stage_progress'] = 0
                 self.worker.json_storage.save_transcription(task_id, task_data)
+                
+                # ส่ง webhook callback
+                await send_webhook_callback(
+                    callback_url=callback_url,
+                    task_id=task_id,
+                    status='in_queue',
+                    progress=25,
+                    job_id=job_id,
+                    task_data=task_data,
+                    stage='transcribing',
+                    stage_description='กำลังเตรียมแปลงเสียง'
+                )
                 
                 # Send to transcription_queue
                 transcription_message = {
@@ -509,6 +601,19 @@ class AsyncMessageHandlers:
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 logger.info(f"📝 อัปเดตสถานะเป็น 'processing' (Progress: 0%)")
                 
+                # ส่ง webhook callback
+                callback_url = task_data.get('callback_url')
+                await send_webhook_callback(
+                    callback_url=callback_url,
+                    task_id=task_id,
+                    status='transcribing',
+                    progress=0,
+                    job_id=task_data.get('job_id'),
+                    task_data=task_data,
+                    stage='transcribing',
+                    stage_description='กำลังแปลงเสียงเป็นข้อความ'
+                )
+                
                 # เริ่ม monitor progress ใน background task
                 monitor_task = asyncio.create_task(
                     self.worker.utils.monitor_transcription_progress(task_id)
@@ -573,5 +678,345 @@ class AsyncMessageHandlers:
                         logger.error(f"❌ Failed to mark task {task_id} as failed: {save_error}")
                 
                 # ไม่ requeue เพื่อป้องกัน infinite retry loop - ส่งไป DLQ แทน
+                raise
+
+    async def handle_close_caption_request(self, message: IncomingMessage):
+        """
+        ประมวลผล close caption request task (แยกจาก transcription เพื่อลัดคิว)
+        
+        Logic:
+        1. Download file from file_url
+        2. Check file type (video/audio)
+        3. Route to appropriate queue:
+           - Video → close_caption_extraction_queue
+           - Audio → close_caption_queue
+        """
+        async with message.process():
+            try:
+                task_data = json.loads(message.body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                file_url = task_data.get('file_url')
+                file_path = task_data.get('file_path')
+                file_name = task_data.get('file_name')
+                language = task_data.get('language', 'th')
+                model_size = task_data.get('model_size', 'base')
+                chunk_duration = task_data.get('chunk_duration', 3)  # Close caption ใช้ chunk เล็กกว่า
+                use_chunking = task_data.get('use_chunking', True)  # Close caption ต้องใช้ chunking
+                display_mode = task_data.get('display_mode', 'realtime_chunks')
+                callback_url = task_data.get('callback_url')
+                job_id = task_data.get('job_id')
+                user_id = task_data.get('user_id')
+                initial_prompt = task_data.get('initial_prompt')
+                
+                logger.info("=" * 80)
+                logger.info(f"🎯 [Close Caption Download & Route] Processing close caption request: {task_id}")
+                logger.info(f"   File URL: {file_url}")
+                logger.info(f"   File Path: {file_path}")
+                logger.info("=" * 80)
+                
+                # Update status
+                task_data['status'] = 'downloading'
+                task_data['progress'] = 5
+                self.worker.json_storage.save_transcription(task_id, task_data)
+                
+                # Step 1: Download file
+                local_file_path = file_path
+                if file_url:
+                    if not local_file_path or not Path(local_file_path).exists():
+                        logger.info(f"📥 [Close Caption Download & Route] Downloading file from URL: {file_url}")
+                        local_file_path, _ = await self.worker.transcription_service._download_source_file(
+                            task_id, file_url, file_name
+                        )
+                        logger.info(f"✅ [Close Caption Download & Route] File downloaded: {local_file_path}")
+                    else:
+                        logger.info(f"✅ [Close Caption Download & Route] Using existing file: {local_file_path}")
+                elif not local_file_path or not Path(local_file_path).exists():
+                    raise FileNotFoundError(f"ไฟล์ไม่พบและไม่มี file_url: {file_path}")
+                
+                # Update status - routing
+                task_data['file_path'] = local_file_path
+                task_data['status'] = 'routing'
+                task_data['progress'] = 10
+                self.worker.json_storage.save_transcription(task_id, task_data)
+                
+                # Step 2: Check file type
+                from app.services.file_service import FileService
+                file_service = FileService()
+                is_video = await asyncio.to_thread(file_service.is_video_file, local_file_path)
+                is_audio = await asyncio.to_thread(file_service.is_audio_file, local_file_path)
+                
+                logger.info(f"🔍 [Close Caption Download & Route] File type: {'video' if is_video else 'audio' if is_audio else 'unknown'}")
+                
+                # Step 3: Route to appropriate close caption queue
+                route_message = {
+                    "task_id": task_id,
+                    "file_path": local_file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "display_mode": display_mode,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "initial_prompt": initial_prompt,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                if is_video:
+                    # Route to close_caption_extraction_queue
+                    logger.info(f"📤 [Close Caption Download & Route] Routing video file to close_caption_extraction_queue")
+                    success = await self.worker.connection.async_safe_publish(
+                        exchange_name='',
+                        routing_key=self.worker.connection.close_caption_extraction_queue_name,
+                        body=json.dumps(route_message)
+                    )
+                    if success:
+                        logger.info(f"✅ [Close Caption Download & Route] Routed to close_caption_extraction_queue: {task_id}")
+                    else:
+                        logger.error(f"❌ [Close Caption Download & Route] Failed to route to close_caption_extraction_queue: {task_id}")
+                        raise RuntimeError(f"Failed to publish to close_caption_extraction_queue: {task_id}")
+                elif is_audio:
+                    # Route directly to close_caption_queue
+                    logger.info(f"📤 [Close Caption Download & Route] Routing audio file to close_caption_queue")
+                    success = await self.worker.connection.async_safe_publish(
+                        exchange_name='',
+                        routing_key=self.worker.connection.close_caption_queue_name,
+                        body=json.dumps(route_message)
+                    )
+                    if success:
+                        logger.info(f"✅ [Close Caption Download & Route] Routed to close_caption_queue: {task_id}")
+                    else:
+                        logger.error(f"❌ [Close Caption Download & Route] Failed to route to close_caption_queue: {task_id}")
+                        raise RuntimeError(f"Failed to publish to close_caption_queue: {task_id}")
+                else:
+                    # Unknown file type - try to route to extraction first
+                    logger.warning(f"⚠️ [Close Caption Download & Route] Unknown file type - routing to close_caption_extraction_queue")
+                    success = await self.worker.connection.async_safe_publish(
+                        exchange_name='',
+                        routing_key=self.worker.connection.close_caption_extraction_queue_name,
+                        body=json.dumps(route_message)
+                    )
+                    if not success:
+                        logger.error(f"❌ [Close Caption Download & Route] Failed to route: {task_id}")
+                        raise RuntimeError(f"Failed to publish: {task_id}")
+                
+                logger.info(f"✅ [Close Caption Download & Route] Acknowledged message: {task_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ [Close Caption Download & Route] Error processing request task {task_id if 'task_id' in locals() else 'unknown'}: {e}", exc_info=True)
+                raise
+    
+    async def handle_close_caption_extraction(self, message: IncomingMessage):
+        """
+        ประมวลผล close caption audio extraction task (แยกจาก transcription เพื่อลัดคิว)
+        
+        Logic:
+        1. Extract audio from video file
+        2. Send audio file to close_caption_queue
+        """
+        async with message.process():
+            try:
+                task_data = json.loads(message.body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                video_file_path = task_data.get('file_path')
+                language = task_data.get('language', 'th')
+                model_size = task_data.get('model_size', 'base')
+                chunk_duration = task_data.get('chunk_duration', 3)  # Close caption ใช้ chunk เล็กกว่า
+                use_chunking = task_data.get('use_chunking', True)  # Close caption ต้องใช้ chunking
+                display_mode = task_data.get('display_mode', 'realtime_chunks')
+                callback_url = task_data.get('callback_url')
+                job_id = task_data.get('job_id')
+                user_id = task_data.get('user_id')
+                
+                logger.info("=" * 80)
+                logger.info(f"🎬 [Close Caption Audio Extraction] Processing extraction task: {task_id}")
+                logger.info(f"   Video file: {video_file_path}")
+                logger.info("=" * 80)
+                
+                # Update status
+                task_data['status'] = 'extracting_audio'
+                task_data['progress'] = 15
+                task_data['current_stage'] = 'extracting_audio'
+                task_data['current_stage_description'] = 'กำลังแยกเสียงจากวิดีโอ (Close Caption)'
+                task_data['stage_progress'] = 0
+                self.worker.json_storage.save_transcription(task_id, task_data)
+                
+                # Check file exists
+                if not video_file_path or not Path(video_file_path).exists():
+                    raise FileNotFoundError(f"Video file not found: {video_file_path}")
+                
+                # Extract audio
+                logger.info(f"🎬 [Close Caption Audio Extraction] Starting audio extraction...")
+                import time
+                extraction_start_time = time.time()
+                
+                audio_path = await asyncio.to_thread(
+                    self.worker.video_service.extract_audio,
+                    video_file_path,
+                    task_id=task_id
+                )
+                extraction_time = time.time() - extraction_start_time
+                logger.info(f"✅ [Close Caption Audio Extraction] Audio extracted: {audio_path}")
+                logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+                
+                task_data['audio_extraction_time'] = extraction_time
+                task_data['stage_progress'] = 100
+                task_data['current_stage_description'] = 'แยกเสียงเสร็จสิ้น (Close Caption)'
+                
+                # Update status - routing to close caption transcription
+                task_data['status'] = 'routing_to_transcription'
+                task_data['progress'] = 25
+                task_data['current_stage'] = 'transcribing'
+                task_data['current_stage_description'] = 'กำลังเตรียมแปลงเสียง (Close Caption)'
+                task_data['stage_progress'] = 0
+                self.worker.json_storage.save_transcription(task_id, task_data)
+                
+                # Send to close_caption_queue
+                close_caption_message = {
+                    "task_id": task_id,
+                    "file_path": audio_path,
+                    "file_url": task_data.get('file_url'),
+                    "file_name": task_data.get('file_name'),
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "display_mode": display_mode,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "initial_prompt": task_data.get('initial_prompt'),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "audio_extracted_from": video_file_path
+                }
+                
+                logger.info(f"📤 [Close Caption Audio Extraction] Sending to close_caption_queue: {task_id}")
+                success = await self.worker.connection.async_safe_publish(
+                    exchange_name='',
+                    routing_key=self.worker.connection.close_caption_queue_name,
+                    body=json.dumps(close_caption_message)
+                )
+                if success:
+                    logger.info(f"✅ [Close Caption Audio Extraction] Sent to close_caption_queue: {task_id}")
+                else:
+                    logger.error(f"❌ [Close Caption Audio Extraction] Failed to send to close_caption_queue: {task_id}")
+                    raise RuntimeError(f"Failed to publish to close_caption_queue: {task_id}")
+                
+                logger.info(f"✅ [Close Caption Audio Extraction] Acknowledged message: {task_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ [Close Caption Audio Extraction] Error processing extraction task {task_id if 'task_id' in locals() else 'unknown'}: {e}", exc_info=True)
+                raise
+    
+    async def handle_close_caption(self, message: IncomingMessage):
+        """
+        ประมวลผล close caption transcription task (แยกจาก transcription เพื่อลัดคิว)
+        
+        ใช้ logic เดียวกับ handle_transcription แต่ route ไปยัง close_caption_queue
+        """
+        async with message.process():
+            task_id = None
+            try:
+                logger.info("=" * 80)
+                logger.info("📨 📨 📨 RECEIVED MESSAGE FROM close_caption_queue!")
+                logger.info(f"   Message size: {len(message.body)} bytes")
+                logger.info("=" * 80)
+                
+                task_data = json.loads(message.body.decode('utf-8'))
+                task_id = task_data.get('task_id')
+                file_path = task_data.get('file_path', 'N/A')
+                model_size = task_data.get('model_size', 'base')
+                language = task_data.get('language', 'th')
+                use_chunking = task_data.get('use_chunking', True)  # Close caption ต้องใช้ chunking
+                initial_prompt = task_data.get('initial_prompt')
+                
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.info(f"🎬 [Close Caption] เริ่มประมวลผล close caption task: {task_id}")
+                logger.info(f"   File: {file_path}")
+                logger.info(f"   Model: {model_size}, Language: {language}")
+                logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่
+                existing_task = self.worker.json_storage.get_transcription(task_id)
+                if existing_task:
+                    existing_status = existing_task.get('status', '')
+                    if existing_status in ['completed', 'processing']:
+                        logger.warning(f"⚠️ [Close Caption] Task {task_id} มีสถานะ '{existing_status}' แล้ว, ข้ามการประมวลผลซ้ำ")
+                        return
+                
+                # Start task tracking
+                task_timeout = int(os.getenv('TRANSCRIPTION_TASK_TIMEOUT_SECONDS', '1800'))
+                self.worker.utils.track_task_start(task_id, 'close_caption', timeout=task_timeout)
+                
+                # อัปเดตสถานะเป็น processing
+                task_data['status'] = 'processing'
+                task_data['started_at'] = datetime.now(timezone.utc).isoformat()
+                task_data['progress'] = 0
+                task_data['current_stage'] = 'transcribing'
+                task_data['current_stage_description'] = 'กำลังแปลงเสียงเป็นข้อความ (Close Caption)'
+                task_data['stage_progress'] = 0
+                self.worker.json_storage.save_transcription(task_id, task_data)
+                logger.info(f"📝 [Close Caption] อัปเดตสถานะเป็น 'processing' (Progress: 0%)")
+                
+                # เริ่ม monitor progress
+                monitor_task = asyncio.create_task(
+                    self.worker.utils.monitor_transcription_progress(task_id)
+                )
+                
+                try:
+                    # ประมวลผล transcription
+                    logger.info(f"🚀 [Close Caption] เริ่มประมวลผล transcription...")
+                    transcription_timeout = int(os.getenv('TRANSCRIPTION_PROCESSING_TIMEOUT_SECONDS', '1800'))
+                    
+                    try:
+                        await asyncio.wait_for(
+                            self.worker.processors.execute_transcription_task(task_data),
+                            timeout=transcription_timeout
+                        )
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        logger.info(f"✅ [Close Caption] Close caption task เสร็จสิ้น: {task_id}")
+                        logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        self.worker.utils.track_task_complete(task_id, 'completed')
+                    
+                    except asyncio.TimeoutError:
+                        task_start_time = self.worker.utils.active_tasks.get(task_id, {}).get('started_at', time.time())
+                        elapsed = time.time() - task_start_time
+                        logger.error(f"⏱️  [Close Caption] Transcription processing TIMEOUT after {elapsed:.2f}s for task: {task_id}")
+                        
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = f"Close caption processing timeout after {elapsed:.2f}s"
+                        task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                        self.worker.utils.track_task_complete(task_id, 'failed')
+                        raise
+                    
+                finally:
+                    monitor_task.cancel()
+                    try:
+                        await monitor_task
+                    except asyncio.CancelledError:
+                        pass
+                
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                logger.error(f"❌ [Close Caption] เกิดข้อผิดพลาดในการประมวลผล close caption task {task_id if task_id else 'unknown'}: {e}", exc_info=True)
+                logger.error(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                if task_id:
+                    try:
+                        task_data = self.worker.json_storage.get_transcription(task_id) or {}
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = str(e)[:500]
+                        task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                        self.worker.utils.track_task_complete(task_id, 'failed')
+                    except Exception as save_error:
+                        logger.error(f"❌ [Close Caption] Failed to mark task {task_id} as failed: {save_error}")
+                
                 raise
 

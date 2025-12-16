@@ -108,11 +108,19 @@ class FasterWhisperProvider(WhisperProvider):
                 logger.info(f"[Faster Whisper] Using CPU device")
         
         # Enable TF32 and cuDNN optimizations for RTX 4080 SUPER
+        # แต่ถ้ามี cuDNN compatibility issues ให้ disable
         if self.device == 'cuda':
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            logger.info(f"[Faster Whisper] ⚡ Enabled TF32/cuDNN optimizations")
+            cudnn_disabled = os.getenv('CUDNN_DISABLE', '0') == '1'
+            if not cudnn_disabled:
+                try:
+                    torch.backends.cudnn.benchmark = True
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
+                    logger.info(f"[Faster Whisper] ⚡ Enabled TF32/cuDNN optimizations")
+                except Exception as e:
+                    logger.warning(f"[Faster Whisper] ⚠️  Failed to enable cuDNN optimizations: {e}. Continuing without cuDNN.")
+            else:
+                logger.info(f"[Faster Whisper] ⚠️  cuDNN optimizations disabled via CUDNN_DISABLE=1")
         
         # Load model (lazy loading - load when first transcribe)
         self._model = None
@@ -651,13 +659,17 @@ class FasterWhisperProvider(WhisperProvider):
             # Handle cuDNN warnings/errors gracefully
             # ตามคำแนะนำ: ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
             # แต่ถ้ามี warning เกี่ยวกับ cuDNN อาจจะยังทำงานได้
-            if "cudnn" in error_msg.lower() or "Invalid handle" in error_msg:
-                logger.warning(f"[Faster Whisper] ⚠️  cuDNN warning detected (may still work): {error_msg}")
-                # Try to continue - sometimes CTranslate2 can work despite cuDNN warnings
-                # If it's a real error, it will fail on the next operation
-                if "Cannot load symbol" in error_msg:
-                    logger.error(f"[Faster Whisper] ❌ cuDNN symbol loading failed - this is a critical error")
-                    raise RuntimeError(f"cuDNN library issue: {error_msg}. Please ensure CUDA runtime matches CTranslate2 wheel version.")
+            if "cudnn" in error_msg.lower() or "Invalid handle" in error_msg or "Cannot load symbol" in error_msg:
+                logger.warning(f"[Faster Whisper] ⚠️  cuDNN error detected: {error_msg}")
+                logger.warning(f"[Faster Whisper] 💡 Attempting CPU fallback due to cuDNN issue...")
+                
+                # Try CPU fallback instead of crashing
+                try:
+                    logger.info(f"[Faster Whisper] 🔄 Retrying with CPU fallback...")
+                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
+                except Exception as cpu_error:
+                    logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
+                    raise RuntimeError(f"Both GPU (cuDNN error) and CPU transcription failed. GPU error: {error_msg}, CPU error: {str(cpu_error)}")
             
             logger.error(f"[Faster Whisper] ❌ Transcription failed: {e}", exc_info=True)
             # Re-raise exception เพื่อให้ retry wrapper จัดการ

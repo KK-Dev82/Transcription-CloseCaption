@@ -540,7 +540,36 @@ class TranscriptionService:
             # ============================================================
             use_3queue_architecture = os.getenv('USE_3QUEUE_ARCHITECTURE', 'true').lower() == 'true'
             
-            if use_3queue_architecture:
+            # แยก close caption (realtime_chunks) ไปยัง close caption queues
+            is_close_caption = display_mode == "realtime_chunks"
+            
+            if is_close_caption:
+                # Close Caption: ส่งไปยัง close_caption_request_queue (แยกจาก transcription)
+                logger.info("📤 Using Close Caption Queues: sending to close_caption_request_queue")
+                
+                try:
+                    signature = inspect.signature(self.rabbitmq_service.send_close_caption_request_task_thread_safe)
+                    if "callback_url" in signature.parameters and callback_url:
+                        send_kwargs["callback_url"] = callback_url
+                    elif callback_url:
+                        logger.warning(
+                            "RabbitMQService.send_close_caption_request_task_thread_safe does not accept 'callback_url'. Skipping this parameter."
+                        )
+                except (ValueError, TypeError):
+                    if callback_url:
+                        logger.warning(
+                            "Unable to inspect send_close_caption_request_task_thread_safe signature; skipping 'callback_url' parameter."
+                        )
+                
+                # Run send_close_caption_request_task_thread_safe in executor
+                import asyncio
+                from functools import partial
+                loop = asyncio.get_event_loop()
+                task_id = await loop.run_in_executor(
+                    None, 
+                    partial(self.rabbitmq_service.send_close_caption_request_task_thread_safe, **send_kwargs)
+                )
+            elif use_3queue_architecture:
                 # 3-Queue Architecture: ส่งไปยัง transcription_request_queue
                 logger.info("📤 Using 3-Queue Architecture: sending to transcription_request_queue")
                 
@@ -621,6 +650,14 @@ class TranscriptionService:
             }
             
             logger.info(f"ส่ง transcription task ไปยัง queue: {task_id}")
+            
+            # 📞 ส่ง webhook callback เมื่อได้ Task ID (started)
+            if callback_url:
+                try:
+                    await self._send_callback(task, "started")
+                except Exception as e:
+                    logger.warning(f"Failed to send started callback: {e}")
+            
             return task_id
             
         except Exception as e:
@@ -1940,8 +1977,8 @@ class TranscriptionService:
     #     """ส่ง notification ไปยัง API server เพื่อ broadcast ผ่าน WebSocket"""
     #     pass
     
-    async def _send_callback(self, task, status: str):
-        """ส่ง callback ไปยัง Backend เมื่อเสร็จสิ้น"""
+    async def _send_callback(self, task, status: str, progress: int = None):
+        """ส่ง callback ไปยัง Backend เมื่อสถานะเปลี่ยน"""
         import httpx
         
         try:
@@ -1949,73 +1986,115 @@ class TranscriptionService:
             if not callback_url:
                 return
             
-            # ดึงข้อมูลจาก task object
-            full_text = getattr(task, 'full_text', '') or ''
-            chunks = getattr(task, 'chunks', []) or []
+            # สำหรับ status "started" - ส่งข้อมูลพื้นฐาน
+            if status == "started":
+                payload = {
+                    "jobId": getattr(task, 'job_id', None),
+                    "taskId": task.task_id,
+                    "status": "started",
+                    "progress": 0,
+                    "filePath": getattr(task, 'file_path', None) or getattr(task, 'file_name', None),
+                    "language": getattr(task, 'language', 'th'),
+                    "startedAt": utc_now().isoformat()
+                }
+                logger.info(f"📤 Sending started callback: job_id={payload['jobId']}, task_id={task.task_id}")
             
-            # ถ้าไม่มีข้อมูลใน task object ให้ลองดึงจาก storage
-            if not full_text or not chunks:
-                logger.warning(f"⚠️ Task object missing data for callback: full_text length={len(full_text)}, chunks count={len(chunks)}")
-                stored_data = self.json_storage.get_transcription(task.task_id)
-                if stored_data:
-                    logger.info(f"📋 Loading data from storage for callback: task_id={task.task_id}")
-                    if not full_text:
-                        full_text = stored_data.get('full_text', '') or ''
-                    if not chunks:
-                        chunks = stored_data.get('chunks', []) or []
-                    logger.info(f"📋 Loaded from storage: full_text length={len(full_text)}, chunks count={len(chunks)}")
+            # สำหรับ status "processing" - ส่ง progress update
+            elif status == "processing":
+                payload = {
+                    "jobId": getattr(task, 'job_id', None),
+                    "taskId": task.task_id,
+                    "status": "processing",
+                    "progress": progress or getattr(task, 'progress', 0),
+                    "updatedAt": utc_now().isoformat()
+                }
+                logger.info(f"📤 Sending progress callback: job_id={payload['jobId']}, task_id={task.task_id}, progress={payload['progress']}%")
             
-            # เตรียมข้อมูลสำหรับ callback
-            segments = []
-            if chunks:
-                # ถ้า chunks เป็น list of dict
-                if isinstance(chunks[0], dict):
-                    segments = [
-                        {
-                            "start_time": chunk.get("start_time") or chunk.get("start"),
-                            "end_time": chunk.get("end_time") or chunk.get("end"),
-                            "text": chunk.get("text", ""),
-                            "confidence": chunk.get("confidence")
-                        }
-                        for chunk in chunks
-                    ]
-                # ถ้า chunks เป็น TranscriptionChunk objects
-                else:
-                    segments = [
-                        {
-                            "start_time": chunk.start_time,
-                            "end_time": chunk.end_time,
-                            "text": chunk.text,
-                            "confidence": getattr(chunk, 'confidence', None)
-                        }
-                        for chunk in chunks
-                    ]
+            # สำหรับ status "completed" - ส่งผลลัพธ์เต็ม
+            elif status == "completed":
+                # ดึงข้อมูลจาก task object
+                full_text = getattr(task, 'full_text', '') or ''
+                chunks = getattr(task, 'chunks', []) or []
+                
+                # ถ้าไม่มีข้อมูลใน task object ให้ลองดึงจาก storage
+                if not full_text or not chunks:
+                    logger.warning(f"⚠️ Task object missing data for callback: full_text length={len(full_text)}, chunks count={len(chunks)}")
+                    stored_data = self.json_storage.get_transcription(task.task_id)
+                    if stored_data:
+                        logger.info(f"📋 Loading data from storage for callback: task_id={task.task_id}")
+                        if not full_text:
+                            full_text = stored_data.get('full_text', '') or ''
+                        if not chunks:
+                            chunks = stored_data.get('chunks', []) or []
+                        logger.info(f"📋 Loaded from storage: full_text length={len(full_text)}, chunks count={len(chunks)}")
+                
+                # เตรียมข้อมูลสำหรับ callback
+                segments = []
+                if chunks:
+                    # ถ้า chunks เป็น list of dict
+                    if isinstance(chunks[0], dict):
+                        segments = [
+                            {
+                                "start_time": chunk.get("start_time") or chunk.get("start"),
+                                "end_time": chunk.get("end_time") or chunk.get("end"),
+                                "text": chunk.get("text", ""),
+                                "confidence": chunk.get("confidence")
+                            }
+                            for chunk in chunks
+                        ]
+                    # ถ้า chunks เป็น TranscriptionChunk objects
+                    else:
+                        segments = [
+                            {
+                                "start_time": chunk.start_time,
+                                "end_time": chunk.end_time,
+                                "text": chunk.text,
+                                "confidence": getattr(chunk, 'confidence', None)
+                            }
+                            for chunk in chunks
+                        ]
+                
+                # ตรวจสอบว่ามีข้อมูลจริงก่อนส่ง callback
+                if not full_text and not segments:
+                    logger.error(f"❌ Cannot send callback: No transcription data available for task {task.task_id}")
+                    logger.error(f"   full_text: {len(full_text)} chars, segments: {len(segments)} items")
+                    return
+                
+                payload = {
+                    "jobId": getattr(task, 'job_id', None),
+                    "taskId": task.task_id,
+                    "status": "completed",
+                    "text": full_text,
+                    "segments": segments,
+                    "audioDuration": getattr(task, 'total_duration', None),
+                    "wordCount": len(full_text.split()) if full_text else 0,
+                    "averageConfidence": None,  # คำนวณได้ถ้าต้องการ
+                    "progress": 100,
+                    "completedAt": utc_now().isoformat()
+                }
+                logger.info(f"📤 Sending completed callback: job_id={payload['jobId']}, task_id={task.task_id}, text_length={len(full_text)}, segments_count={len(segments)}")
             
-            # ตรวจสอบว่ามีข้อมูลจริงก่อนส่ง callback
-            if not full_text and not segments:
-                logger.error(f"❌ Cannot send callback: No transcription data available for task {task.task_id}")
-                logger.error(f"   full_text: {len(full_text)} chars, segments: {len(segments)} items")
+            # สำหรับ status "failed" - ส่ง error message
+            elif status == "failed":
+                payload = {
+                    "jobId": getattr(task, 'job_id', None),
+                    "taskId": task.task_id,
+                    "status": "failed",
+                    "error": getattr(task, 'error_message', 'Unknown error'),
+                    "failedAt": utc_now().isoformat()
+                }
+                logger.info(f"📤 Sending failed callback: job_id={payload['jobId']}, task_id={task.task_id}")
+            
+            else:
+                # Unknown status - skip
+                logger.warning(f"⚠️ Unknown callback status: {status}, skipping")
                 return
-            
-            payload = {
-                "jobId": getattr(task, 'job_id', None),
-                "taskId": task.task_id,
-                "status": status,
-                "text": full_text,
-                "segments": segments,
-                "audioDuration": getattr(task, 'total_duration', None),
-                "wordCount": len(full_text.split()) if full_text else 0,
-                "averageConfidence": None,  # คำนวณได้ถ้าต้องการ
-                "completedAt": utc_now().isoformat()
-            }
-            
-            logger.info(f"📤 Sending callback: job_id={payload['jobId']}, task_id={task.task_id}, text_length={len(full_text)}, segments_count={len(segments)}")
             
             # ส่ง callback
             async with httpx.AsyncClient(timeout=30.0) as client:
                 logger.info(
                     "ส่ง callback ไปยัง Backend: job_id=%s task_id=%s status=%s url=%s",
-                    payload["jobId"],
+                    payload.get("jobId"),
                     task.task_id,
                     status,
                     callback_url

@@ -130,10 +130,22 @@ async def root(request: Request):
             from config import SERVERS
     
     # Inject server configs to frontend
-    server_configs_js = "window.SERVER_CONFIGS = " + str({
-        k: {"name": v["name"], "api_url": v["api_url"]}
-        for k, v in SERVERS.items()
-    }).replace("'", '"') + ";"
+    # ⚠️ สำคัญ: Browser (frontend) ไม่สามารถเข้าถึง localhost:8010 ได้
+    # ต้องใช้ HTTP Expose domain name แทน localhost
+    # USE_INTERNAL_PORT ใช้สำหรับ backend-to-backend communication เท่านั้น
+    try:
+        from .server_constants import SERVERS
+        # ใช้ api_url จาก SERVERS โดยตรง (จะใช้ HTTP Expose หรือ TCP Expose ตามที่ตั้งค่า)
+        # ไม่ใช้ INTERNAL_API_URL เพราะ browser ไม่สามารถเข้าถึง localhost ได้
+        server_configs_js = "window.SERVER_CONFIGS = " + str({
+            k: {"name": v["name"], "api_url": v["api_url"]}
+            for k, v in SERVERS.items()
+        }).replace("'", '"') + ";"
+    except ImportError:
+        server_configs_js = "window.SERVER_CONFIGS = " + str({
+            k: {"name": v["name"], "api_url": v["api_url"]}
+            for k, v in SERVERS.items()
+        }).replace("'", '"') + ";"
     
     return templates.TemplateResponse("dashboard.html", {
         "request": request,

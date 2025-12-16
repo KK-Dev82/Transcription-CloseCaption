@@ -5,11 +5,53 @@ import ffmpeg
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 import logging
+import shutil
 
 logger = logging.getLogger(__name__)
 
+# FFmpeg binary path detection (shared with VideoService)
+def find_ffmpeg_binary():
+    """
+    หา FFmpeg binary path โดยตรวจสอบตามลำดับ:
+    1. Environment variable FFMPEG_BINARY
+    2. /usr/bin/ffmpeg (system package)
+    3. /usr/local/bin/ffmpeg (local installation)
+    4. /workspace/.local/bin/ffmpeg (persistent volume)
+    5. shutil.which('ffmpeg') (PATH)
+    """
+    # 1. Check environment variable
+    ffmpeg_binary = os.getenv('FFMPEG_BINARY')
+    if ffmpeg_binary and os.path.exists(ffmpeg_binary) and os.access(ffmpeg_binary, os.X_OK):
+        return ffmpeg_binary
+    
+    # 2. Check common system paths
+    common_paths = [
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/workspace/.local/bin/ffmpeg',
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    
+    # 3. Fallback to PATH
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+    
+    # 4. Not found
+    return None
+
 class FileService:
     def __init__(self, upload_dir: str = "uploads", temp_dir: str = "temp"):
+        # หาและตั้งค่า FFmpeg binary path
+        ffmpeg_binary = find_ffmpeg_binary()
+        if ffmpeg_binary:
+            ffmpeg.FFMPEG_BINARY = ffmpeg_binary
+            logger.info(f"✅ FileService: Configured FFmpeg binary: {ffmpeg_binary}")
+        else:
+            logger.warning("⚠️  FileService: FFmpeg binary not found - audio extraction may fail")
         self.upload_dir = Path(upload_dir)
         self.temp_dir = Path(temp_dir)
         # Temporary files management: default ไม่เก็บไฟล์ชั่วคราว

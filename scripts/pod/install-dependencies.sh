@@ -148,9 +148,11 @@ CRITICAL_DEPS=(
     "aio-pika:aio_pika"
     "pika:pika"
     "faster-whisper:faster_whisper"
+    "ctranslate2:ctranslate2"
     "torch:torch"
     "pythainlp:pythainlp"
     "ffmpeg-python:ffmpeg"
+    "python-dotenv:dotenv"
 )
 
 MISSING_CRITICAL=()
@@ -254,10 +256,36 @@ if [ ${#MISSING_CRITICAL[@]} -gt 0 ]; then
     fi
     
     # Install Whisper dependencies (if missing)
-    if [[ " ${MISSING_CRITICAL[@]} " =~ " faster-whisper " ]]; then
+    # Check if faster-whisper or ctranslate2 is missing
+    NEED_WHISPER=false
+    for dep in "${MISSING_CRITICAL[@]}"; do
+        IFS=':' read -r name import_name <<< "$dep"
+        if [[ "$name" == "faster-whisper" || "$name" == "ctranslate2" ]]; then
+            NEED_WHISPER=true
+            break
+        fi
+    done
+    
+    if [ "$NEED_WHISPER" = true ]; then
         echo "📦 Installing Whisper dependencies..."
+        echo "   ⚠️  Important: Installing CTranslate2 4.4.0 (compatible with cuDNN 8)"
+        echo "      CTranslate2 4.5.0+ requires cuDNN 9, but system has cuDNN 8"
+        echo "      If you have cuDNN 9, you can upgrade to CTranslate2 4.6.2+ later"
+        
+        # Check current CTranslate2 version (if installed)
+        CURRENT_CT2=$(env PYTHONUSERBASE="/workspace/.local" \
+            PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+            python3 -c "import ctranslate2; print(ctranslate2.__version__)" 2>/dev/null || echo "not installed")
+        
+        if [[ "$CURRENT_CT2" == "4.5."* ]] || [[ "$CURRENT_CT2" == "4.6."* ]]; then
+            echo "   ⚠️  Detected CTranslate2 $CURRENT_CT2 (incompatible with cuDNN 8)"
+            echo "   📦 Downgrading to CTranslate2 4.4.0..."
+            pip3 uninstall -y ctranslate2 2>/dev/null || true
+        fi
+        
         pip3 install --user --no-cache-dir \
             numpy==1.26.4 \
+            "ctranslate2==4.4.0" \
             "faster-whisper==1.0.3" \
             || {
             echo "⚠️  Some Whisper dependencies failed (may continue anyway)"
@@ -313,6 +341,27 @@ if [ -d "/usr/share/zoneinfo" ] && [ -f "/usr/share/zoneinfo/Asia/Bangkok" ]; th
     echo "✅ tzdata - available"
 else
     echo "⚠️  tzdata - not found (may cause issues with pythainlp)"
+fi
+
+# Verify CTranslate2 version compatibility
+echo ""
+echo "🔍 Checking CTranslate2 version compatibility..."
+CT2_VERSION=$(env PYTHONUSERBASE="/workspace/.local" \
+    PYTHONPATH="${PYTHON_SITE_PACKAGES}:$PYTHONPATH" \
+    python3 -c "import ctranslate2; print(ctranslate2.__version__)" 2>/dev/null || echo "not installed")
+
+if [ "$CT2_VERSION" != "not installed" ]; then
+    if [[ "$CT2_VERSION" == "4.4."* ]]; then
+        echo "✅ CTranslate2 $CT2_VERSION - Compatible with cuDNN 8"
+    elif [[ "$CT2_VERSION" == "4.5."* ]] || [[ "$CT2_VERSION" == "4.6."* ]]; then
+        echo "⚠️  CTranslate2 $CT2_VERSION - Requires cuDNN 9 (system has cuDNN 8)"
+        echo "   💡 Consider downgrading: pip install --user --force-reinstall ctranslate2==4.4.0"
+    else
+        echo "✅ CTranslate2 $CT2_VERSION - Installed"
+    fi
+else
+    echo "❌ CTranslate2 - NOT INSTALLED"
+    VERIFY_FAILED=$((VERIFY_FAILED + 1))
 fi
 
 echo ""
