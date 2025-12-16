@@ -5,7 +5,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from pathlib import Path
@@ -651,8 +651,8 @@ async def clear_tasks(server_name: str, request: ClearTasksRequest):
 
 
 @router.get("/api/server/{server_name}/task-audio/{task_id}")
-async def get_task_audio(server_name: str, task_id: str):
-    """Proxy full audio file from transcription service"""
+async def get_task_audio(server_name: str, task_id: str, request: Request):
+    """Proxy full audio file from transcription service with Range request support"""
     if server_name not in SERVERS:
         raise HTTPException(status_code=404, detail=f"Server {server_name} not found")
     
@@ -661,26 +661,56 @@ async def get_task_audio(server_name: str, task_id: str):
     
     try:
         import aiohttp
+        from fastapi import Header
+        from typing import Optional
+        
+        # Get Range header from request (for audio seeking)
+        range_header = request.headers.get('range')
+        
+        # Prepare headers for MainAPI request
+        headers = {}
+        if range_header:
+            headers['Range'] = range_header
+        
         # Proxy file from transcription service
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 f"{api_url}/transcribe/{task_id}/audio",
-                timeout=aiohttp.ClientTimeout(total=120)  # Longer timeout for large audio files
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=300)  # 5 minutes timeout for large files
             ) as audio_response:
-                if audio_response.status != 200:
+                if audio_response.status not in [200, 206]:  # 206 = Partial Content (Range request)
                     error_text = await audio_response.text()
                     raise HTTPException(
                         status_code=audio_response.status,
-                        detail=f"Failed to get audio: {error_text}"
+                        detail=f"Failed to get audio: {error_text[:200]}"
                     )
                 
-                # Stream the audio file
+                # Prepare response headers
+                response_headers = {
+                    'Content-Type': audio_response.headers.get('Content-Type', 'audio/wav'),
+                    'Accept-Ranges': 'bytes',
+                }
+                
+                # Handle Range requests (206 Partial Content)
+                if audio_response.status == 206:
+                    content_range = audio_response.headers.get('Content-Range')
+                    if content_range:
+                        response_headers['Content-Range'] = content_range
+                    response_headers['Content-Length'] = audio_response.headers.get('Content-Length', '')
+                
+                # Add Content-Length if available (for non-range requests)
+                if audio_response.status == 200:
+                    content_length = audio_response.headers.get('Content-Length')
+                    if content_length:
+                        response_headers['Content-Length'] = content_length
+                
+                # Stream the audio file with larger chunk size for better performance
                 return StreamingResponse(
-                    audio_response.content.iter_chunked(8192),
+                    audio_response.content.iter_chunked(65536),  # 64KB chunks (better for large files)
+                    status_code=audio_response.status,
                     media_type=audio_response.headers.get('Content-Type', 'audio/wav'),
-                    headers={
-                        'Content-Disposition': audio_response.headers.get('Content-Disposition', f'inline; filename="task_{task_id}.wav"')
-                    }
+                    headers=response_headers
                 )
                 
     except HTTPException:

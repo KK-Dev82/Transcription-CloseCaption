@@ -199,8 +199,8 @@ async def get_all_transcriptions(
 
 
 @router.get("/{task_id}/audio")
-async def get_task_audio(task_id: str):
-    """Serve full audio file for playback"""
+async def get_task_audio(task_id: str, request: Request):
+    """Serve full audio file for playback with Range request support"""
     try:
         # Get task details
         task = transcription_service.get_task_status(task_id)
@@ -224,7 +224,10 @@ async def get_task_audio(task_id: str):
                 return FileResponse(
                     path=str(file_path),
                     filename=file_path.name,
-                    media_type='audio/wav'
+                    media_type='audio/wav',
+                    headers={
+                        'Accept-Ranges': 'bytes'  # Enable Range requests for audio seeking
+                    }
                 )
         
         # Try to get from storage
@@ -239,7 +242,10 @@ async def get_task_audio(task_id: str):
                     return FileResponse(
                         path=str(file_path),
                         filename=file_path.name,
-                        media_type='audio/wav'
+                        media_type='audio/wav',
+                        headers={
+                            'Accept-Ranges': 'bytes'  # Enable Range requests for audio seeking
+                        }
                     )
         
         raise HTTPException(status_code=404, detail="Audio file not found for this task")
