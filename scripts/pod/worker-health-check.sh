@@ -43,7 +43,24 @@ WORKER_PID=""
 
 # Check 1: Worker process running
 print_info "Checking worker process..."
-WORKER_PID=$(pgrep -f "python.*video_worker" | head -1 || echo "")
+# Try multiple patterns to find worker process
+# Priority: app.workers.video_worker > python3.*video_worker > python.*video_worker > video_worker
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker" "video_worker"; do
+    WORKER_PID=$(pgrep -f "$pattern" 2>/dev/null | head -1)
+    if [ -n "$WORKER_PID" ]; then
+        break
+    fi
+done
+
+# If still not found, try checking PID file
+if [ -z "$WORKER_PID" ] && [ -f "/tmp/video-worker.pid" ]; then
+    PID_FROM_FILE=$(cat /tmp/video-worker.pid 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$PID_FROM_FILE" ] && ps -p "$PID_FROM_FILE" > /dev/null 2>&1; then
+        WORKER_PID="$PID_FROM_FILE"
+    fi
+fi
+
 if [ -z "$WORKER_PID" ]; then
     print_error "Worker process not running"
     HEALTH_ISSUES=$((HEALTH_ISSUES + 1))
