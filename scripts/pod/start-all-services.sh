@@ -33,6 +33,10 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+print_status() {
+    echo -e "${BLUE}📋 $1${NC}"
+}
+
 cd /workspace/transcription-service || exit 1
 
 API_PORT=8010

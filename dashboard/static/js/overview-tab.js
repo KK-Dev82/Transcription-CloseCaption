@@ -28,8 +28,15 @@ window.addEventListener('webhook:task-update', async (event) => {
                 if (payload.updatedAt) task.updated_at = payload.updatedAt;
             }
             
-            // Refresh the current view to show updated status
-            await refreshOverviewServer(serverName);
+            // Only refresh if modal is not open (to avoid interrupting user)
+            const modal = document.getElementById('transcriptionTextModal');
+            if (!modal || modal.style.display === 'none') {
+                // Refresh the current view to show updated status
+                await refreshOverviewServer(serverName);
+            } else {
+                // Just update the task in the list without full refresh
+                renderTasksTable(serverName, pagination.allTasks);
+            }
             
             console.log(`✅ Updated task ${taskId} from webhook: status=${status}, progress=${progress}%`);
         }
@@ -508,12 +515,13 @@ async function refreshOverviewServer(serverName, page = null) {
             return;
         }
         
-        // Start real-time progress tracking for processing tasks
-        if (typeof startProgressTracking === 'function') {
-            startProgressTracking(serverName, displayedTasks.filter(t => 
-                ['processing', 'pending', 'transcribing'].includes((t.status || 'unknown').toLowerCase())
-            ));
-        }
+        // Disabled: Start real-time progress tracking for processing tasks
+        // Use webhook events instead of polling to reduce server load
+        // if (typeof startProgressTracking === 'function') {
+        //     startProgressTracking(serverName, displayedTasks.filter(t => 
+        //         ['processing', 'pending', 'transcribing'].includes((t.status || 'unknown').toLowerCase())
+        //     ));
+        // }
     } catch (error) {
         console.error(`[Overview] Error refreshing overview for ${serverName}:`, error);
         const container = document.getElementById('overview-tasks-container');
@@ -691,10 +699,53 @@ async function viewTranscriptionText(serverName, taskId) {
                         <span style="font-weight: 600; color: var(--apple-blue);">🎵 Full Audio File</span>
                         <span style="font-size: 12px; color: var(--apple-gray-3);">(${task.file_path.split('/').pop()})</span>
                     </div>
-                    <audio controls style="width: 100%; max-width: 600px;" preload="metadata">
+                    <audio 
+                        id="full-audio-player-${taskId}"
+                        controls 
+                        style="width: 100%; max-width: 600px;" 
+                        preload="metadata"
+                        crossorigin="anonymous"
+                    >
                         <source src="${fullAudioUrl}" type="audio/wav">
                         Your browser does not support the audio element.
                     </audio>
+                    <script>
+                        // Force audio metadata load after element is added to DOM
+                        (function() {
+                            const audioId = 'full-audio-player-${taskId}';
+                            setTimeout(() => {
+                                const audio = document.getElementById(audioId);
+                                if (audio) {
+                                    // Reload to force metadata fetch
+                                    audio.load();
+                                    
+                                    // Listen for metadata loaded
+                                    audio.addEventListener('loadedmetadata', function() {
+                                        console.log('✅ Audio metadata loaded for', audioId, 'Duration:', this.duration);
+                                        if (this.duration && this.duration > 0) {
+                                            const minutes = Math.floor(this.duration / 60);
+                                            const seconds = Math.floor(this.duration % 60);
+                                            console.log('   Duration:', minutes + ':' + seconds.toString().padStart(2, '0'));
+                                        }
+                                    });
+                                    
+                                    // Listen for errors
+                                    audio.addEventListener('error', function(e) {
+                                        console.error('❌ Audio error for', audioId, ':', this.error);
+                                        if (this.error) {
+                                            console.error('   Error code:', this.error.code);
+                                            console.error('   Error message:', this.error.message);
+                                        }
+                                    });
+                                    
+                                    // Try to play/pause to trigger metadata load
+                                    audio.addEventListener('canplay', function() {
+                                        console.log('✅ Audio can play:', audioId);
+                                    });
+                                }
+                            }, 200);
+                        })();
+                    </script>
                     <div style="margin-top: 8px; font-size: 12px; color: var(--apple-gray-3);">
                         💡 ใช้ audio player นี้เพื่อฟังเสียงทั้งไฟล์และเทียบกับ chunks ด้านล่าง
                     </div>

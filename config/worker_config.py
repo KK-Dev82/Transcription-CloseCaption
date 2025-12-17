@@ -78,6 +78,7 @@ AUDIO_EXTRACTION_MAX_WORKERS = int(os.getenv('AUDIO_EXTRACTION_MAX_WORKERS', '3'
 EXTRACT_POOL_SIZE = int(os.getenv('EXTRACT_POOL_SIZE', '4'))
 FFMPEG_PROC_SEM = int(os.getenv('FFMPEG_PROC_SEM', '3'))
 EXTRACT_TASK_TIMEOUT = int(os.getenv('EXTRACT_TASK_TIMEOUT', '900'))
+AUDIO_EXTRACTION_PREFETCH_COUNT = int(os.getenv('AUDIO_EXTRACTION_PREFETCH_COUNT', '1'))
 
 # ============================================================================
 # Transcription Configuration

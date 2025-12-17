@@ -104,6 +104,23 @@ class VideoWorkerAsync:
                 # ตั้งค่า consumers
                 await self.consumers.setup_consumers()
                 
+                # Setup reconnect callback to re-register consumers after RabbitMQ restart
+                async def re_register_consumers():
+                    """Re-register consumers after reconnection"""
+                    try:
+                        logger.info("🔄 Re-registering consumers after RabbitMQ reconnect...")
+                        # Update consumer manager with new channel
+                        self.consumers.update_channel(self.connection.channel)
+                        # Re-register all consumers
+                        await self.consumers.setup_consumers()
+                        logger.info("✅ All consumers re-registered after RabbitMQ reconnect")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to re-register consumers after reconnect: {e}", exc_info=True)
+                        # Don't raise - let worker retry in main loop
+                
+                # Set reconnect callback
+                self.connection.set_reconnect_callback(re_register_consumers)
+                
                 logger.info("✅ Video Worker พร้อมรับงาน...")
                 logger.info("=" * 80)
                 
@@ -115,6 +132,9 @@ class VideoWorkerAsync:
                 logger.info("🔄 เริ่มรับ messages จาก RabbitMQ...")
                 logger.info("💓 Video Worker is alive and waiting for messages...")
                 
+                # Monitor connection state และ re-register consumers เมื่อ reconnect
+                connection_monitor_task = asyncio.create_task(self._monitor_connection_and_reconnect())
+                
                 # Wait for connection to close (หรือจนกว่าจะได้รับ signal)
                 try:
                     # Wait until connection is closed or interrupted
@@ -125,8 +145,10 @@ class VideoWorkerAsync:
                 finally:
                     # Cancel background tasks
                     monitor_task.cancel()
+                    connection_monitor_task.cancel()
                     try:
                         await monitor_task
+                        await connection_monitor_task
                     except asyncio.CancelledError:
                         pass
                 
@@ -224,6 +246,54 @@ class VideoWorkerAsync:
             raise
         except Exception as e:
             logger.error(f"❌ Fatal error in stuck tasks monitor: {e}", exc_info=True)
+    
+    async def _monitor_connection_and_reconnect(self):
+        """
+        Monitor connection state และ re-register consumers เมื่อ reconnect
+        
+        ทำงาน:
+        1. Monitor connection state ทุก 5 วินาที
+        2. Detect เมื่อ connection reconnect (จาก closed → open)
+        3. Re-register consumers เมื่อ reconnect
+        """
+        logger.info("🔍 Started connection monitor for reconnection handling")
+        
+        last_connection_state = None
+        
+        try:
+            while self.running:
+                await asyncio.sleep(5)  # Check every 5 seconds
+                
+                try:
+                    # Check connection state using is_connected() method
+                    if self.connection:
+                        # Use is_connected() method instead of direct attribute access
+                        is_connected = self.connection.is_connected()
+                        current_state = "open" if is_connected else "closed"
+                        
+                        # Detect reconnection: closed → open
+                        if last_connection_state == "closed" and current_state == "open":
+                            logger.info("🔄 Detected connection reconnection, re-registering consumers...")
+                            
+                            # Handle reconnection
+                            if await self.connection.handle_reconnection():
+                                logger.info("✅ Successfully handled reconnection")
+                            else:
+                                logger.warning("⚠️ Reconnection handling failed, will retry")
+                        
+                        last_connection_state = current_state
+                    else:
+                        last_connection_state = None
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error in connection monitor: {e}", exc_info=True)
+                    await asyncio.sleep(10)  # Wait a bit before retrying
+        
+        except asyncio.CancelledError:
+            logger.info("🔍 Connection monitor cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Fatal error in connection monitor: {e}", exc_info=True)
     
     async def cleanup(self):
         """Cleanup resources"""

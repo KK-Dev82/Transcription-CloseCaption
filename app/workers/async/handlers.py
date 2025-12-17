@@ -76,14 +76,58 @@ async def send_webhook_callback(
                 payload["language"] = task_data["language"]
             if "model_size" in task_data:
                 payload["modelSize"] = task_data["model_size"]
+            
+            # สำหรับ status "completed" ให้เพิ่ม full_text และ segments
+            if status == "completed":
+                full_text = task_data.get("full_text", "") or ""
+                chunks = task_data.get("chunks", []) or []
+                
+                if full_text or chunks:
+                    payload["text"] = full_text
+                    payload["wordCount"] = len(full_text.split()) if full_text else 0
+                    
+                    # แปลง chunks เป็น segments
+                    segments = []
+                    if chunks:
+                        if isinstance(chunks[0], dict):
+                            segments = [
+                                {
+                                    "start_time": chunk.get("start_time") or chunk.get("start"),
+                                    "end_time": chunk.get("end_time") or chunk.get("end"),
+                                    "text": chunk.get("text", ""),
+                                    "confidence": chunk.get("confidence")
+                                }
+                                for chunk in chunks
+                            ]
+                        else:
+                            # ถ้าเป็น object
+                            segments = [
+                                {
+                                    "start_time": getattr(chunk, 'start_time', None) or getattr(chunk, 'start', None),
+                                    "end_time": getattr(chunk, 'end_time', None) or getattr(chunk, 'end', None),
+                                    "text": getattr(chunk, 'text', '') or '',
+                                    "confidence": getattr(chunk, 'confidence', None)
+                                }
+                                for chunk in chunks
+                            ]
+                    
+                    payload["segments"] = segments
+                    payload["audioDuration"] = task_data.get("total_duration")
+                    payload["completedAt"] = task_data.get("completed_at") or datetime.now(timezone.utc).isoformat()
+                    
+                    logger.info(f"📤 Sending completed callback with full_text length={len(full_text)}, segments count={len(segments)}")
+                else:
+                    logger.warning(f"⚠️ Completed callback but no transcription data: full_text length={len(full_text)}, chunks count={len(chunks)}")
         
         # ส่ง callback
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
             async with session.post(callback_url, json=payload) as response:
+                response_text = await response.text()
                 if response.status == 200:
-                    logger.debug(f"✅ Webhook callback sent: {status} for task {task_id}")
+                    logger.info(f"✅ Webhook callback sent successfully: {status} for task {task_id}")
                 else:
                     logger.warning(f"⚠️ Webhook callback failed: {response.status} for task {task_id}")
+                    logger.warning(f"   Response: {response_text[:500]}")
     except Exception as e:
         # ไม่ raise error เพื่อไม่ให้กระทบการทำงานหลัก
         logger.debug(f"⚠️ Failed to send webhook callback for task {task_id}: {e}")
@@ -543,8 +587,40 @@ class AsyncMessageHandlers:
                 logger.info(f"✅ [Download & Route] Acknowledged message: {task_id}")
                 
             except Exception as e:
+                error_msg = str(e)
                 logger.error(f"❌ [Download & Route] Error processing request task {task_id if 'task_id' in locals() else 'unknown'}: {e}", exc_info=True)
-                raise
+                
+                # Mark task as failed instead of rejecting message
+                if 'task_id' in locals() and task_id:
+                    try:
+                        task_data = self.worker.json_storage.get_transcription(task_id) or {}
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = f"Failed to download file: {error_msg[:500]}"
+                        task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
+                        task_data['progress'] = 0
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                        
+                        # Send webhook callback for failed status
+                        callback_url = task_data.get('callback_url')
+                        if callback_url:
+                            await send_webhook_callback(
+                                callback_url=callback_url,
+                                task_id=task_id,
+                                status='failed',
+                                progress=0,
+                                job_id=task_data.get('job_id'),
+                                task_data=task_data,
+                                stage='download',
+                                stage_description=f'ไม่สามารถดาวน์โหลดไฟล์: {error_msg[:200]}'
+                            )
+                        
+                        logger.info(f"✅ [Download & Route] Marked task {task_id} as failed")
+                    except Exception as save_error:
+                        logger.error(f"❌ [Download & Route] Failed to mark task {task_id} as failed: {save_error}")
+                
+                # Don't raise - acknowledge message to prevent infinite retry
+                # Message has been processed (marked as failed), so we can acknowledge it
+                logger.warning(f"⚠️ [Download & Route] Acknowledging message despite error to prevent infinite retry")
     
     async def handle_transcription(self, message: IncomingMessage):
         """ประมวลผล transcription task"""

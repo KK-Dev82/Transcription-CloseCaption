@@ -184,6 +184,71 @@ else
 fi
 echo ""
 
+# Function to check worker health before killing
+check_worker_health_before_kill() {
+    local pid=$1
+    if [ -z "$pid" ]; then
+        return 1
+    fi
+    
+    # Check if process is still running
+    if ! ps -p "$pid" > /dev/null 2>&1; then
+        return 1
+    fi
+    
+    # Check if worker is consuming messages (via RabbitMQ)
+    python3 << 'EOF' 2>/dev/null
+import sys
+import os
+import pika
+from dotenv import load_dotenv
+
+# Load environment
+env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'env.runpod')
+if os.path.exists(env_file):
+    load_dotenv(env_file)
+
+try:
+    rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
+    rabbitmq_port = int(os.getenv('RABBITMQ_PORT', '5672'))
+    rabbitmq_user = os.getenv('RABBITMQ_USER', 'guest')
+    rabbitmq_password = os.getenv('RABBITMQ_PASSWORD', 'guest')
+    
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=rabbitmq_host,
+            port=rabbitmq_port,
+            credentials=pika.PlainCredentials(rabbitmq_user, rabbitmq_password),
+            connection_attempts=2,
+            retry_delay=1
+        )
+    )
+    channel = connection.channel()
+    
+    # Check critical queues
+    queues = ['transcription_request_queue', 'audio_extraction_queue']
+    all_ok = True
+    
+    for queue_name in queues:
+        try:
+            method = channel.queue_declare(queue=queue_name, passive=True)
+            consumer_count = method.method.consumer_count
+            if consumer_count == 0:
+                all_ok = False
+                break
+        except Exception:
+            all_ok = False
+            break
+    
+    connection.close()
+    sys.exit(0 if all_ok else 1)
+except Exception:
+    sys.exit(1)
+EOF
+    
+    return $?
+}
+
 # Step 2: Stop Video Worker
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🛑 Step 2: Stopping Video Worker..."
@@ -191,15 +256,33 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 WORKER_PID=$(pgrep -f "python.*video_worker" | head -1 || echo "")
 if [ -n "$WORKER_PID" ]; then
-    print_status "Stopping Video Worker (PID: $WORKER_PID)..."
-    kill $WORKER_PID 2>/dev/null || true
-    sleep 2
+    print_status "Found Video Worker (PID: $WORKER_PID)"
     
-    # Force kill if still running
+    # Check worker health before killing
+    print_status "Checking worker health before stopping..."
+    if check_worker_health_before_kill "$WORKER_PID"; then
+        print_warning "⚠️  Worker appears healthy (consumers active)"
+        print_status "   Proceeding with restart anyway (as requested)..."
+    else
+        print_status "   Worker appears unhealthy or not consuming messages"
+    fi
+    
+    print_status "Stopping Video Worker (PID: $WORKER_PID)..."
+    # Send SIGTERM first (graceful shutdown)
+    kill -TERM $WORKER_PID 2>/dev/null || true
+    sleep 3
+    
+    # Check if still running
     if pgrep -f "python.*video_worker" > /dev/null; then
-        print_warning "Force killing Video Worker..."
-        pkill -9 -f "python.*video_worker" 2>/dev/null || true
-        sleep 1
+        print_warning "Worker still running, waiting a bit more..."
+        sleep 2
+        
+        # Force kill if still running
+        if pgrep -f "python.*video_worker" > /dev/null; then
+            print_warning "Force killing Video Worker..."
+            pkill -9 -f "python.*video_worker" 2>/dev/null || true
+            sleep 1
+        fi
     fi
     
     if ! pgrep -f "python.*video_worker" > /dev/null; then

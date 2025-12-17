@@ -2,21 +2,31 @@
 API endpoints สำหรับจัดการ RabbitMQ queue
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, List, Any
 import logging
+import pika
+import uuid
+import json
+import time
 
 from ..services.rabbitmq_service import RabbitMQService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/queue", tags=["Queue Management"])
-rabbitmq_service = RabbitMQService()
+
+def get_rabbitmq_service():
+    """Get a fresh RabbitMQ service instance with active connection"""
+    service = RabbitMQService()
+    service._ensure_connection()
+    return service
 
 @router.get("/info")
 async def get_queue_info():
     """ดึงข้อมูล queue ทั้งหมด"""
     try:
+        rabbitmq_service = get_rabbitmq_service()
         queue_info = rabbitmq_service.get_queue_info()
         return {
             "message": "ดึงข้อมูล queue สำเร็จ",
@@ -193,6 +203,134 @@ async def get_queue_stats():
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาดในการดึงสถิติ queue: {e}")
         raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาด: {str(e)}")
+
+@router.post("/test-flow")
+async def test_queue_flow(count: int = 1):
+    """
+    ทดสอบการส่ง message ผ่าน flow ทั้งหมด (transcription_request_queue → audio_extraction_queue → transcription_queue)
+    
+    ส่ง test message เป็น string เพื่อทดสอบว่าระบบรับและส่งต่อได้ถูกต้อง
+    โดยไม่ทำการ process จริง (ไม่ใช้ resource)
+    
+    Args:
+        count: จำนวน test messages ที่ต้องการส่ง (default: 1)
+    
+    Returns:
+        List of task IDs ที่ส่งไป
+    """
+    try:
+        import uuid
+        import json
+        import time
+        
+        task_ids = []
+        results = []
+        
+        for i in range(count):
+            test_task_id = f"test-{uuid.uuid4()}"
+            task_ids.append(test_task_id)
+            
+            # สร้าง test message
+            test_message = {
+                "task_id": test_task_id,
+                "task_type": "transcription_request",
+                "test_mode": True,  # Flag เพื่อบอกว่าเป็น test message
+                "test_message": f"Test message #{i+1}",
+                "file_path": None,
+                "file_url": None,
+                "file_name": f"test_file_{i+1}.mp4",
+                "language": "th",
+                "model_size": "base",
+                "chunk_duration": 30,
+                "use_chunking": False,
+                "display_mode": "full_text",
+                "status": "pending",
+                "created_at": time.time(),
+                "callback_url": None,
+                "job_id": None,
+                "user_id": "test_user"
+            }
+            
+            try:
+                # ใช้ send_transcription_request_task method ซึ่งมี retry logic และ connection handling
+                # แต่เราต้องส่ง test message โดยตรงผ่าน connection
+                # ใช้ method ที่มีอยู่แล้วใน rabbitmq_service แต่ส่ง test message โดยตรง
+                from ..services.rabbitmq_service import RabbitMQService
+                test_rabbitmq = RabbitMQService()
+                
+                # ใช้ send_transcription_request_task method ซึ่งมี retry logic
+                # แต่ส่ง test message โดยตรงผ่าน internal method
+                # ใช้ retry logic จาก send_transcription_request_task (3 retries)
+                max_retries = 3
+                retry_delay = 1
+                
+                for attempt in range(max_retries):
+                    try:
+                        # Reset connection if retrying
+                        if attempt > 0:
+                            test_rabbitmq._reset_connection()
+                            time.sleep(retry_delay * attempt)
+                        
+                        # Connect
+                        test_rabbitmq._connect()
+                        
+                        # Verify connection
+                        if not test_rabbitmq.connection or test_rabbitmq.connection.is_closed:
+                            raise Exception("Connection is closed after connect")
+                        if not test_rabbitmq.channel or test_rabbitmq.channel.is_closed:
+                            raise Exception("Channel is closed after connect")
+                        
+                        # Publish test message
+                        test_rabbitmq.channel.basic_publish(
+                            exchange='',
+                            routing_key=test_rabbitmq.transcription_request_queue,
+                            body=json.dumps(test_message),
+                            properties=pika.BasicProperties(
+                                delivery_mode=2,  # Persistent
+                                content_type='application/json',
+                                priority=5
+                            ),
+                            mandatory=True
+                        )
+                        
+                        # Success - break out of retry loop
+                        break
+                        
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Publish attempt {attempt + 1}/{max_retries} failed: {e}, retrying...")
+                        else:
+                            raise
+                
+                logger.info(f"✅ Test message #{i+1} sent to transcription_request_queue: {test_task_id}")
+                results.append({
+                    "task_id": test_task_id,
+                    "status": "sent",
+                    "queue": "transcription_request_queue",
+                    "message": f"Test message #{i+1} sent successfully"
+                })
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to send test message #{i+1}: {e}")
+                results.append({
+                    "task_id": test_task_id,
+                    "status": "failed",
+                    "error": str(e)
+                })
+        
+        return {
+            "message": f"Sent {len([r for r in results if r['status'] == 'sent'])}/{count} test messages",
+            "total": count,
+            "successful": len([r for r in results if r['status'] == 'sent']),
+            "failed": len([r for r in results if r['status'] == 'failed']),
+            "task_ids": task_ids,
+            "results": results,
+            "note": "Test messages will flow through: transcription_request_queue → audio_extraction_queue → transcription_queue"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in test_queue_flow: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error testing queue flow: {str(e)}")
 
 @router.get("/check-task/{task_id}")
 async def check_task_in_queue(task_id: str):

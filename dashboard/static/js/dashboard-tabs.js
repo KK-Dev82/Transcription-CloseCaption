@@ -101,6 +101,26 @@ function switchTab(tabName) {
         if (typeof loadPreviousResults === 'function') {
             loadPreviousResults();
         }
+    } else if (tabName === 'live-streaming') {
+        // Stop other tabs
+        if (typeof stopOverviewRefresh === 'function') {
+            stopOverviewRefresh();
+        }
+        if (typeof stopTestRefresh === 'function') {
+            stopTestRefresh();
+        }
+        if (typeof stopMonitoringTab === 'function') {
+            stopMonitoringTab();
+        }
+        if (typeof stopMonitorRefresh === 'function') {
+            stopMonitorRefresh();
+        }
+        // Initialize HLS player if not already initialized
+        if (typeof initializeHLSPlayer === 'function') {
+            setTimeout(() => {
+                initializeHLSPlayer();
+            }, 100);
+        }
     }
 }
 

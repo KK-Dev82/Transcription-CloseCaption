@@ -11,6 +11,7 @@ import os
 import aiohttp
 import asyncio
 from datetime import datetime
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/live-streaming", tags=["live-streaming"])
@@ -181,6 +182,138 @@ async def get_hls_playlist(channel: str = "channel1"):
         "hls_url": f"{HLS_BASE_URL}/{channel}.m3u8",
         "rtmp_url": f"{RTMP_PUSH_URL}/{channel}"
     }
+
+@router.get("/hls-proxy/{channel}")
+async def proxy_hls_playlist(channel: str = "channel1"):
+    """
+    Proxy HLS playlist to avoid Mixed Content issues
+    Dashboard (HTTPS) -> Proxy (HTTPS) -> HLS Server (HTTP)
+    """
+    try:
+        playlist_url = f"{HLS_BASE_URL}/{channel}.m3u8"
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(playlist_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch HLS playlist {playlist_url}: {response.status}")
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=f"Failed to fetch HLS playlist: {response.status}"
+                        )
+                    
+                    content = await response.text()
+                    
+                    # Rewrite URLs in playlist to use proxy
+                    # Replace all segment URLs with proxy URLs
+                    lines = content.split('\n')
+                    rewritten_lines = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped and not stripped.startswith('#'):
+                            # This is a segment URL line (e.g., "channel1-1140.ts")
+                            # Extract just the filename
+                            segment_filename = stripped
+                            if '/' in stripped:
+                                # Extract filename from path
+                                segment_filename = stripped.split('/')[-1]
+                            elif stripped.startswith('http'):
+                                # Extract filename from URL
+                                from urllib.parse import urlparse
+                                parsed = urlparse(stripped)
+                                segment_filename = parsed.path.split('/')[-1]
+                            
+                            # Use proxy endpoint with just the filename
+                            rewritten_lines.append(f"/api/live-streaming/hls-proxy-segment/{channel}/{segment_filename}")
+                        else:
+                            # Keep comments and empty lines as-is
+                            rewritten_lines.append(line)
+                    
+                    rewritten_content = '\n'.join(rewritten_lines)
+                    
+                    # Use Response instead of StreamingResponse to avoid connection issues
+                    from fastapi.responses import Response
+                    return Response(
+                        content=rewritten_content.encode('utf-8'),
+                        media_type="application/vnd.apple.mpegurl",
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "no-cache",
+                            "Content-Type": "application/vnd.apple.mpegurl"
+                        }
+                    )
+            except aiohttp.ClientConnectorError as e:
+                logger.error(f"Connection error fetching HLS playlist {playlist_url}: {e}")
+                raise HTTPException(status_code=502, detail=f"Cannot connect to HLS server: {str(e)}")
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching HLS playlist {playlist_url}")
+                raise HTTPException(status_code=504, detail="HLS server timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error proxying HLS playlist: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/hls-proxy-segment/{channel}/{path:path}")
+async def proxy_hls_segment(channel: str, path: str):
+    """
+    Proxy HLS segment files (TS files)
+    """
+    try:
+        # Construct segment URL
+        # Path might be like "channel1-1094.ts" or "channel1/channel1-1094.ts"
+        # Remove channel prefix if present in path
+        segment_filename = path
+        if path.startswith(f"{channel}/"):
+            segment_filename = path[len(f"{channel}/"):]
+        elif path.startswith(f"{channel}-"):
+            # Path is already just the filename like "channel1-1094.ts"
+            segment_filename = path
+        
+        # Construct full URL - segments are usually in hls/channel1/ directory
+        segment_url = f"{HLS_BASE_URL}/{channel}/{segment_filename}"
+        
+        logger.debug(f"Proxying HLS segment: {segment_url} (path={path}, filename={segment_filename})")
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(segment_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status != 200:
+                        logger.warning(f"Failed to fetch HLS segment {segment_url}: {response.status}")
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=f"Failed to fetch HLS segment: {response.status}"
+                        )
+                    
+                    # Read the entire segment into memory (TS files are usually small, < 10MB)
+                    # This avoids HTTP/2 protocol errors with streaming
+                    segment_data = await response.read()
+                    
+                    # Determine content type
+                    content_type = response.headers.get('Content-Type', 'video/mp2t')
+                    
+                    # Return as FileResponse with data (more reliable than StreamingResponse for small files)
+                    from fastapi.responses import Response
+                    return Response(
+                        content=segment_data,
+                        media_type=content_type,
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "public, max-age=3600",
+                            "Content-Length": str(len(segment_data))
+                        }
+                    )
+            except aiohttp.ClientConnectorError as e:
+                logger.error(f"Connection error fetching HLS segment {segment_url}: {e}")
+                raise HTTPException(status_code=502, detail=f"Cannot connect to HLS server: {str(e)}")
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout fetching HLS segment {segment_url}")
+                raise HTTPException(status_code=504, detail="HLS server timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error proxying HLS segment: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/start-monitoring")
 async def start_monitoring(
