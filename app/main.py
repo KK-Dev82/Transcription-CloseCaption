@@ -178,6 +178,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path.startswith("/api/batch/"):
             return await call_next(request)
         
+        # Skip rate limiting for /transcribe/ endpoint when called from batch API
+        # (Batch API sends to /transcribe/ which should not be rate limited)
+        # Check if request comes from internal batch service by checking User-Agent or Referer
+        user_agent = request.headers.get("user-agent", "").lower()
+        referer = request.headers.get("referer", "").lower()
+        if request.url.path.startswith("/transcribe/") and ("batch" in user_agent or "batch" in referer):
+            return await call_next(request)
+        
         # Get client IP
         client_ip = request.client.host if request.client else "unknown"
         

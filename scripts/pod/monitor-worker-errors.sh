@@ -93,8 +93,23 @@ echo "║  เวลา: $(date '+%Y-%m-%d %H:%M:%S')                           
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Check worker process
-WORKER_PID=$(pgrep -f "python.*video_worker" | head -1 || echo "")
+# Check worker process (use same logic as worker-health-check.sh)
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker" "video_worker"; do
+    WORKER_PID=$(pgrep -f "$pattern" 2>/dev/null | head -1)
+    if [ -n "$WORKER_PID" ]; then
+        break
+    fi
+done
+
+# If still not found, try checking PID file
+if [ -z "$WORKER_PID" ] && [ -f "/tmp/video-worker.pid" ]; then
+    PID_FROM_FILE=$(cat /tmp/video-worker.pid 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$PID_FROM_FILE" ] && ps -p "$PID_FROM_FILE" > /dev/null 2>&1; then
+        WORKER_PID="$PID_FROM_FILE"
+    fi
+fi
+
 if [ -z "$WORKER_PID" ]; then
     print_error "Worker process not running"
     echo "$(date '+%Y-%m-%d %H:%M:%S') - ALERT: Worker process not running" >> "$ALERT_LOG"
@@ -192,11 +207,33 @@ if [ -n "$WORKER_PID" ]; then
     UPTIME=$(ps -o etime= -p "$WORKER_PID" 2>/dev/null | tr -d ' ' || echo "unknown")
     print_info "Worker uptime: $UPTIME"
     
-    # If uptime is less than 5 minutes, might be a recent restart
-    UPTIME_MINUTES=$(echo "$UPTIME" | grep -oE "[0-9]+:[0-9]+" | head -1 | cut -d: -f1 || echo "999")
-    if [ "$UPTIME_MINUTES" -lt 5 ] && [ "$UPTIME_MINUTES" != "999" ]; then
-        print_warning "Worker restarted recently (uptime: $UPTIME)"
+    # Parse uptime to minutes
+    # Format can be: "MM:SS" or "HH:MM:SS" or "DD-HH:MM:SS"
+    UPTIME_MINUTES=999
+    if echo "$UPTIME" | grep -qE "^[0-9]+:[0-9]+:[0-9]+$"; then
+        # HH:MM:SS format
+        HOURS=$(echo "$UPTIME" | cut -d: -f1)
+        MINUTES=$(echo "$UPTIME" | cut -d: -f2)
+        UPTIME_MINUTES=$((HOURS * 60 + MINUTES))
+    elif echo "$UPTIME" | grep -qE "^[0-9]+:[0-9]+$"; then
+        # MM:SS format
+        UPTIME_MINUTES=$(echo "$UPTIME" | cut -d: -f1)
+    elif echo "$UPTIME" | grep -qE "^[0-9]+-[0-9]+:[0-9]+:[0-9]+$"; then
+        # DD-HH:MM:SS format
+        DAYS=$(echo "$UPTIME" | cut -d- -f1)
+        HOURS=$(echo "$UPTIME" | cut -d: -f1 | cut -d- -f2)
+        MINUTES=$(echo "$UPTIME" | cut -d: -f2)
+        UPTIME_MINUTES=$((DAYS * 24 * 60 + HOURS * 60 + MINUTES))
+    fi
+    
+    # Only count as crash indicator if uptime is less than 2 minutes AND there are actual errors
+    # (Restart from script is normal, but crash + auto-restart within 2 min is suspicious)
+    if [ "$UPTIME_MINUTES" -lt 2 ] && [ "$UPTIME_MINUTES" != "999" ] && [ "$ERROR_COUNT" -gt 0 ]; then
+        print_warning "Worker restarted recently (uptime: $UPTIME) with errors - possible crash"
         CRASH_INDICATORS=$((CRASH_INDICATORS + 1))
+    elif [ "$UPTIME_MINUTES" -lt 2 ] && [ "$UPTIME_MINUTES" != "999" ]; then
+        print_info "Worker restarted recently (uptime: $UPTIME) - likely normal restart"
+        # Don't count as crash indicator if no errors
     fi
 fi
 
@@ -219,9 +256,15 @@ CRASH_INDICATORS=$((CRASH_INDICATORS + 0))
 MONITOR_ENTRY="$(date '+%Y-%m-%d %H:%M:%S') - Errors: $ERROR_COUNT, Crash indicators: $CRASH_INDICATORS"
 echo "$MONITOR_ENTRY" >> "$MONITOR_LOG"
 
+# Determine status based on errors and crash indicators
 if [ "$ERROR_COUNT" -eq 0 ] && [ "$CRASH_INDICATORS" -eq 0 ]; then
     print_success "No issues detected"
     echo "$MONITOR_ENTRY - Status: OK" >> "$MONITOR_LOG"
+    exit 0
+elif [ "$ERROR_COUNT" -eq 0 ] && [ "$CRASH_INDICATORS" -gt 0 ]; then
+    # If no errors but has crash indicators (like recent restart), it's likely normal
+    print_success "No issues detected (recent restart is normal)"
+    echo "$MONITOR_ENTRY - Status: OK (normal restart)" >> "$MONITOR_LOG"
     exit 0
 elif [ "$ERROR_COUNT" -lt 5 ] && [ "$CRASH_INDICATORS" -eq 0 ]; then
     print_warning "Minor issues detected (Errors: $ERROR_COUNT)"
