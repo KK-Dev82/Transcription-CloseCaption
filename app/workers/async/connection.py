@@ -34,6 +34,9 @@ class AsyncRabbitMQConnection:
         self.media_exchange: Optional[Exchange] = None
         self.transcription_exchange: Optional[Exchange] = None
         
+        # Reconnection callbacks
+        self.on_reconnect_callback = None  # Callback to re-register consumers after reconnect
+        
         # Queue names
         self.trim_queue_name = 'video_trim_queue'
         self.merge_queue_name = 'video_merge_queue'
@@ -65,10 +68,18 @@ class AsyncRabbitMQConnection:
                 logger.info(f"Attempting to connect to RabbitMQ at {self.rabbitmq_host}:{self.rabbitmq_port} (attempt {attempt + 1}/{max_retries})...")
                 
                 # ใช้ connect_robust สำหรับ auto-reconnect
+                # Note: connect_robust จะ auto-reconnect แต่ต้อง monitor connection state เอง
                 self.connection = await aio_pika.connect_robust(
                     url,
-                    heartbeat=self.heartbeat
+                    heartbeat=self.heartbeat,
+                    client_properties={
+                        'connection_name': f'video_worker_{os.getpid()}'
+                    }
                 )
+                
+                # Note: aio_pika.connect_robust ไม่มี add_close_callback/add_reconnect_callback
+                # จะใช้ connection state monitoring แทน (ใน video_worker.py)
+                
                 self.channel = await self.connection.channel()
                 
                 logger.info(f"✅ RabbitMQ connection parameters: heartbeat={self.heartbeat}s ({self.heartbeat/60:.1f}min)")
@@ -97,6 +108,48 @@ class AsyncRabbitMQConnection:
                     return False
         
         return False
+    
+    async def handle_reconnection(self):
+        """Handle reconnection - recreate channel and re-register consumers"""
+        """Note: เรียกใช้จาก video_worker เมื่อ detect connection reconnect"""
+        logger.info("🔄 RabbitMQ connection reconnected, recreating channel and re-registering consumers...")
+        
+        try:
+            # Check if connection is ready
+            if not self.connection or self.connection.is_closed:
+                logger.warning("⚠️ Connection not ready for reconnection setup")
+                return False
+            
+            # Recreate channel
+            self.channel = await self.connection.channel()
+            logger.info("✅ Channel recreated after reconnect")
+            
+            # Re-declare exchanges
+            await self._declare_exchanges()
+            logger.info("✅ Exchanges re-declared after reconnect")
+            
+            # Re-declare queues
+            await self._declare_legacy_queues()
+            await self._declare_quorum_queues()
+            logger.info("✅ Queues re-declared after reconnect")
+            
+            # Call re-register consumers callback if set
+            if self.on_reconnect_callback:
+                logger.info("🔄 Re-registering consumers after reconnect...")
+                await self.on_reconnect_callback()
+                logger.info("✅ Consumers re-registered after reconnect")
+                return True
+            else:
+                logger.warning("⚠️ No reconnect callback set - consumers may not be re-registered")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error during reconnection setup: {e}", exc_info=True)
+            return False
+    
+    def set_reconnect_callback(self, callback):
+        """Set callback to be called after reconnection to re-register consumers"""
+        self.on_reconnect_callback = callback
     
     async def _declare_exchanges(self):
         """สร้าง exchanges"""

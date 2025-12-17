@@ -47,6 +47,12 @@ class AsyncConsumerManager:
         # Store queue objects
         self.queues: Dict[str, Queue] = {}
     
+    def update_channel(self, new_channel):
+        """Update channel after reconnection"""
+        self.channel = new_channel
+        # Clear queues as they need to be re-declared with new channel
+        self.queues.clear()
+    
     async def setup_consumers(self):
         """ตั้งค่า async consumers สำหรับแต่ละ queue"""
         if not self.handlers:
@@ -59,17 +65,18 @@ class AsyncConsumerManager:
         
         # ตั้งค่า QoS สำหรับ channel (global setting สำหรับทุก queue)
         # ⚠️ ใน aio-pika, set_qos() เป็น global สำหรับ channel ทั้งหมด ไม่ใช่ per-queue
-        # ⚠️ ตั้ง prefetch_count=1 เพื่อไม่ให้ Worker รับ messages เกินความสามารถ
-        # Concurrency จะถูกควบคุมด้วย GPU semaphore (GPU_CONCURRENCY) แทน
-        # เมื่อ message ถูก ack แล้ว Worker จะรับ message ใหม่ทันที
-        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '1'))  # Default: 1 (ไม่รับเกินความสามารถ)
+        # ตั้ง prefetch_count ตาม concurrency ที่ต้องการ (25) เพื่อรองรับ 25 tasks พร้อมกัน
+        # Concurrency จะถูกควบคุมด้วย GPU semaphore (GPU_CONCURRENCY) และ worker pools
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '1'))  # Default: 1
         chunk_prefetch = int(os.getenv('TRANSCRIPTION_PREFETCH_COUNT', '1'))  # Default: 1 สำหรับ backward compatibility
-        # ใช้ค่าสูงสุดระหว่าง chunk_prefetch และ request_prefetch
-        global_prefetch = max(chunk_prefetch, request_prefetch)
+        audio_extraction_prefetch = int(os.getenv('AUDIO_EXTRACTION_PREFETCH_COUNT', '1'))  # Default: 1
+        # ใช้ค่าสูงสุดระหว่าง chunk_prefetch, request_prefetch และ audio_extraction_prefetch
+        # เพื่อรองรับ 25 concurrency ในทุก queue
+        global_prefetch = max(chunk_prefetch, request_prefetch, audio_extraction_prefetch)
         await self.channel.set_qos(prefetch_count=global_prefetch)
-        logger.info(f"✅ Set QoS: prefetch_count={global_prefetch} (chunk={chunk_prefetch}, request={request_prefetch})")
-        logger.info(f"   📌 Note: Concurrency is controlled by GPU semaphore (GPU_CONCURRENCY={os.getenv('GPU_CONCURRENCY', '2')})")
-        logger.info(f"   📌 Worker will receive 1 message at a time and process up to {os.getenv('GPU_CONCURRENCY', '2')} tasks concurrently")
+        logger.info(f"✅ Set QoS: prefetch_count={global_prefetch} (chunk={chunk_prefetch}, request={request_prefetch}, audio_extraction={audio_extraction_prefetch})")
+        logger.info(f"   📌 Note: Concurrency is controlled by GPU semaphore (GPU_CONCURRENCY={os.getenv('GPU_CONCURRENCY', '25')})")
+        logger.info(f"   📌 Worker will receive up to {global_prefetch} messages and process up to {os.getenv('GPU_CONCURRENCY', '25')} tasks concurrently")
         
         # Video processing queues
         await self._setup_queue_consumer(self.trim_queue_name, self.handlers.get('trim'))

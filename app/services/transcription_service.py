@@ -1419,6 +1419,10 @@ class TranscriptionService:
             task.progress = 100
             task.completed_at = utc_now()
             
+            # อัปเดต task object ด้วย full_text และ chunks ก่อนส่ง callback
+            task.full_text = full_text
+            task.chunks = chunks
+            
             # 🧹 ลบ temp files หลังเสร็จสิ้น (ถ้า SAVE_TEMP_FILES=not_save)
             if not self.save_temp_files:
                 try:
@@ -1434,9 +1438,12 @@ class TranscriptionService:
             # เพราะ senate-backend จะส่ง SignalR notification เองหลังจากรับ webhook callback
             if hasattr(task, 'callback_url') and task.callback_url:
                 try:
+                    logger.info(f"📤 Preparing to send completed callback for task {task.task_id}")
+                    logger.info(f"   Full text length: {len(full_text)}, Chunks count: {len(chunks)}")
                     await self._send_callback(task, "completed")
+                    logger.info(f"✅ Completed callback sent successfully for task {task.task_id}")
                 except Exception as e:
-                    logger.warning(f"Backend callback failed: {e}")
+                    logger.error(f"❌ Backend callback failed for task {task.task_id}: {e}", exc_info=True)
             
             # บันทึกข้อมูลสุดท้าย - อัปเดต metadata เพิ่มเติม (job_id, user_id, callback_url)
             # Note: full_text และ chunks ถูกบันทึกไปแล้วที่บรรทัด 470

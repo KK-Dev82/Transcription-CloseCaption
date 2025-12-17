@@ -114,8 +114,10 @@ class RabbitMQConsumers:
         # 3-Queue Architecture Consumers (New)
         # ============================================================
         
-        # Set QoS for transcription_request_queue (prefetch=1)
-        channel.basic_qos(prefetch_count=1, prefetch_size=0, global_qos=False)
+        # Set QoS for transcription_request_queue (ใช้ environment variable)
+        request_prefetch = int(os.getenv('TRANSCRIPTION_REQUEST_PREFETCH_COUNT', '1'))
+        channel.basic_qos(prefetch_count=request_prefetch, prefetch_size=0, global_qos=False)
+        logger.info(f"✅ Set QoS: prefetch_count={request_prefetch} for transcription_request_queue")
         
         # Transcription Request Queue Consumer (Download & Route)
         # Consume from transcription_request_queue: Download file → Check type → Route
@@ -125,8 +127,10 @@ class RabbitMQConsumers:
             auto_ack=False
         )
         
-        # Set QoS for audio_extraction_queue (prefetch=1)
-        channel.basic_qos(prefetch_count=1, prefetch_size=0, global_qos=False)
+        # Set QoS for audio_extraction_queue (ใช้ environment variable)
+        audio_extraction_prefetch = int(os.getenv('AUDIO_EXTRACTION_PREFETCH_COUNT', '1'))
+        channel.basic_qos(prefetch_count=audio_extraction_prefetch, prefetch_size=0, global_qos=False)
+        logger.info(f"✅ Set QoS: prefetch_count={audio_extraction_prefetch} for audio_extraction_queue")
         
         # Audio Extraction Queue Consumer
         # Consume from audio_extraction_queue: Extract audio → Send to transcription_queue

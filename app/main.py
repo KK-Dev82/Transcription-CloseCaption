@@ -174,6 +174,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/health":
             return await call_next(request)
         
+        # Skip rate limiting for batch endpoints (internal API calls)
+        if request.url.path.startswith("/api/batch/"):
+            return await call_next(request)
+        
         # Get client IP
         client_ip = request.client.host if request.client else "unknown"
         

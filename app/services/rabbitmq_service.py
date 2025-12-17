@@ -28,6 +28,10 @@ class RabbitMQService:
         self.password = os.getenv("RABBITMQ_PASSWORD", "admin123")
         self.virtual_host = os.getenv("RABBITMQ_VHOST", "/")
         
+        # Publisher confirms tracking
+        self.publish_confirms = {}  # Track pending publishes: {delivery_tag: task_id}
+        self.publish_lock = threading.Lock()  # Lock for thread-safe access
+        
         # ใช้ Storage Factory เพื่อเลือก storage type (SQLite หรือ JSON)
         from ..utils.storage_factory import get_storage
         self.json_storage = get_storage()  # จะ return SQLiteStorage หรือ JSONStorage ตาม STORAGE_TYPE
@@ -66,6 +70,10 @@ class RabbitMQService:
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
             
+            # Enable publisher confirms เพื่อยืนยันว่า message ถูก publish สำเร็จ
+            self.channel.confirm_delivery()
+            logger.info("✅ Publisher confirms enabled - จะยืนยันทุก publish")
+            
             # สร้าง queues เก่า (backward compatible)
             self.channel.queue_declare(queue=self.trim_queue, durable=True)
             self.channel.queue_declare(queue=self.merge_queue, durable=True)
@@ -73,7 +81,28 @@ class RabbitMQService:
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
             
             # Transcription Queue (Legacy - ยังใช้อยู่)
-            self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+            # ตั้ง max-length เพื่อรองรับ 25 concurrency + buffer
+            max_transcribe = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '30'))
+            try:
+                # พยายามสร้าง queue ใหม่ด้วย max-length
+                transcription_args = self._get_queue_arguments(
+                    self.transcription_queue,
+                    max_length=max_transcribe,
+                    enable_dlx=True,
+                    enable_quorum=False,  # Legacy queue ไม่ใช้ quorum
+                    enable_priority=False
+                )
+                self.channel.queue_declare(
+                    queue=self.transcription_queue,
+                    durable=True,
+                    arguments=transcription_args if transcription_args else None
+                )
+                logger.info(f"✅ Created/Updated {self.transcription_queue} (max: {max_transcribe})")
+            except Exception as e:
+                # ถ้า queue มีอยู่แล้วและ arguments ไม่ตรงกัน จะใช้ queue เดิม
+                logger.warning(f"⚠️ Transcription queue exists with different arguments, using existing queue: {e}")
+                self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+            
             self.channel.queue_declare(queue=self.transcription_chunk_queue, durable=True)
             
             # ============================================================
@@ -113,12 +142,6 @@ class RabbitMQService:
             )
             self._setup_dlx_for_queue(self.audio_extraction_queue)
             logger.info(f"✅ Created {self.audio_extraction_queue} (max: {max_extraction}, quorum: {extraction_args.get('x-queue-type', 'classic')})")
-            
-            # 3. Transcription Queue (max 20) - Update existing queue
-            max_transcribe = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '20'))
-            # Note: เราไม่สามารถเปลี่ยน queue type ของ queue ที่มีอยู่แล้วได้
-            # จะต้องสร้าง queue ใหม่หรือใช้ queue เดิม (backward compatible)
-            # สำหรับตอนนี้ ยังใช้ queue เดิมไว้ก่อน
             
             # ============================================================
             # Close Caption Queues (แยกจาก transcription เพื่อลัดคิว)
@@ -185,10 +208,27 @@ class RabbitMQService:
     
     def _ensure_connection(self):
         """ตรวจสอบการเชื่อมต่อและเชื่อมต่อใหม่หากจำเป็น"""
-        if not self.connection or self.connection.is_closed:
+        # ตรวจสอบ connection state
+        connection_ok = False
+        try:
+            if self.connection and not self.connection.is_closed:
+                # ตรวจสอบ channel state ด้วย
+                if self.channel and not self.channel.is_closed:
+                    # ลอง process data events เพื่อตรวจสอบว่า connection ยังทำงานอยู่
+                    try:
+                        self.connection.process_data_events(time_limit=0.001)
+                        connection_ok = True
+                    except Exception:
+                        connection_ok = False
+        except Exception as e:
+            logger.debug(f"Connection check failed: {e}")
+            connection_ok = False
+        
+        if not connection_ok:
             logger.info(f"🔌 เชื่อมต่อ RabbitMQ ใหม่...")
             logger.info(f"   Host: {self.host}:{self.port}")
             logger.info(f"   User: {self.username}")
+            self._reset_connection()  # Reset ก่อน connect ใหม่
             self._connect()
         else:
             logger.debug(f"✅ RabbitMQ connection is active: {self.host}:{self.port}")
@@ -497,8 +537,32 @@ class RabbitMQService:
                 # บันทึก task ลง storage
                 self.json_storage.save_transcription(task_id, task_data)
                 
+                # ตรวจสอบ connection state ก่อน publish
+                self._ensure_connection()
+                if not self.connection or self.connection.is_closed:
+                    raise Exception("RabbitMQ connection is closed")
+                if not self.channel or self.channel.is_closed:
+                    raise Exception("RabbitMQ channel is closed")
+                
+                # ตรวจสอบ queue status ก่อน publish
+                try:
+                    queue_declare_result = self.channel.queue_declare(
+                        queue=self.transcription_request_queue,
+                        durable=True,
+                        passive=True  # Only check if queue exists, don't create
+                    )
+                    current_queue_size = queue_declare_result.method.message_count
+                    MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
+                    available_slots = MAX_QUEUE_REQUEST - current_queue_size
+                    logger.info(f"📊 Queue status before publish: current={current_queue_size}/{MAX_QUEUE_REQUEST}, available={available_slots}")
+                    if available_slots <= 0:
+                        logger.warning(f"⚠️  Queue is full! current={current_queue_size}, max={MAX_QUEUE_REQUEST}")
+                except Exception as queue_check_error:
+                    logger.warning(f"⚠️  Could not check queue status: {queue_check_error}")
+                
                 # ส่งไปยัง transcription_request_queue
                 logger.info(f"📤 Publishing to {self.transcription_request_queue}: {task_id}")
+                logger.debug(f"   Connection state: open={not self.connection.is_closed}, channel={not self.channel.is_closed if self.channel else 'None'}")
                 
                 # กำหนด priority ตาม display_mode
                 # CloseCaption (realtime_chunks) → priority 10 (สูงสุด)
@@ -514,10 +578,12 @@ class RabbitMQService:
                     # Use threading to implement timeout for synchronous publish
                     publish_success = [False]
                     publish_error = [None]
+                    publish_confirmed = [False]
                     
                     def publish_with_timeout():
                         try:
-                            self.channel.basic_publish(
+                            # Publisher confirms enabled - จะ raise exception ถ้า publish ไม่สำเร็จ
+                            result = self.channel.basic_publish(
                                 exchange='',
                                 routing_key=self.transcription_request_queue,
                                 body=json.dumps(task_data),
@@ -525,11 +591,17 @@ class RabbitMQService:
                                     delivery_mode=2,  # Persistent
                                     content_type='application/json',
                                     priority=priority  # Priority: 10 for CloseCaption, 5 for normal
-                                )
+                                ),
+                                mandatory=True  # Ensure message is routed to a queue
                             )
+                            # With confirm_delivery(), basic_publish returns True if confirmed, False if nacked
+                            # If it raises exception, it means publish failed
                             publish_success[0] = True
+                            publish_confirmed[0] = True
+                            logger.debug(f"✅ Publisher confirm received for task {task_id}")
                         except Exception as e:
                             publish_error[0] = e
+                            logger.error(f"❌ Publish error for task {task_id}: {e}")
                     
                     # Run publish in a thread with timeout
                     publish_thread = threading.Thread(target=publish_with_timeout)
@@ -548,8 +620,11 @@ class RabbitMQService:
                     if not publish_success[0]:
                         raise Exception("Publish failed without error")
                     
+                    if not publish_confirmed[0]:
+                        logger.warning(f"⚠️  Publish may not be confirmed for task {task_id}")
+                    
                     logger.info(f"📤 Published with priority={priority} (display_mode={display_mode})")
-                    logger.info(f"✅ Sent to {self.transcription_request_queue}: {task_id}")
+                    logger.info(f"✅ Confirmed publish to {self.transcription_request_queue}: {task_id}")
                     return task_id
                 except TimeoutError as timeout_error:
                     # Publish timeout - RabbitMQ may be slow or unresponsive

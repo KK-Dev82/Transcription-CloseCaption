@@ -321,6 +321,7 @@ class MessageHandlers:
             try:
                 task_data = json.loads(body.decode('utf-8'))
                 task_id = task_data.get('task_id')
+                test_mode = task_data.get('test_mode', False)
                 video_file_path = task_data.get('file_path')
                 language = task_data.get('language', 'th')
                 model_size = task_data.get('model_size', 'base')
@@ -333,45 +334,53 @@ class MessageHandlers:
                 
                 logger.info("=" * 80)
                 logger.info(f"🎬 [Audio Extraction] Processing extraction task: {task_id}")
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Test message: {task_data.get('test_message', 'N/A')}")
                 logger.info(f"   Video file: {video_file_path}")
                 logger.info("=" * 80)
                 
                 # Update status
-                task_data['status'] = 'extracting_audio'
-                task_data['progress'] = 15
+                task_data['status'] = 'extracting_audio' if not test_mode else 'routing_to_transcription'
+                task_data['progress'] = 15 if not test_mode else 25
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
-                # Check file exists
-                if not video_file_path or not Path(video_file_path).exists():
-                    raise FileNotFoundError(f"Video file not found: {video_file_path}")
-                
-                # Extract audio using VideoService (uses Thread Pool)
-                logger.info(f"🎬 [Audio Extraction] Starting audio extraction...")
-                import time
-                extraction_start_time = time.time()
-                audio_path = self.worker.video_service.extract_audio(video_file_path, task_id=task_id)
-                extraction_time = time.time() - extraction_start_time
-                logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
-                logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
-                
-                # บันทึก audio_extraction_time ใน task metadata
-                task_data['audio_extraction_time'] = extraction_time
-                
-                # Initialize task_breakdown ถ้ายังไม่มี
-                if 'task_breakdown' not in task_data:
-                    task_data['task_breakdown'] = []
-                
-                # เพิ่ม audio extraction task ใน task_breakdown
-                task_data['task_breakdown'].append({
-                    'type': 'audio_extraction',
-                    'status': 'completed',
-                    'time': extraction_time,
-                    'completed_at': datetime.now(timezone.utc).isoformat()
-                })
-                
-                # อัปเดต total_tasks และ completed_tasks
-                task_data['total_tasks'] = task_data.get('total_tasks', 0) + 1  # Audio extraction task
-                task_data['completed_tasks'] = task_data.get('completed_tasks', 0) + 1
+                # Extract audio (skip for test mode)
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Skipping audio extraction - using fake audio path")
+                    audio_path = f"/tmp/test_audio_{task_id}.wav"  # Fake path for test
+                    extraction_time = 0.0
+                else:
+                    # Check file exists
+                    if not video_file_path or not Path(video_file_path).exists():
+                        raise FileNotFoundError(f"Video file not found: {video_file_path}")
+                    
+                    # Extract audio using VideoService (uses Thread Pool)
+                    logger.info(f"🎬 [Audio Extraction] Starting audio extraction...")
+                    import time
+                    extraction_start_time = time.time()
+                    audio_path = self.worker.video_service.extract_audio(video_file_path, task_id=task_id)
+                    extraction_time = time.time() - extraction_start_time
+                    logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
+                    logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+                    
+                    # บันทึก audio_extraction_time ใน task metadata
+                    task_data['audio_extraction_time'] = extraction_time
+                    
+                    # Initialize task_breakdown ถ้ายังไม่มี
+                    if 'task_breakdown' not in task_data:
+                        task_data['task_breakdown'] = []
+                    
+                    # เพิ่ม audio extraction task ใน task_breakdown
+                    task_data['task_breakdown'].append({
+                        'type': 'audio_extraction',
+                        'status': 'completed',
+                        'time': extraction_time,
+                        'completed_at': datetime.now(timezone.utc).isoformat()
+                    })
+                    
+                    # อัปเดต total_tasks และ completed_tasks
+                    task_data['total_tasks'] = task_data.get('total_tasks', 0) + 1  # Audio extraction task
+                    task_data['completed_tasks'] = task_data.get('completed_tasks', 0) + 1
                 
                 # Update status
                 task_data['status'] = 'routing_to_transcription'
@@ -398,6 +407,11 @@ class MessageHandlers:
                     "audio_extracted_from": video_file_path  # Track original video
                 }
                 
+                # Add test_mode flag to transcription message
+                if test_mode:
+                    transcription_message['test_mode'] = True
+                    transcription_message['test_message'] = task_data.get('test_message', 'Test message')
+                
                 logger.info(f"📤 [Audio Extraction] Sending to transcription_queue: {task_id}")
                 # ใช้ safe_publish สำหรับ publishing จาก threads (thread-safe)
                 success = self.worker.connection._safe_publish(
@@ -420,9 +434,31 @@ class MessageHandlers:
                     
             except Exception as e:
                 logger.error(f"❌ [Audio Extraction] Error processing extraction task {task_id}: {e}", exc_info=True)
+                
+                # Update task status to failed
+                try:
+                    if task_id:
+                        task_data['status'] = 'failed'
+                        task_data['error_message'] = str(e)
+                        self.worker.json_storage.save_transcription(task_id, task_data)
+                except Exception as save_error:
+                    logger.error(f"❌ [Audio Extraction] Failed to save error status: {save_error}")
+                
+                # Cleanup resources
+                try:
+                    # Cleanup any temporary files
+                    if 'video_file_path' in locals() and video_file_path and Path(video_file_path).exists():
+                        # Don't delete source file, just log
+                        logger.debug(f"Source file still exists: {video_file_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ [Audio Extraction] Cleanup error: {cleanup_error}")
+                
+                # Nack message
                 try:
                     if ch and not ch.is_closed:
                         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                    else:
+                        logger.warning(f"⚠️ [Audio Extraction] Channel is closed, cannot nack message")
                 except Exception as nack_error:
                     logger.error(f"❌ [Audio Extraction] Failed to nack message: {nack_error}")
         
@@ -446,6 +482,7 @@ class MessageHandlers:
             try:
                 task_data = json.loads(body.decode('utf-8'))
                 task_id = task_data.get('task_id')
+                test_mode = task_data.get('test_mode', False)
                 file_url = task_data.get('file_url')
                 file_path = task_data.get('file_path')
                 file_name = task_data.get('file_name')
@@ -460,18 +497,24 @@ class MessageHandlers:
                 
                 logger.info("=" * 80)
                 logger.info(f"🎯 [Download & Route] Processing transcription request: {task_id}")
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Test message: {task_data.get('test_message', 'N/A')}")
                 logger.info(f"   File URL: {file_url}")
                 logger.info(f"   File Path: {file_path}")
                 logger.info("=" * 80)
                 
                 # Update status
-                task_data['status'] = 'downloading'
-                task_data['progress'] = 5
+                task_data['status'] = 'downloading' if not test_mode else 'routing'
+                task_data['progress'] = 5 if not test_mode else 10
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
                 # Step 1: Download file (ถ้าไม่มี file_path หรือ file_path ไม่มีอยู่)
+                # Skip download if test mode
                 local_file_path = file_path
-                if file_url:
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Skipping file download - using test file path")
+                    local_file_path = f"/tmp/test_{task_id}.mp4"  # Fake path for test
+                elif file_url:
                     if not local_file_path or not Path(local_file_path).exists():
                         logger.info(f"📥 [Download & Route] Downloading file from URL: {file_url}")
                         # สร้าง event loop ใหม่เพื่อป้องกัน conflict
@@ -496,13 +539,18 @@ class MessageHandlers:
                 task_data['progress'] = 10
                 self.worker.json_storage.save_transcription(task_id, task_data)
                 
-                # Step 2: Check file type
-                from app.services.file_service import FileService
-                file_service = FileService()
-                is_video = file_service.is_video_file(local_file_path)
-                is_audio = file_service.is_audio_file(local_file_path)
+                # Step 2: Check file type (skip for test mode)
+                is_video = True  # Default to video for test mode
+                is_audio = False
+                if not test_mode:
+                    from app.services.file_service import FileService
+                    file_service = FileService()
+                    is_video = file_service.is_video_file(local_file_path)
+                    is_audio = file_service.is_audio_file(local_file_path)
                 
                 logger.info(f"🔍 [Download & Route] File type: {'video' if is_video else 'audio' if is_audio else 'unknown'}")
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Treating as video file for test flow")
                 
                 # Step 3: Route to appropriate queue
                 route_message = {
@@ -521,9 +569,14 @@ class MessageHandlers:
                     "created_at": datetime.now().isoformat()
                 }
                 
+                # Add test_mode flag to route message
+                if test_mode:
+                    route_message['test_mode'] = True
+                    route_message['test_message'] = task_data.get('test_message', 'Test message')
+                
                 if is_video:
                     # Route to audio_extraction_queue
-                    logger.info(f"📤 [Download & Route] Routing video file to audio_extraction_queue")
+                    logger.info(f"📤 [Download & Route] Routing {'test' if test_mode else 'video'} file to audio_extraction_queue")
                     success = self.worker.connection._safe_publish(
                         exchange='',
                         routing_key=self.worker.connection.audio_extraction_queue,
@@ -600,6 +653,7 @@ class MessageHandlers:
             try:
                 task_data = json.loads(body.decode('utf-8'))
                 task_id = task_data.get('task_id')
+                test_mode = task_data.get('test_mode', False)
                 file_path = task_data.get('file_path', 'N/A')
                 model_size = task_data.get('model_size', 'base')
                 language = task_data.get('language', 'th')
@@ -607,9 +661,30 @@ class MessageHandlers:
                 
                 logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 logger.info(f"🎬 เริ่มประมวลผล transcription task: {task_id}")
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Test message: {task_data.get('test_message', 'N/A')}")
                 logger.info(f"   File: {file_path}")
                 logger.info(f"   Model: {model_size}, Language: {language}")
                 logger.info(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                # Skip actual transcription for test mode
+                if test_mode:
+                    logger.info(f"🧪 [TEST MODE] Skipping actual transcription - test flow completed")
+                    # Update status to completed for test
+                    task_data['status'] = 'completed'
+                    task_data['progress'] = 100
+                    task_data['test_completed'] = True
+                    self.worker.json_storage.save_transcription(task_id, task_data)
+                    # Acknowledge message
+                    try:
+                        if ch and not ch.is_closed:
+                            ch.basic_ack(delivery_tag=method.delivery_tag)
+                            logger.info(f"✅ [TEST MODE] Test transcription task completed and acknowledged: {task_id}")
+                        else:
+                            logger.warning(f"⚠️ Channel is closed, cannot acknowledge test message")
+                    except Exception as ack_error:
+                        logger.error(f"❌ [TEST MODE] Failed to acknowledge test message: {ack_error}")
+                    return  # Exit early for test mode
                 
                 # ตรวจสอบว่า task นี้ถูกประมวลผลไปแล้วหรือไม่ (ป้องกัน duplicate processing)
                 existing_task = self.worker.json_storage.get_transcription(task_id)
