@@ -1,1081 +1,188 @@
-import asyncio
-import uuid
+"""
+Video Service - จัดการวิดีโอและแยกเสียง
+"""
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, Future
-import threading
 import ffmpeg
-import json
+from pathlib import Path
+from typing import Dict, Optional
+import tempfile
 import os
-import time
-import shutil
-
-from .file_service import FileService
-from .rabbitmq_service import RabbitMQService
-from .whisper_service import WhisperService
-# ไม่ใช้ JSONStorage โดยตรงแล้ว ใช้ StorageFactory แทน
-# from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
 
-# FFmpeg binary path detection
-def find_ffmpeg_binary():
-    """
-    หา FFmpeg binary path โดยตรวจสอบตามลำดับ:
-    1. Environment variable FFMPEG_BINARY
-    2. /usr/bin/ffmpeg (system package)
-    3. /usr/local/bin/ffmpeg (local installation)
-    4. /workspace/.local/bin/ffmpeg (persistent volume)
-    5. shutil.which('ffmpeg') (PATH)
-    """
-    # 1. Check environment variable
-    ffmpeg_binary = os.getenv('FFMPEG_BINARY')
-    if ffmpeg_binary and os.path.exists(ffmpeg_binary) and os.access(ffmpeg_binary, os.X_OK):
-        logger.info(f"✅ Using FFmpeg from FFMPEG_BINARY: {ffmpeg_binary}")
-        return ffmpeg_binary
-    
-    # 2. Check common system paths (prioritize system FFmpeg for compatibility)
-    common_paths = [
-        '/usr/bin/ffmpeg',  # System FFmpeg (preferred - has proper libraries)
-        '/usr/local/bin/ffmpeg',
-        '/workspace/.local/bin/ffmpeg',  # Persistent FFmpeg (may have library issues)
-    ]
-    
-    for path in common_paths:
-        if os.path.exists(path) and os.access(path, os.X_OK):
-            logger.info(f"✅ Found FFmpeg at: {path}")
-            return path
-    
-    # 3. Fallback to PATH
-    ffmpeg_path = shutil.which('ffmpeg')
-    if ffmpeg_path:
-        logger.info(f"✅ Found FFmpeg in PATH: {ffmpeg_path}")
-        return ffmpeg_path
-    
-    # 4. Not found
-    logger.warning("⚠️  FFmpeg not found in common paths or PATH")
-    return None
 
 class VideoService:
+    """Service สำหรับจัดการวิดีโอและแยกเสียง"""
+    
     def __init__(self):
-        self.file_service = FileService()
-        # ใช้ StorageFactory เพื่อเลือก storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
-        from ..utils.storage_factory import get_storage
-        self.json_storage = get_storage()  # จะได้ SQLiteStorage หรือ JSONStorage ตาม env
-        self.rabbitmq_service = RabbitMQService()
-        self.whisper_service = WhisperService()
-        self.tasks: Dict[str, Dict] = {}
-        self.segmentation_tasks = {}  # เก็บสถานะ segmentation tasks
-        
-        # หา FFmpeg binary path
-        self.ffmpeg_binary = find_ffmpeg_binary()
-        if self.ffmpeg_binary:
-            # Set FFmpeg binary path สำหรับ python-ffmpeg library
-            ffmpeg.FFMPEG_BINARY = self.ffmpeg_binary
-            logger.info(f"✅ Configured FFmpeg binary: {self.ffmpeg_binary}")
-        else:
-            logger.warning("⚠️  FFmpeg binary not found - audio extraction may fail")
-        
-        # Thread Pool สำหรับ Audio Extraction (จำกัด concurrent extractions)
-        max_workers = int(os.getenv('AUDIO_EXTRACTION_MAX_WORKERS', '3'))
-        self.extraction_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="audio-extraction")
-        logger.info(f"✅ Initialized Audio Extraction Thread Pool: max_workers={max_workers}")
-        
-        # ============================================================
-        # Process Semaphore สำหรับ FFmpeg (2-level control)
-        # ============================================================
-        # Level 1: Extraction Pool Semaphore (ควบคุม extraction tasks)
-        # Note: ไม่จำเป็นเพราะใช้ ThreadPoolExecutor อยู่แล้ว
-        # extract_pool_size = int(os.getenv('EXTRACT_POOL_SIZE', '4'))
-        # self.extraction_pool_semaphore = threading.Semaphore(extract_pool_size)
-        
-        # Level 2: FFmpeg Process Semaphore (ควบคุม FFmpeg processes)
-        # ใช้ threading.Semaphore เพราะทำงานใน thread pool
-        ffmpeg_proc_sem = int(os.getenv('FFMPEG_PROC_SEM', '3'))
-        self.ffmpeg_process_semaphore = threading.Semaphore(ffmpeg_proc_sem)
-        logger.info(f"✅ Initialized FFmpeg Process Semaphore: max_concurrent={ffmpeg_proc_sem}")
+        logger.info("✅ VideoService initialized")
     
-    async def trim_video(self, input_file: str, start_time: float, end_time: float,
-                        output_format: str = "mp4", quality: str = "medium") -> str:
-        """ตัดวิดีโอตามช่วงเวลา - ส่งไปยัง RabbitMQ queue"""
-        
-        # ส่งไปยัง RabbitMQ queue และรับ task_id
-        try:
-            task_id = self.rabbitmq_service.send_trim_task(
-                input_file=input_file,
-                start_time=start_time,
-                end_time=end_time,
-                output_format=output_format,
-                quality=quality
-            )
-            
-            task = {
-                "task_id": task_id,
-                "type": "trim",
-                "status": "pending",
-                "input_file": input_file,
-                "start_time": start_time,
-                "end_time": end_time,
-                "output_format": output_format,
-                "quality": quality,
-                "created_at": datetime.now().isoformat()
-            }
-            
-            self.tasks[task_id] = task
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"ส่ง trim task ไปยัง queue: {task_id}")
-            return task_id
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
-            # สร้าง task_id ใหม่สำหรับ error case
-            task_id = str(uuid.uuid4())
-            task = {
-                "task_id": task_id,
-                "type": "trim",
-                "status": "failed",
-                "input_file": input_file,
-                "start_time": start_time,
-                "end_time": end_time,
-                "output_format": output_format,
-                "quality": quality,
-                "created_at": datetime.now().isoformat(),
-                "error_message": str(e)
-            }
-            self.tasks[task_id] = task
-            self.json_storage.save_video_task(task_id, task)
-            return task_id
-    
-    async def merge_videos(self, input_files: List[str], output_format: str = "mp4",
-                          quality: str = "medium") -> str:
-        """รวมวิดีโอหลายไฟล์ - ส่งไปยัง RabbitMQ queue"""
-        task_id = str(uuid.uuid4())
-        
-        task = {
-            "task_id": task_id,
-            "type": "merge",
-            "status": "pending",
-            "input_files": input_files,
-            "output_format": output_format,
-            "quality": quality,
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.tasks[task_id] = task
-        
-        # บันทึกลง JSON storage
-        self.json_storage.save_video_task(task_id, task)
-        
-        # ส่งไปยัง RabbitMQ queue
-        try:
-            self.rabbitmq_service.send_merge_task(
-                input_files=input_files,
-                output_format=output_format,
-                quality=quality
-            )
-            logger.info(f"ส่ง merge task ไปยัง queue: {task_id}")
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            self.json_storage.save_video_task(task_id, task)
-        
-        return task_id
-    
-    async def convert_format(self, input_file: str, output_format: str,
-                           quality: str = "medium") -> str:
-        """แปลงรูปแบบไฟล์ - ส่งไปยัง RabbitMQ queue"""
-        task_id = str(uuid.uuid4())
-        
-        task = {
-            "task_id": task_id,
-            "type": "convert",
-            "status": "pending",
-            "input_file": input_file,
-            "output_format": output_format,
-            "quality": quality,
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.tasks[task_id] = task
-        
-        # บันทึกลง JSON storage
-        self.json_storage.save_video_task(task_id, task)
-        
-        # ส่งไปยัง RabbitMQ queue
-        try:
-            self.rabbitmq_service.send_convert_task(
-                input_file=input_file,
-                output_format=output_format,
-                quality=quality
-            )
-            logger.info(f"ส่ง convert task ไปยัง queue: {task_id}")
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            self.json_storage.save_video_task(task_id, task)
-        
-        return task_id
-    
-    async def resize_video(self, input_file: str, width: int, height: int,
-                          output_format: str = "mp4", quality: str = "medium") -> str:
-        """ปรับขนาดวิดีโอ - ส่งไปยัง RabbitMQ queue"""
-        task_id = str(uuid.uuid4())
-        
-        task = {
-            "task_id": task_id,
-            "type": "resize",
-            "status": "pending",
-            "input_file": input_file,
-            "width": width,
-            "height": height,
-            "output_format": output_format,
-            "quality": quality,
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.tasks[task_id] = task
-        
-        # บันทึกลง JSON storage
-        self.json_storage.save_video_task(task_id, task)
-        
-        # ส่งไปยัง RabbitMQ queue
-        try:
-            self.rabbitmq_service.send_resize_task(
-                input_file=input_file,
-                width=width,
-                height=height,
-                output_format=output_format,
-                quality=quality
-            )
-            logger.info(f"ส่ง resize task ไปยัง queue: {task_id}")
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการส่ง task ไปยัง queue: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            self.json_storage.save_video_task(task_id, task)
-        
-        return task_id
-    
-    async def batch_process(self, operations: List[Dict]) -> str:
-        """ประมวลผลหลายไฟล์พร้อมกัน"""
-        task_id = str(uuid.uuid4())
-        
-        task = {
-            "task_id": task_id,
-            "type": "batch",
-            "status": "pending",
-            "operations": operations,
-            "results": [],
-            "created_at": datetime.now().isoformat()
-        }
-        
-        self.tasks[task_id] = task
-        
-        # เริ่มการประมวลผลแบบ async
-        asyncio.create_task(self._process_batch(task_id))
-        
-        return task_id
-    
-    async def _process_batch(self, task_id: str):
-        """ประมวลผล batch"""
-        task = self.tasks[task_id]
-        task["status"] = "processing"
-        
-        try:
-            results = []
-            
-            for i, operation in enumerate(task["operations"]):
-                op_type = operation.get("type")
-                
-                if op_type == "trim":
-                    sub_task_id = await self.trim_video(
-                        operation["input_file"],
-                        operation["start_time"],
-                        operation["end_time"],
-                        operation.get("output_format", "mp4"),
-                        operation.get("quality", "medium")
-                    )
-                elif op_type == "convert":
-                    sub_task_id = await self.convert_format(
-                        operation["input_file"],
-                        operation["output_format"],
-                        operation.get("quality", "medium")
-                    )
-                elif op_type == "resize":
-                    sub_task_id = await self.resize_video(
-                        operation["input_file"],
-                        operation["width"],
-                        operation["height"],
-                        operation.get("output_format", "mp4"),
-                        operation.get("quality", "medium")
-                    )
-                else:
-                    raise ValueError(f"ไม่รองรับ operation type: {op_type}")
-                
-                results.append({
-                    "operation_index": i,
-                    "operation_type": op_type,
-                    "sub_task_id": sub_task_id
-                })
-            
-            task["results"] = results
-            task["status"] = "completed"
-            task["completed_at"] = datetime.now().isoformat()
-            
-            # บันทึกลง JSON storage
-            self.json_storage.save_video_task(task_id, task)
-            
-            logger.info(f"Batch processing เสร็จสิ้น: {task_id}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดใน batch processing {task_id}: {e}")
-            task["status"] = "failed"
-            task["error_message"] = str(e)
-            task["completed_at"] = datetime.now().isoformat()
-    
-    def get_task_status(self, task_id: str) -> Optional[Dict]:
-        """ดึงสถานะของ task"""
-        return self.tasks.get(task_id)
-    
-    def get_all_tasks(self) -> List[Dict]:
-        """ดึงรายการ tasks ทั้งหมด"""
-        return list(self.tasks.values())
-    
-    async def cancel_task(self, task_id: str) -> bool:
-        """ยกเลิก task"""
-        if task_id in self.tasks:
-            task = self.tasks[task_id]
-            if task["status"] in ["pending", "processing"]:
-                task["status"] = "cancelled"
-                task["completed_at"] = datetime.now().isoformat()
-                return True
-        return False
-    
-    def get_video_info(self, file_path: str) -> Dict:
-        """ดึงข้อมูลวิดีโอ"""
-        try:
-            probe = ffmpeg.probe(file_path)
-            
-            # ดึงข้อมูลวิดีโอ
-            video_info = next((stream for stream in probe['streams'] 
-                             if stream['codec_type'] == 'video'), None)
-            
-            # ดึงข้อมูลเสียง
-            audio_info = next((stream for stream in probe['streams'] 
-                             if stream['codec_type'] == 'audio'), None)
-            
-            return {
-                "file_path": file_path,
-                "duration": float(probe['format']['duration']),
-                "size": int(probe['format']['size']),
-                "format": probe['format']['format_name'],
-                "video": {
-                    "codec": video_info['codec_name'] if video_info else None,
-                    "width": int(video_info['width']) if video_info else None,
-                    "height": int(video_info['height']) if video_info else None,
-                    "fps": eval(video_info['r_frame_rate']) if video_info else None,
-                    "bitrate": int(video_info['bit_rate']) if video_info else None
-                } if video_info else None,
-                "audio": {
-                    "codec": audio_info['codec_name'] if audio_info else None,
-                    "sample_rate": int(audio_info['sample_rate']) if audio_info else None,
-                    "channels": int(audio_info['channels']) if audio_info else None,
-                    "bitrate": int(audio_info['bit_rate']) if audio_info else None
-                } if audio_info else None
-            }
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลวิดีโอ: {e}")
-            return {"error": str(e)}
-    
-    async def process_video_segmentation(
-        self, 
-        task_id: str, 
-        file_path: str, 
-        segment_duration: int = 600, 
-        overlap: int = 5,
-        language: str = "th",
-        model_size: str = "base"
-    ):
-        """ประมวลผลการแบ่งตอนวิดีโอและทำ transcription แบบ batch"""
-        try:
-            logger.info(f"เริ่มประมวลผล video segmentation: {task_id}")
-            
-            # 1. ดึงข้อมูลวิดีโอ
-            video_info = self.get_video_info(file_path)
-            if "error" in video_info:
-                self.segmentation_tasks[task_id] = {
-                    "task_id": task_id,
-                    "status": "failed",
-                    "error": video_info["error"]
-                }
-                return
-            
-            duration = video_info.get("duration", 0)
-            if duration == 0:
-                self.segmentation_tasks[task_id] = {
-                    "task_id": task_id,
-                    "status": "failed",
-                    "error": "ไม่สามารถดึงความยาววิดีโอได้"
-                }
-                return
-            
-            # 2. สร้าง segments
-            segments = self._create_segments(duration, segment_duration, overlap)
-            
-            # 3. เริ่มต้น task
-            self.segmentation_tasks[task_id] = {
-                "task_id": task_id,
-                "status": "processing",
-                "progress": 0,
-                "current_segment": 0,
-                "total_segments": len(segments),
-                "file_path": file_path,
-                "segments": [],
-                "created_at": datetime.now().isoformat(),
-                "started_at": datetime.now().isoformat()
-            }
-            
-            logger.info(f"เริ่มประมวลผล {len(segments)} segments")
-            
-            # 4. ประมวลผล segments แบบคิวต่อเนื่อง
-            completed_segments = []
-            for i, segment in enumerate(segments):
-                try:
-                    logger.info(f"ประมวลผล segment {i+1}/{len(segments)}")
-                    
-                    # อัปเดต current_segment
-                    self.segmentation_tasks[task_id]["current_segment"] = i + 1
-                    
-                    # 1. ตัด segment
-                    trim_result = await self._trim_segment_async(file_path, segment)
-                    if not trim_result:
-                        logger.error(f"ไม่สามารถตัด segment {i+1} ได้")
-                        continue
-                    
-                    segment_file_path = trim_result.get('output_path')
-                    
-                    # 2. ทำ transcription (คิวต่อเนื่อง)
-                    transcribe_result = await self._transcribe_segment_async(
-                        segment_file_path, language, model_size
-                    )
-                    if not transcribe_result:
-                        logger.error(f"ไม่สามารถทำ transcription segment {i+1} ได้")
-                        continue
-                    
-                    # 3. สร้างผลลัพธ์
-                    segment_result = {
-                        'segment_number': i + 1,
-                        'start_time': segment['start_time'],
-                        'end_time': segment['end_time'],
-                        'segment_file': segment_file_path,
-                        'transcription': transcribe_result
-                    }
-                    
-                    completed_segments.append(segment_result)
-                    
-                    # อัปเดต progress
-                    progress = int((i + 1) / len(segments) * 100)
-                    self.segmentation_tasks[task_id]["progress"] = progress
-                    self.segmentation_tasks[task_id]["segments"] = completed_segments
-                    
-                    logger.info(f"เสร็จสิ้น segment {i+1}, progress: {progress}%")
-                    
-                except Exception as e:
-                    logger.error(f"เกิดข้อผิดพลาดในการประมวลผล segment {i+1}: {str(e)}")
-                    continue
-            
-            # 5. เสร็จสิ้น
-            if len(completed_segments) == len(segments):
-                self.segmentation_tasks[task_id]["status"] = "completed"
-                self.segmentation_tasks[task_id]["completed_at"] = datetime.now().isoformat()
-                logger.info(f"เสร็จสิ้น video segmentation: {task_id}")
-            else:
-                self.segmentation_tasks[task_id]["status"] = "completed_with_errors"
-                self.segmentation_tasks[task_id]["completed_at"] = datetime.now().isoformat()
-                self.segmentation_tasks[task_id]["error"] = f"เสร็จสิ้น {len(completed_segments)}/{len(segments)} segments"
-                logger.warning(f"เสร็จสิ้น video segmentation ด้วยข้อผิดพลาด: {task_id}")
-            
-            # 6. บันทึกผลลัพธ์
-            self._save_segmentation_results(task_id)
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการประมวลผล video segmentation: {str(e)}")
-            self.segmentation_tasks[task_id] = {
-                "task_id": task_id,
-                "status": "failed",
-                "error": str(e)
-            }
-    
-    async def _trim_segment_async(self, file_path: str, segment: Dict) -> Optional[Dict]:
-        """ตัด segment แบบ async"""
-        try:
-            # ส่งงานไปยัง RabbitMQ
-            task_id = self.rabbitmq_service.send_trim_task(
-                input_file=file_path,
-                start_time=segment['start_time'],
-                end_time=segment['end_time'],
-                output_format="mp4",
-                quality="medium",
-                segment_number=segment.get('segment_number', 1)
-            )
-            
-            # รอให้เสร็จสิ้นแบบ async
-            max_wait = 300  # 5 นาที
-            wait_time = 0
-            while wait_time < max_wait:
-                await asyncio.sleep(5)
-                wait_time += 5
-                
-                # ตรวจสอบสถานะจาก storage
-                status = self.json_storage.load_video_task(task_id)
-                if status and status.get('status') == 'completed':
-                    return {
-                        'output_path': status.get('output_file'),
-                        'status': 'completed'
-                    }
-                elif status and status.get('status') == 'failed':
-                    return None
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการตัด segment: {str(e)}")
-            return None
-    
-    async def _transcribe_segment_async(self, file_path: str, language: str, model_size: str) -> Optional[Dict]:
-        """ทำ transcription แบบ async"""
-        try:
-            from .transcription_service import TranscriptionService
-            transcription_service = TranscriptionService()
-            
-            # ส่งงาน transcription
-            task_id = await transcription_service.start_transcription(
-                file_path=file_path,
-                language=language,
-                model_size=model_size
-            )
-            
-            # รอให้เสร็จสิ้นแบบ async
-            max_wait = 300  # 5 นาที
-            wait_time = 0
-            while wait_time < max_wait:
-                await asyncio.sleep(5)
-                wait_time += 5
-                
-                # ตรวจสอบสถานะ
-                status = transcription_service.get_task_status(task_id)
-                if status and status.status == 'completed':
-                    return {
-                        'task_id': task_id,
-                        'text': status.full_text,
-                        'chunks': [chunk.dict() for chunk in status.chunks] if status.chunks else [],
-                        'status': 'completed'
-                    }
-                elif status and status.status == 'failed':
-                    return None
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการทำ transcription: {str(e)}")
-            return None
-    
-    def get_segmentation_status(self, task_id: str) -> Dict:
-        """ตรวจสอบสถานะการแบ่งตอนวิดีโอ"""
-        if task_id not in self.segmentation_tasks:
-            return {
-                "task_id": task_id,
-                "status": "not_found",
-                "message": "ไม่พบ task"
-            }
-        
-        return self.segmentation_tasks[task_id]
-    
-    def _create_segments(self, duration: float, segment_duration: int, overlap: int) -> List[Dict]:
-        """สร้างรายการ segments ตาม overlap"""
-        segments = []
-        start_time = 0
-        segment_number = 1
-        
-        while start_time < duration:
-            end_time = min(start_time + segment_duration, duration)
-            
-            segment = {
-                'start_time': start_time,
-                'end_time': end_time,
-                'duration': end_time - start_time,
-                'segment_number': segment_number
-            }
-            segments.append(segment)
-            
-            # เลื่อนไปยัง segment ถัดไป (ลบ overlap)
-            start_time = end_time - overlap
-            segment_number += 1
-            
-            # ถ้าเหลือน้อยกว่า segment_duration ให้หยุด
-            if start_time + segment_duration >= duration:
-                # สร้าง segment สุดท้าย
-                final_end = min(start_time + segment_duration, duration)
-                if final_end > start_time:  # ตรวจสอบว่ามีเนื้อหาเหลือ
-                    final_segment = {
-                        'start_time': start_time,
-                        'end_time': final_end,
-                        'duration': final_end - start_time,
-                        'segment_number': segment_number
-                    }
-                    segments.append(final_segment)
-                break
-        
-        logger.info(f"สร้าง {len(segments)} segments จากวิดีโอความยาว {duration} วินาที")
-        for i, seg in enumerate(segments):
-            logger.info(f"Segment {i+1}: {seg['start_time']:.1f}s - {seg['end_time']:.1f}s (ความยาว: {seg['duration']:.1f}s)")
-        
-        return segments
-    
-    def _save_segmentation_results(self, task_id: str):
-        """บันทึกผลลัพธ์การแบ่งตอน"""
-        try:
-            if task_id not in self.segmentation_tasks:
-                return
-            
-            task_data = self.segmentation_tasks[task_id]
-            
-            # สร้างไฟล์ผลลัพธ์
-            output_file = f"storage/segmentation_{task_id}.json"
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(task_data, f, indent=2, ensure_ascii=False)
-            
-            # สร้างไฟล์ข้อความรวม
-            text_file = f"storage/transcription_{task_id}.txt"
-            with open(text_file, 'w', encoding='utf-8') as f:
-                for segment in task_data.get('segments', []):
-                    transcription = segment.get('transcription', {})
-                    text = transcription.get('text', '')
-                    start_time = segment.get('start_time', 0)
-                    end_time = segment.get('end_time', 0)
-                    f.write(f"[{start_time:.1f}s-{end_time:.1f}s] {text}\n")
-            
-            logger.info(f"บันทึกผลลัพธ์ segmentation: {output_file}")
-            
-        except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการบันทึกผลลัพธ์: {str(e)}")
-
-    def extract_audio(self, video_path: str, output_path: str = None, task_id: str = None) -> str:
+    def extract_audio(self, video_path: str, task_id: Optional[str] = None) -> str:
         """
-        Extract audio ทั้งไฟล์จาก video (ไม่ chunk)
-        ใช้ Thread Pool เพื่อจำกัด concurrent extractions
+        แยกเสียงจากวิดีโอ
         
         Args:
-            video_path: Path ไปยังไฟล์ video
-            output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
-            task_id: Task ID สำหรับการบันทึก metrics (optional)
+            video_path: Path ไปยังไฟล์วิดีโอ
+            task_id: Task ID (optional, สำหรับ naming output file)
             
         Returns:
-            Path ไปยังไฟล์ audio ที่ extract แล้ว
+            str: Path ไปยังไฟล์ audio ที่แยกแล้ว (WAV format)
         """
-        # บันทึกเวลาต้นเริ่มสำหรับการวิเคราะห์ผล
-        extraction_start_time = time.time()
-        
-        logger.info(f"🎬 [Audio Extraction] เริ่ม extract audio จาก video: {video_path}")
-        if task_id:
-            logger.info(f"   Task ID: {task_id}")
-        
-        # Submit to thread pool (จำกัด concurrent extractions)
-        future = self.extraction_executor.submit(
-            self._extract_audio_sync, video_path, output_path, task_id
-        )
-        
-        # รอให้เสร็จสิ้น
         try:
-            audio_path = future.result()
+            video_file = Path(video_path)
+            if not video_file.exists():
+                raise FileNotFoundError(f"Video file not found: {video_path}")
             
-            # บันทึกเวลาที่ใช้ในการ extract
-            extraction_time = time.time() - extraction_start_time
-            logger.info(f"✅ [Audio Extraction] Extract audio สำเร็จ: {audio_path}")
-            logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
-            
-            # บันทึก metrics สำหรับการวิเคราะห์ผล (ถ้ามี task_id)
+            # สร้างชื่อไฟล์ output
             if task_id:
-                self._record_extraction_metrics(task_id, video_path, audio_path, extraction_time, success=True)
-            
-            return audio_path
-            
-        except Exception as e:
-            extraction_time = time.time() - extraction_start_time
-            logger.error(f"❌ [Audio Extraction] Error extracting audio: {e}")
-            logger.error(f"   ⏱️  ใช้เวลา (ก่อนเกิด error): {extraction_time:.2f} วินาที")
-            
-            # บันทึก metrics สำหรับการวิเคราะห์ผล (ถ้ามี task_id)
-            if task_id:
-                self._record_extraction_metrics(task_id, video_path, None, extraction_time, success=False, error=str(e))
-            
-            raise
-    
-    def _extract_audio_sync(self, video_path: str, output_path: str = None, task_id: str = None) -> str:
-        """
-        Extract audio แบบ synchronous (ทำงานใน thread pool)
-        
-        ใช้ 2-level semaphore control:
-        - Level 1: extraction_pool_semaphore (ควบคุม extraction tasks)
-        - Level 2: ffmpeg_process_semaphore (ควบคุม FFmpeg processes)
-        
-        Args:
-            video_path: Path ไปยังไฟล์ video
-            output_path: Path สำหรับไฟล์ audio output (ถ้าไม่ระบุจะสร้างอัตโนมัติ)
-            task_id: Task ID สำหรับ logging (optional)
-            
-        Returns:
-            Path ไปยังไฟล์ audio ที่ extract แล้ว
-        """
-        video_path_obj = Path(video_path)
-        if not video_path_obj.exists():
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-        
-        # สร้าง output path ถ้าไม่ระบุ
-        if output_path is None:
-            output_dir = video_path_obj.parent / "temp" / f"audio_{int(time.time())}"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = str(output_dir / f"{video_path_obj.stem}_audio.wav")
-        else:
-            output_path_obj = Path(output_path)
-            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"   [Audio Extraction Thread] กำลัง extract audio: {video_path}")
-        logger.info(f"   Output: {output_path}")
-        
-        # ============================================================
-        # Process Semaphore Control สำหรับ FFmpeg
-        # ============================================================
-        # ใช้ threading.Semaphore เพื่อควบคุมจำนวน FFmpeg processes ที่ทำงานพร้อมกัน
-        # ช่วยป้องกัน I/O/CPU spike และควบคุม resource usage
-        
-        try:
-            # Acquire semaphore (blocking until available)
-            logger.debug(f"   [FFmpeg Process Semaphore] Waiting to acquire...")
-            self.ffmpeg_process_semaphore.acquire()
-            logger.debug(f"   [FFmpeg Process Semaphore] Acquired - Running FFmpeg for: {video_path}")
-            
-            try:
-                # Extract audio ทั้งไฟล์ (48kHz mono WAV)
-                # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น
-                # Whisper จะ downsample เองตามที่ต้องการ (ดีกว่า FFmpeg downsample)
-                # ใช้ FFmpeg binary path ที่หาได้ (ไม่พึ่งพา PATH)
-                ffmpeg_binary = self.ffmpeg_binary or '/usr/bin/ffmpeg'
-                
-                # ตั้งค่า FFmpeg binary สำหรับ python-ffmpeg library
-                # python-ffmpeg ใช้ get_ffmpeg_executable() ซึ่งจะหา 'ffmpeg' จาก PATH
-                # แต่เราต้องการใช้ absolute path แทน
-                import subprocess
-                import shutil
-                
-                # ใช้ subprocess โดยตรงแทน python-ffmpeg library เพื่อใช้ absolute path
-                ffmpeg_cmd = [
-                    ffmpeg_binary,
-                    '-i', video_path,
-                    '-acodec', 'pcm_s16le',
-                    '-ac', '1',  # Mono
-                    '-ar', '48000',  # 48kHz
-                    '-y',  # Overwrite output
-                    output_path
-                ]
-                
-                logger.debug(f"   [FFmpeg Command] {' '.join(ffmpeg_cmd)}")
-                result = subprocess.run(
-                    ffmpeg_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=600  # 10 minutes timeout
-                )
-                
-                # Check if output file was created successfully
-                output_exists = output_path and Path(output_path).exists()
-                output_valid = False
-                if output_exists:
-                    file_size = Path(output_path).stat().st_size
-                    if file_size > 0:
-                        output_valid = True
-                        logger.debug(f"   [Audio Extraction Thread] Output file created: {output_path} ({file_size} bytes)")
-                
-                if result.returncode != 0:
-                    # Parse error message properly
-                    error_msg = result.stderr or result.stdout or "Unknown error"
-                    
-                    # Filter out version info, configuration details, and metadata
-                    error_lines = error_msg.split('\n')
-                    filtered_errors = []
-                    in_metadata = False
-                    
-                    for line in error_lines:
-                        line_lower = line.lower()
-                        
-                        # Skip version info and configuration lines
-                        if any(keyword in line_lower for keyword in ['ffmpeg version', 'copyright', 'built with', 'configuration:', 'lib', '--prefix', '--extra-version', '--tool']):
-                            continue
-                        
-                        # Skip metadata section (Input #0, Metadata:, major_brand, etc.)
-                        if 'input #' in line_lower or 'metadata:' in line_lower:
-                            in_metadata = True
-                            continue
-                        if in_metadata and (line.strip().startswith(' ') or ':' in line):
-                            continue
-                        if in_metadata and not line.strip():
-                            in_metadata = False
-                            continue
-                        
-                        # Skip empty lines at the start
-                        if not line.strip() and not filtered_errors:
-                            continue
-                        
-                        # Skip duration/info lines (these are not errors)
-                        if any(keyword in line_lower for keyword in ['duration:', 'start:', 'bitrate:', 'stream #']):
-                            continue
-                        
-                        # Collect actual error messages (usually contain "error", "failed", "cannot", etc.)
-                        if line.strip():
-                            # If it looks like an error message
-                            if any(keyword in line_lower for keyword in ['error', 'failed', 'cannot', 'unable', 'invalid', 'missing', 'not found']):
-                                filtered_errors.append(line)
-                            # Or if it's not metadata/info, it might be an error
-                            elif not in_metadata and not any(keyword in line_lower for keyword in ['input', 'output', 'stream', 'metadata', 'duration']):
-                                filtered_errors.append(line)
-                    
-                    # Use filtered error or fallback to original
-                    final_error = '\n'.join(filtered_errors[:10]) if filtered_errors else error_msg[:500]
-                    
-                    # If output file is valid, it might be a false positive error
-                    if output_valid:
-                        logger.warning(f"   [Audio Extraction Thread] ⚠️  FFmpeg returned code {result.returncode} but output file is valid")
-                        logger.warning(f"   Error message: {final_error[:200]}")
-                        logger.info(f"   [Audio Extraction Thread] ✅ Using output file despite error code")
-                        return output_path
-                    
-                    logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error (returncode={result.returncode}):")
-                    logger.error(f"   {final_error}")
-                    
-                    raise Exception(f"FFmpeg failed (code={result.returncode}): {final_error[:300]}")
-                
-                # Success case
-                if not output_valid:
-                    raise Exception(f"FFmpeg succeeded but output file is missing or empty: {output_path}")
-                
-                # Alternative: ใช้ python-ffmpeg library ถ้า FFMPEG_BINARY ถูกตั้งค่าแล้ว
-                # แต่เนื่องจาก library ไม่รองรับ FFMPEG_BINARY attribute
-                # จึงใช้ subprocess โดยตรงแทน
-                
-                logger.info(f"   [Audio Extraction Thread] Extract audio สำเร็จ: {output_path}")
-                return output_path
-            finally:
-                # Always release semaphore
-                self.ffmpeg_process_semaphore.release()
-                logger.debug(f"   [FFmpeg Process Semaphore] Released")
-            
-        except ffmpeg.Error as e:
-            error_message = e.stderr.decode() if e.stderr else str(e)
-            logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error: {error_message}")
-            raise Exception(f"ไม่สามารถ extract audio ได้: {error_message}")
-        except Exception as e:
-            logger.error(f"   [Audio Extraction Thread] ❌ Error extracting audio: {e}")
-            raise
-    
-    def _record_extraction_metrics(self, task_id: str, video_path: str, audio_path: Optional[str], 
-                                   extraction_time: float, success: bool, error: str = None):
-        """
-        บันทึก metrics สำหรับการวิเคราะห์ผล Audio Extraction แยกจาก Transcription
-        
-        Args:
-            task_id: Task ID
-            video_path: Path ของไฟล์ video
-            audio_path: Path ของไฟล์ audio ที่ extract แล้ว (None ถ้าไม่สำเร็จ)
-            extraction_time: เวลาที่ใช้ในการ extract (วินาที)
-            success: True ถ้าสำเร็จ, False ถ้าไม่สำเร็จ
-            error: ข้อความ error (ถ้ามี)
-        """
-        try:
-            metrics_dir = Path("storage/metrics")
-            metrics_dir.mkdir(parents=True, exist_ok=True)
-            
-            metrics_file = metrics_dir / f"audio_extraction_{task_id}.json"
-            
-            video_size = Path(video_path).stat().st_size if Path(video_path).exists() else None
-            audio_size = Path(audio_path).stat().st_size if audio_path and Path(audio_path).exists() else None
-            
-            metrics = {
-                "task_id": task_id,
-                "type": "audio_extraction",
-                "video_path": video_path,
-                "video_size_bytes": video_size,
-                "audio_path": audio_path,
-                "audio_size_bytes": audio_size,
-                "extraction_time_seconds": extraction_time,
-                "success": success,
-                "error": error,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            with open(metrics_file, 'w', encoding='utf-8') as f:
-                json.dump(metrics, f, indent=2, ensure_ascii=False)
-            
-            logger.debug(f"📊 [Audio Extraction Metrics] บันทึก metrics: {metrics_file}")
-            
-        except Exception as e:
-            logger.warning(f"⚠️  ไม่สามารถบันทึก extraction metrics ได้: {e}")
-    
-    def extract_audio_from_video(self, video_path: str, output_path: str = None, 
-                                audio_format: str = "wav", sample_rate: int = 48000) -> str:
-        """แปลงวิดีโอเป็นไฟล์เสียง"""
-        
-        try:
-            video_path = Path(video_path)
-            if not video_path.exists():
-                raise FileNotFoundError(f"ไม่พบไฟล์วิดีโอ: {video_path}")
-            
-            # สร้าง output path ถ้าไม่ระบุ
-            if output_path is None:
-                output_path = video_path.parent / f"{video_path.stem}_audio.{audio_format}"
+                output_filename = f"audio_{task_id}.wav"
             else:
-                output_path = Path(output_path)
+                output_filename = f"{video_file.stem}.wav"
             
-            # สร้างโฟลเดอร์ถ้ายังไม่มี
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            # ใช้ temp directory หรือ uploads directory
+            output_dir = Path("uploads")
+            output_dir.mkdir(exist_ok=True)
+            output_path = output_dir / output_filename
             
-            logger.info(f"เริ่มแปลงวิดีโอเป็นเสียง: {video_path} → {output_path}")
+            logger.info(f"🎬 Extracting audio from: {video_path}")
+            logger.info(f"   Output: {output_path}")
             
-            # ใช้ ffmpeg แปลงวิดีโอเป็นเสียงใน format ที่ Whisper รองรับ
-            # ใช้ 48kHz แทน 16kHz เพื่อให้คุณภาพดีขึ้น (Whisper จะ downsample เอง)
-            stream = ffmpeg.input(str(video_path))
-            stream = ffmpeg.output(stream, str(output_path), 
-                                 acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
-                                 ar=sample_rate,      # 48kHz sample rate (เพิ่มคุณภาพ)
-                                 ac=1)                # Mono audio (Whisper รองรับ)
+            # ใช้ FFmpeg แยกเสียง
+            stream = ffmpeg.input(str(video_file))
+            audio = ffmpeg.output(
+                stream,
+                str(output_path),
+                acodec='pcm_s16le',  # WAV format
+                ac=1,  # Mono
+                ar='16000'  # 16kHz sample rate (เหมาะสำหรับ Whisper)
+            )
             
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
+            ffmpeg.run(audio, overwrite_output=True, quiet=True)
             
-            logger.info(f"แปลงวิดีโอเป็นเสียงสำเร็จ: {output_path}")
+            logger.info(f"✅ Audio extracted: {output_path}")
             return str(output_path)
             
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการแปลงวิดีโอเป็นเสียง: {e}")
+            logger.error(f"❌ Error extracting audio: {e}", exc_info=True)
             raise
-
-    def extract_audio_chunks(self, video_path: str, chunk_duration: int = 30, 
-                           overlap: int = 5, audio_format: str = "wav", 
-                           sample_rate: int = 48000) -> List[Dict[str, Any]]:
-        """แปลงวิดีโอเป็น audio chunks พร้อม metadata (start_time, end_time)"""
+    
+    def get_video_info(self, video_path: str) -> Dict:
+        """
+        ดึงข้อมูลวิดีโอ
         
+        Args:
+            video_path: Path ไปยังไฟล์วิดีโอ
+            
+        Returns:
+            Dict: ข้อมูลวิดีโอ (duration, width, height, etc.)
+        """
         try:
-            video_path = Path(video_path)
-            if not video_path.exists():
-                raise FileNotFoundError(f"ไม่พบไฟล์วิดีโอ: {video_path}")
+            video_file = Path(video_path)
+            if not video_file.exists():
+                raise FileNotFoundError(f"Video file not found: {video_path}")
             
-            # ดึงข้อมูลวิดีโอ
-            probe = ffmpeg.probe(str(video_path))
-            duration = float(probe['format']['duration'])
+            # ใช้ FFprobe ดึงข้อมูล
+            probe = ffmpeg.probe(str(video_file))
             
-            logger.info(f"เริ่มแปลงวิดีโอเป็น audio chunks: {video_path} (duration: {duration}s)")
+            # หา video stream
+            video_stream = next(
+                (stream for stream in probe['streams'] if stream['codec_type'] == 'video'),
+                None
+            )
             
-            chunk_metadata = []
-            # สร้าง temp directory แยกตาม task_id หรือใช้ timestamp
-            task_folder = f"task_{int(time.time())}_{video_path.stem}"
-            temp_dir = Path("temp") / task_folder
-            temp_dir.mkdir(parents=True, exist_ok=True)
+            # หา audio stream
+            audio_stream = next(
+                (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
+                None
+            )
             
-            # สร้าง chunks พร้อม overlap
-            start_time = 0
-            i = 0
-            # Safety limit: คำนวณ max chunks ที่เป็นไปได้ (เพิ่ม buffer 10 chunks)
-            max_chunks = int(duration / max(chunk_duration - overlap, 1)) + 10 if duration > 0 else 100
-            previous_start_time = -1  # Track previous start_time เพื่อป้องกัน infinite loop
+            # ดึงข้อมูล
+            info = {
+                "duration": float(probe['format'].get('duration', 0)),
+                "size": int(probe['format'].get('size', 0)),
+                "bitrate": int(probe['format'].get('bit_rate', 0)),
+                "format": probe['format'].get('format_name', 'unknown')
+            }
             
-            while start_time < duration and i < max_chunks:
-                # Safety check: ถ้า start_time ไม่เพิ่มขึ้น → break (ป้องกัน infinite loop)
-                if start_time <= previous_start_time:
-                    logger.warning(f"⚠️ start_time ไม่เพิ่มขึ้น ({start_time} <= {previous_start_time}), หยุด loop เพื่อป้องกัน infinite loop")
-                    break
-                
-                previous_start_time = start_time
-                end_time = min(start_time + chunk_duration, duration)
-                
-                # Safety check: ถ้า end_time <= start_time → break
-                if end_time <= start_time:
-                    logger.warning(f"⚠️ end_time ({end_time}) <= start_time ({start_time}), หยุด loop")
-                    break
-                
-                # สร้างชื่อไฟล์ chunk
-                chunk_filename = f"chunk_{i}_{video_path.stem}_audio.{audio_format}"
-                chunk_path = temp_dir / chunk_filename
-                
-                logger.info(f"สร้าง audio chunk {i+1}: {start_time}s - {end_time}s (duration: {end_time-start_time:.2f}s)")
-                logger.info(f"ไฟล์ chunk path: {chunk_path}")
-                
-                # ใช้ ffmpeg ตัด audio chunk และแปลงเป็น format ที่ Whisper รองรับ
-                stream = ffmpeg.input(str(video_path), ss=start_time, t=end_time-start_time)
-                stream = ffmpeg.output(stream, str(chunk_path),
-                                     acodec='pcm_s16le',  # WAV PCM 16-bit (Whisper รองรับ)
-                                     ar=sample_rate,      # 48kHz sample rate (เพิ่มจาก 16kHz เพื่อคุณภาพดีขึ้น)
-                                     ac=1)                # Mono audio (Whisper รองรับ)
-                
-                ffmpeg.run(stream, overwrite_output=True, quiet=True)
-                
-                # ตรวจสอบว่าไฟล์ถูกสร้างหรือไม่ และตรวจสอบ duration จริง
-                actual_duration = end_time - start_time
-                if chunk_path.exists():
-                    # ตรวจสอบ duration จริงของไฟล์ chunk (ถ้าเป็นไปได้)
-                    try:
-                        chunk_probe = ffmpeg.probe(str(chunk_path))
-                        actual_duration = float(chunk_probe['format'].get('duration', actual_duration))
-                        logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes, duration: {actual_duration:.2f}s)")
-                    except Exception as probe_error:
-                        logger.debug(f"ไม่สามารถ probe chunk duration ได้: {probe_error}, ใช้ calculated duration: {actual_duration:.2f}s")
-                        logger.info(f"ไฟล์ chunk {i+1} ถูกสร้างสำเร็จ: {chunk_path} (ขนาด: {chunk_path.stat().st_size} bytes)")
-                else:
-                    logger.error(f"ไฟล์ chunk {i+1} ไม่ถูกสร้าง: {chunk_path}")
-                    continue
-                
-                # เก็บ metadata พร้อม timestamp จริง
-                chunk_metadata.append({
-                    "path": str(chunk_path),
-                    "start_time": start_time,
-                    "end_time": start_time + actual_duration,  # ใช้ actual_duration แทน end_time เพื่อความแม่นยำ
-                    "chunk_index": i,
-                    "duration": actual_duration
+            if video_stream:
+                info.update({
+                    "width": int(video_stream.get('width', 0)),
+                    "height": int(video_stream.get('height', 0)),
+                    "video_codec": video_stream.get('codec_name', 'unknown'),
+                    "fps": eval(video_stream.get('r_frame_rate', '0/1'))
                 })
-                
-                # เลื่อนไปยัง chunk ถัดไป (ลบ overlap)
-                new_start_time = end_time - overlap
-                
-                # Safety check: ถ้า new_start_time <= start_time → break (ป้องกัน infinite loop)
-                if new_start_time <= start_time:
-                    logger.warning(f"⚠️ new_start_time ({new_start_time}) <= start_time ({start_time}), หยุด loop เพื่อป้องกัน infinite loop")
-                    break
-                
-                start_time = new_start_time
-                i += 1
-                
-                # หยุดถ้าเหลือน้อยกว่า chunk_duration
-                if start_time + chunk_duration >= duration:
-                    break
             
-            # Safety check: ถ้าเกิน max_chunks → log warning
-            if i >= max_chunks:
-                logger.warning(f"⚠️ ถึง max_chunks limit ({max_chunks}), หยุด loop (duration: {duration}s, chunk_duration: {chunk_duration}s, overlap: {overlap}s)")
+            if audio_stream:
+                info.update({
+                    "audio_codec": audio_stream.get('codec_name', 'unknown'),
+                    "sample_rate": int(audio_stream.get('sample_rate', 0)),
+                    "channels": int(audio_stream.get('channels', 0))
+                })
             
-            logger.info(f"สร้าง audio chunks สำเร็จ: {len(chunk_metadata)} chunks")
-            # Log summary
-            for chunk_info in chunk_metadata[:3]:  # Log แค่ 3 chunks แรก
-                logger.info(f"   Chunk {chunk_info['chunk_index']+1}: {chunk_info['start_time']:.2f}s - {chunk_info['end_time']:.2f}s")
-            
-            return chunk_metadata
+            return info
             
         except Exception as e:
-            logger.error(f"เกิดข้อผิดพลาดในการสร้าง audio chunks: {e}")
-            raise 
+            logger.error(f"❌ Error getting video info: {e}", exc_info=True)
+            return {
+                "error": str(e),
+                "duration": 0,
+                "size": 0
+            }
+    
+    def create_chunks(self, audio_path: str, chunk_duration: int = 30) -> list:
+        """
+        แบ่งไฟล์ audio เป็น chunks
+        
+        Args:
+            audio_path: Path ไปยังไฟล์ audio
+            chunk_duration: ความยาวของแต่ละ chunk (วินาที)
+            
+        Returns:
+            list: List ของ chunk paths
+        """
+        try:
+            audio_file = Path(audio_path)
+            if not audio_file.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+            
+            # ดึงข้อมูล audio เพื่อหาความยาว
+            probe = ffmpeg.probe(str(audio_file))
+            duration = float(probe['format'].get('duration', 0))
+            
+            # คำนวณจำนวน chunks
+            num_chunks = int(duration / chunk_duration) + (1 if duration % chunk_duration > 0 else 0)
+            
+            logger.info(f"📦 Creating {num_chunks} chunks from {audio_path} (duration: {duration:.2f}s, chunk_duration: {chunk_duration}s)")
+            
+            chunks = []
+            output_dir = Path("temp") / "chunks"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            for i in range(num_chunks):
+                start_time = i * chunk_duration
+                chunk_path = output_dir / f"{audio_file.stem}_chunk_{i:04d}.wav"
+                
+                # ใช้ FFmpeg ตัด chunk
+                stream = ffmpeg.input(
+                    str(audio_file),
+                    ss=start_time,
+                    t=chunk_duration
+                )
+                audio = ffmpeg.output(
+                    stream,
+                    str(chunk_path),
+                    acodec='pcm_s16le',
+                    ac=1,
+                    ar='16000'
+                )
+                
+                ffmpeg.run(audio, overwrite_output=True, quiet=True)
+                chunks.append(str(chunk_path))
+            
+            logger.info(f"✅ Created {len(chunks)} chunks")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating chunks: {e}", exc_info=True)
+            raise
+

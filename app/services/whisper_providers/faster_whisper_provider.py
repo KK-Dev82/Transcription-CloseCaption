@@ -1,24 +1,12 @@
 """
-Faster Whisper Provider (CTranslate2)
-ใช้ faster-whisper library ที่เร็วกว่า openai-whisper 2-4x
-
-Features:
-- รองรับ batch_size สำหรับ GPU
-- เร็วกว่า openai-whisper 2-4x
-- ใช้ memory น้อยกว่า
-- GPU utilization สูง (90-100%)
+Faster Whisper Provider
+ใช้ faster-whisper library (CTranslate2 backend) สำหรับ GPU acceleration
 """
-
 import os
-import time
 import logging
-import threading
 import asyncio
-import gc
-import contextlib
-from pathlib import Path
 from typing import Dict, Optional
-import torch
+from pathlib import Path
 
 from .base_provider import WhisperProvider, TranscriptionResult
 
@@ -32,640 +20,140 @@ except ImportError:
     FASTER_WHISPER_AVAILABLE = False
     logger.warning("faster-whisper not installed. Please install: pip install faster-whisper")
 
-# Global model cache with thread-safe loading
-_model_cache = {}
-_model_locks = {}
-_cache_lock = threading.Lock()
-
-# GPU Concurrency Semaphore (ใช้ threading.Semaphore เพื่อหลีกเลี่ยง event loop binding)
-# เริ่มที่ 1 เพื่อป้องกัน CUDA OOM
-_gpu_thread_semaphore = None
-_gpu_semaphore_lock = threading.Lock()
-
-
-@contextlib.asynccontextmanager
-async def _async_semaphore_wrapper(thread_semaphore: threading.Semaphore):
-    """
-    Async context manager wrapper สำหรับ threading.Semaphore
-    เพื่อให้สามารถใช้ async with ได้ (ไม่ผูกกับ class หรือ event loop)
-    """
-    # Acquire ใน thread pool เพื่อไม่ block event loop
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, thread_semaphore.acquire)
-    try:
-        yield
-    finally:
-        # Release ใน thread pool
-        await loop.run_in_executor(None, thread_semaphore.release)
-
 
 class FasterWhisperProvider(WhisperProvider):
     """
-    Faster Whisper Provider using faster-whisper (CTranslate2)
-    
-    Environment Variables:
-    - WHISPER_MODEL: Default model (default: medium)
-    - WHISPER_DEVICE: Device to use ("cuda", "cpu", "auto") (default: auto)
-    - WHISPER_COMPUTE_TYPE: Compute type ("float16", "float32", "int8") (default: float16 for CUDA)
-    - WHISPER_BATCH_SIZE: Batch size for GPU (default: 16)
-    - WHISPER_DOWNLOAD_ROOT: Directory to download models (default: ~/.cache/huggingface)
-    
-    Model Support:
-    - tiny, base, small, medium, large, large-v2, large-v3
+    Faster Whisper Provider
+    ใช้ faster-whisper (CTranslate2) สำหรับ GPU acceleration
     """
-    
-    # Supported models
-    SUPPORTED_MODELS = [
-        "tiny", "base", "small", "medium", "large", 
-        "large-v2", "large-v3"
-    ]
     
     def __init__(self, config: Dict = None):
         super().__init__(config)
         self.provider_name = "faster-whisper"
         
         if not FASTER_WHISPER_AVAILABLE:
-            raise ImportError("faster-whisper is not installed. Please install: pip install faster-whisper")
+            raise ImportError("faster-whisper not installed. Please install: pip install faster-whisper")
         
-        # Config
-        self.default_model = (config or {}).get('model') or os.getenv('WHISPER_MODEL', 'medium')
-        self.device = (config or {}).get('device') or os.getenv('WHISPER_DEVICE', 'auto')
-        self.compute_type = (config or {}).get('compute_type') or os.getenv('WHISPER_COMPUTE_TYPE', None)
-        self.batch_size = int((config or {}).get('batch_size') or os.getenv('WHISPER_BATCH_SIZE', '16'))
-        self.download_root = (config or {}).get('download_root') or os.getenv('WHISPER_DOWNLOAD_ROOT', None)
+        # Configuration
+        self.device = os.getenv('WHISPER_DEVICE', 'cuda')
+        self.compute_type = os.getenv('WHISPER_COMPUTE_TYPE', None)
         
-        # Auto-detect device and compute type
-        if self.device == 'auto':
-            if torch.cuda.is_available():
-                self.device = 'cuda'
-                if self.compute_type is None:
-                    self.compute_type = 'float16'  # Default for CUDA
-                logger.info(f"[Faster Whisper] Using CUDA device: {torch.cuda.get_device_name(0)}")
+        # Auto-detect compute_type based on device
+        if self.compute_type is None:
+            if self.device == 'cuda':
+                self.compute_type = 'float16'
             else:
-                self.device = 'cpu'
-                if self.compute_type is None:
-                    self.compute_type = 'float32'  # Default for CPU
-                logger.info(f"[Faster Whisper] Using CPU device")
+                self.compute_type = 'float32'
         
-        # Enable TF32 and cuDNN optimizations for RTX 4080 SUPER
-        # แต่ถ้ามี cuDNN compatibility issues ให้ disable
-        if self.device == 'cuda':
-            cudnn_disabled = os.getenv('CUDNN_DISABLE', '0') == '1'
-            if not cudnn_disabled:
-                try:
-                    torch.backends.cudnn.benchmark = True
-                    torch.backends.cuda.matmul.allow_tf32 = True
-                    torch.backends.cudnn.allow_tf32 = True
-                    logger.info(f"[Faster Whisper] ⚡ Enabled TF32/cuDNN optimizations")
-                except Exception as e:
-                    logger.warning(f"[Faster Whisper] ⚠️  Failed to enable cuDNN optimizations: {e}. Continuing without cuDNN.")
-            else:
-                logger.info(f"[Faster Whisper] ⚠️  cuDNN optimizations disabled via CUDNN_DISABLE=1")
+        # Check for CUDNN_DISABLE
+        self.cudnn_disable = os.getenv('CUDNN_DISABLE', '0') == '1'
         
-        # Load model (lazy loading - load when first transcribe)
-        self._model = None
-        self._model_name = None
+        # Model cache (singleton pattern)
+        self._model_cache = {}
+        self._model_lock = asyncio.Lock()
         
-        logger.info(f"[Faster Whisper] Initialized with device: {self.device}, compute_type: {self.compute_type}, batch_size: {self.batch_size}, default model: {self.default_model}")
-    
-    def _load_model(self, model_size: str = None):
-        """
-        Load Faster Whisper model (lazy loading with thread-safe singleton pattern)
-        """
-        model_name = model_size or self.default_model
-        
-        if model_name not in self.SUPPORTED_MODELS:
-            logger.warning(f"[Faster Whisper] Unknown model '{model_name}', using 'medium'")
-            model_name = "medium"
-        
-        cache_key = f"{model_name}_{self.device}_{self.compute_type}"
-        
-        # ตรวจสอบว่า model ถูก load ใน cache หรือยัง
-        with _cache_lock:
-            if cache_key in _model_cache:
-                logger.info(f"[Faster Whisper] Using cached model: {model_name} on {self.device}")
-                self._model = _model_cache[cache_key]
-                self._model_name = model_name
-                return self._model
-            
-            # สร้าง lock สำหรับ model นี้ (ถ้ายังไม่มี)
-            if cache_key not in _model_locks:
-                _model_locks[cache_key] = threading.Lock()
-        
-        # ใช้ lock เพื่อให้ load model ทีละตัว (ป้องกัน CUDA OOM)
-        with _model_locks[cache_key]:
-            # ตรวจสอบอีกครั้งหลังจากได้ lock (double-check pattern)
-            with _cache_lock:
-                if cache_key in _model_cache:
-                    logger.info(f"[Faster Whisper] Model was loaded by another thread: {model_name}")
-                    self._model = _model_cache[cache_key]
-                    self._model_name = model_name
-                    return self._model
-            
-            logger.info(f"[Faster Whisper] Loading model: {model_name} on {self.device} (compute_type: {self.compute_type})")
-            start_time = time.time()
-            
-            try:
-                # Load model with download_root if specified
-                # เพิ่ม num_workers=1 และ cpu_threads=4 เพื่อลด concurrency/deadlock issues
-                # เพิ่ม device_index=0 เพื่อระบุ GPU device
-                model_kwargs = {
-                    "device": self.device,
-                    "compute_type": self.compute_type,
-                    "num_workers": 1,  # ลด concurrency เพื่อหลีกเลี่ยง deadlock
-                    "cpu_threads": 4,  # จำกัด CPU threads
-                }
-                if self.device == "cuda":
-                    model_kwargs["device_index"] = 0  # ระบุ GPU device
-                if self.download_root:
-                    model_kwargs["download_root"] = self.download_root
-                
-                model = WhisperModel(model_name, **model_kwargs)
-                
-                # เก็บใน cache
-                with _cache_lock:
-                    _model_cache[cache_key] = model
-                
-                self._model = model
-                self._model_name = model_name
-                load_time = time.time() - start_time
-                logger.info(f"[Faster Whisper] Model loaded in {load_time:.2f}s and cached")
-                
-                return self._model
-            except Exception as e:
-                logger.error(f"[Faster Whisper] Failed to load model {model_name}: {e}")
-                raise
+        logger.info(f"✅ FasterWhisperProvider initialized (device: {self.device}, compute_type: {self.compute_type})")
     
     async def transcribe(
-        self, 
-        audio_path: str, 
+        self,
+        audio_path: str,
         language: str = "th",
         model_size: str = None,
         initial_prompt: Optional[str] = None
     ) -> TranscriptionResult:
         """
-        Transcribe audio using faster-whisper with retry logic and GPU concurrency control
-        
-        Note: 
-        - ถ้า GPU mode timeout จะ retry ก่อน fallback ไป CPU mode
-        - Max retry attempts: 3 (configurable via GPU_TRANSCRIPTION_MAX_RETRIES)
-        - GPU concurrency controlled by semaphore (default: 1)
+        Transcribe audio file using faster-whisper
         
         Args:
-            audio_path: Path ไปยังไฟล์ audio
-            language: ภาษา ("th", "en", "auto")
-            model_size: ขนาด model (tiny, base, small, medium, large, large-v2, large-v3)
+            audio_path: Path to audio file
+            language: Language code (th, en, auto)
+            model_size: Model size (tiny, base, small, medium, large)
+            initial_prompt: Initial prompt for better accuracy
             
         Returns:
             TranscriptionResult
         """
-        # ใช้ GPU Concurrency Semaphore สำหรับ CUDA device
-        if self.device == "cuda":
-            # ใช้ threading.Semaphore เพื่อหลีกเลี่ยงปัญหา event loop binding
-            thread_semaphore = self._get_gpu_thread_semaphore()
-            
-            # Wrap threading.Semaphore ด้วย async context manager
-            async with _async_semaphore_wrapper(thread_semaphore):
-                logger.debug(f"[Faster Whisper] GPU Concurrency Semaphore acquired - Starting transcription")
-                return await self._transcribe_with_retry(audio_path, language, model_size, initial_prompt)
-        else:
-            # CPU mode ไม่ต้องใช้ semaphore
-            return await self._transcribe_gpu_single_attempt(audio_path, language, model_size, initial_prompt)
-    
-    def _get_gpu_thread_semaphore(self) -> threading.Semaphore:
-        """
-        Get or create GPU concurrency thread semaphore (global singleton)
-        
-        Returns:
-            threading.Semaphore สำหรับควบคุม concurrent GPU tasks (ไม่ผูกกับ event loop)
-        """
-        global _gpu_thread_semaphore
-        
-        if _gpu_thread_semaphore is None:
-            with _gpu_semaphore_lock:
-                # Double-check pattern
-                if _gpu_thread_semaphore is None:
-                    gpu_concurrency = int(os.getenv('GPU_CONCURRENCY', '1'))
-                    _gpu_thread_semaphore = threading.Semaphore(gpu_concurrency)
-                    logger.info(f"✅ [Faster Whisper] Initialized GPU Concurrency Thread Semaphore: max_concurrent={gpu_concurrency}")
-        
-        return _gpu_thread_semaphore
-    
-    async def _transcribe_with_retry(
-        self,
-        audio_path: str,
-        language: str = "th",
-        model_size: str = None,
-        initial_prompt: Optional[str] = None
-    ) -> TranscriptionResult:
-        """
-        Transcribe with retry logic for GPU mode
-        
-        Retry GPU mode ก่อน fallback to CPU
-        """
-        MAX_RETRY_ATTEMPTS = int(os.getenv('GPU_TRANSCRIPTION_MAX_RETRIES', '3'))
-        RETRY_DELAY = float(os.getenv('GPU_TRANSCRIPTION_RETRY_DELAY', '5.0'))
-        
-        last_error = None
-        
-        for attempt in range(MAX_RETRY_ATTEMPTS):
-            try:
-                logger.info(f"[Faster Whisper] 🔄 Attempt {attempt + 1}/{MAX_RETRY_ATTEMPTS} - GPU transcription")
-                
-                # ลอง GPU mode
-                result = await self._transcribe_gpu_single_attempt(audio_path, language, model_size, initial_prompt)
-                
-                if attempt > 0:
-                    logger.info(f"[Faster Whisper] ✅ GPU transcription succeeded on retry attempt {attempt + 1}")
-                
-                return result
-                
-            except (TimeoutError, Exception) as e:
-                last_error = e
-                error_msg = str(e).lower()
-                error_type = type(e).__name__
-                
-                # ตรวจสอบ GPU-related errors
-                is_gpu_error = any(keyword in error_msg for keyword in [
-                    'cuda', 'gpu', 'out of memory', 'oom', 'nvidia', 'cudnn',
-                    'cudaerror', 'cudaruntimeerror', 'cudaoomerror'
-                ])
-                
-                # ตรวจสอบว่าเป็น timeout error หรือไม่
-                is_timeout = isinstance(e, TimeoutError) or "timeout" in error_msg
-                
-                # Log error with details
-                if is_gpu_error:
-                    logger.error(
-                        f"[Faster Whisper] 🚨 GPU-related error detected! "
-                        f"Type: {error_type}, Message: {str(e)}",
-                        exc_info=True
-                    )
-                    logger.error(
-                        f"[Faster Whisper] 🚨 This may indicate GPU overload or memory issues. "
-                        f"Attempt: {attempt + 1}/{MAX_RETRY_ATTEMPTS}"
-                    )
-                
-                if is_timeout and attempt < MAX_RETRY_ATTEMPTS - 1:
-                    logger.warning(
-                        f"[Faster Whisper] ⚠️ GPU timeout (attempt {attempt + 1}/{MAX_RETRY_ATTEMPTS}), "
-                        f"retrying in {RETRY_DELAY}s..."
-                    )
-                    
-                    # Release GPU resources ก่อน retry
-                    try:
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                            logger.info(f"[Faster Whisper] 🧹 Cleared CUDA cache before retry")
-                        gc.collect()
-                    except Exception as cleanup_error:
-                        logger.warning(f"[Faster Whisper] ⚠️ Failed to cleanup GPU resources: {cleanup_error}")
-                    
-                    # Delay before retry
-                    await asyncio.sleep(RETRY_DELAY)
-                elif is_timeout:
-                    # Last attempt failed - fallback to CPU
-                    logger.error(
-                        f"[Faster Whisper] ❌ GPU timeout after {MAX_RETRY_ATTEMPTS} attempts, "
-                        f"falling back to CPU mode..."
-                    )
-                    break
-                else:
-                    # Non-timeout error - don't retry
-                    logger.error(f"[Faster Whisper] ❌ Non-timeout error: {e}")
-                    raise
-        
-        # Check if CPU fallback is allowed
-        ALLOW_CPU_FALLBACK = os.getenv('ALLOW_CPU_FALLBACK', 'false').lower() == 'true'
-        
-        if ALLOW_CPU_FALLBACK:
-            # Fallback to CPU mode after all retries failed
-            logger.warning(f"[Faster Whisper] 🔄 Falling back to CPU mode after {MAX_RETRY_ATTEMPTS} GPU retry attempts")
-            try:
-                return await self._transcribe_cpu_fallback(audio_path, language, model_size, initial_prompt)
-            except Exception as cpu_error:
-                logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
-                raise RuntimeError(f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries, and CPU fallback also failed: {cpu_error}") from last_error
-        else:
-            # Fail fast - no CPU fallback
-            logger.error(f"[Faster Whisper] ❌ GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries. CPU fallback is disabled (ALLOW_CPU_FALLBACK=false)")
-            raise RuntimeError(
-                f"GPU transcription failed after {MAX_RETRY_ATTEMPTS} retries. "
-                f"CPU fallback is disabled. Error: {last_error}"
-            ) from last_error
-    
-    async def _transcribe_gpu_single_attempt(
-        self,
-        audio_path: str,
-        language: str = "th",
-        model_size: str = None,
-        initial_prompt: Optional[str] = None
-    ) -> TranscriptionResult:
-        """
-        Single attempt GPU transcription (original transcribe logic)
-        
-        Note: Method นี้ถูก refactor ออกมาจาก transcribe() เพื่อให้ retry wrapper เรียกใช้ได้
-        """
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: Starting GPU transcription attempt")
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: audio_path={audio_path}, language={language}, model_size={model_size}")
-        
-        audio_path_obj = Path(audio_path)
-        
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: Checking if file exists: {audio_path_obj}")
-        if not audio_path_obj.exists():
-            logger.error(f"[Faster Whisper] ❌ DEBUG: File not found: {audio_path}")
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-        
-        logger.info(f"[Faster Whisper] ✅ DEBUG: File exists, size: {audio_path_obj.stat().st_size} bytes")
-        
-        # Use default model if not specified
-        model = model_size or self.default_model
-        if model not in self.SUPPORTED_MODELS:
-            logger.warning(f"[Faster Whisper] Unknown model '{model}', using 'medium'")
-            model = "medium"
-        
-        # Load model
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: Loading model: {model}")
-        whisper_model = self._load_model(model)
-        logger.info(f"[Faster Whisper] ✅ DEBUG: Model loaded successfully")
-        
-        # Prepare language code
-        # faster-whisper ใช้ "th" สำหรับภาษาไทย, "en" สำหรับอังกฤษ, None สำหรับ auto-detect
-        lang_code = None if language == "auto" else language
-        logger.info(f"[Faster Whisper] 🔍 DEBUG: Language code: {lang_code}")
-        
-        # Optimization parameters
-        beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))
-        temperature = float(os.getenv('WHISPER_TEMPERATURE', '0'))
-        condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'
-        vad_filter = os.getenv('WHISPER_VAD_FILTER', 'true').lower() == 'true'  # Voice Activity Detection
-        
-        logger.info(f"[Faster Whisper] 🎯 Transcribing: {audio_path}")
-        logger.info(f"[Faster Whisper] 📦 Model: {model}")
-        logger.info(f"[Faster Whisper] 🌍 Language: {lang_code or 'auto-detect'}")
-        logger.info(f"[Faster Whisper] 🖥️  Device: {self.device}, Compute Type: {self.compute_type}")
-        # Note: batch_size ไม่ได้ใช้ใน transcribe() แต่ CTranslate2 จะจัดการเอง
-        logger.info(f"[Faster Whisper] 🔧 Optimization: beam_size={beam_size}, temperature={temperature}, condition_on_previous_text={condition_on_previous_text}, vad_filter={vad_filter}")
-        
-        start_time = time.time()
         try:
-            logger.info(f"[Faster Whisper] 🔍 DEBUG: About to call whisper_model.transcribe()")
-            logger.info(f"[Faster Whisper] 🔍 DEBUG: audio_path={str(audio_path_obj)}, language={lang_code}, device={self.device}, compute_type={self.compute_type}")
+            # Validate file
+            if not Path(audio_path).exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
-            # Transcribe with faster-whisper
-            # Note: faster-whisper 1.0.3 รองรับเฉพาะ parameters หลักๆ
-            # Parameters ที่ไม่รองรับ: batch_size, logprob_threshold, compression_ratio_threshold, 
-            # best_of, patience, length_penalty, suppress_tokens, max_initial_timestamp
-            # 
-            # ตามคำแนะนำ: ใช้ compute_type="float16", language="th", vad_filter=True
-            # ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
-            logger.info(f"[Faster Whisper] 🎯 DEBUG: Calling transcribe() now...")
-            # ใช้พารามิเตอร์ชุด "สั้นและเสถียร" ตามคำแนะนำ
-            # without_timestamps=True → คืน list แทน generator → ลดโอกาสค้างตอน iterate
-            segments, info = whisper_model.transcribe(
-                str(audio_path_obj),
-                language=lang_code,  # ระบุภาษา ลด overhead
-                beam_size=1,  # ใช้ 1 สำหรับเร็วเสถียร
-                temperature=0.0,  # ใช้ 0.0 สำหรับเร็วเสถียร
-                condition_on_previous_text=False,  # ปิดเพื่อลด overhead
-                vad_filter=vad_filter,  # เปิดได้สำหรับ real-world; ถ้าดีบั๊กปัญหาให้ปิดชั่วคราว
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,  # ตามคำแนะนำ
-                    threshold=0.5
-                ) if vad_filter else None,
-                word_timestamps=False,  # ไม่ใช้ word-level timestamps (ลด overhead)
-                initial_prompt=initial_prompt,  # ใช้ initial_prompt ถ้ามี
-                no_speech_threshold=0.6,
-                without_timestamps=True,  # ให้คืน list แทน generator → ลดโอกาสค้าง
+            # Use default model if not specified
+            if model_size is None:
+                model_size = self.default_model
+            
+            # Get or load model
+            model = await self._get_model(model_size)
+            
+            # Transcribe
+            logger.info(f"[Faster Whisper] Transcribing: {audio_path}")
+            logger.info(f"   Model: {model_size}, Language: {language}, Device: {self.device}")
+            
+            import time
+            start_time = time.time()
+            
+            # Run transcription (faster-whisper is synchronous)
+            segments, info = model.transcribe(
+                audio_path,
+                language=language if language != "auto" else None,
+                vad_filter=True,
+                initial_prompt=initial_prompt
             )
+            
+            # Convert segments to list (this is where it might crash if cuDNN is wrong)
+            logger.info(f"[Faster Whisper] 🔍 Segments is generator, converting to list...")
+            segments_list = list(segments)
             
             processing_time = time.time() - start_time
             
-            logger.info(f"[Faster Whisper] ✅ DEBUG: transcribe() completed successfully")
-            logger.info(f"[Faster Whisper] ⏱️  Transcription processing time: {processing_time:.2f}s")
-            logger.info(f"[Faster Whisper] 🔍 DEBUG: info.duration={info.duration if hasattr(info, 'duration') else 'N/A'}")
-            logger.info(f"[Faster Whisper] 🔍 DEBUG: info.language={info.language if hasattr(info, 'language') else 'N/A'}")
+            logger.info(f"[Faster Whisper] ✅ Transcription completed: {len(segments_list)} segments in {processing_time:.2f}s")
             
-            # Convert segments to list and extract text
-            segments_list = []
-            text_parts = []
-            
-            logger.info(f"[Faster Whisper] 📝 Processing segments...")
-            segment_count = 0
-            try:
-                # แปลง segments เป็น list โดยตรง (ไม่ว่าจะเป็น generator หรือ list)
-                # เพื่อให้แน่ใจว่า segments ถูก process ได้
-                logger.info(f"[Faster Whisper] 🔍 Starting to process segments...")
-                
-                # ตรวจสอบว่า segments เป็น list หรือ generator
-                if isinstance(segments, list):
-                    logger.info(f"[Faster Whisper] ✅ Segments is list (without_timestamps=True), count: {len(segments)}")
-                    segments_iter = segments
-                else:
-                    logger.info(f"[Faster Whisper] 🔍 Segments is generator, converting to list...")
-                    # ใช้ list() เพื่อ force consume generator
-                    # วิธีนี้จะทำให้แน่ใจว่า segments ถูก process ได้ทั้งหมด
-                    try:
-                        logger.info(f"[Faster Whisper] 🔍 DEBUG: Starting list(segments) conversion...")
-                        import signal
-                        
-                        start_convert = time.time()
-                        
-                        # ใช้ timeout protection สำหรับ list() conversion
-                        def timeout_handler(signum, frame):
-                            raise TimeoutError("list(segments) conversion timeout")
-                        
-                        # ตั้ง timeout 60 วินาที
-                        signal.signal(signal.SIGALRM, timeout_handler)
-                        signal.alarm(60)
-                        
-                        try:
-                            segments_list = []
-                            count = 0
-                            for seg in segments:
-                                segments_list.append(seg)
-                                count += 1
-                                if count == 1:
-                                    logger.info(f"[Faster Whisper] ✅ Got first segment from generator!")
-                                if count % 10 == 0:
-                                    logger.info(f"[Faster Whisper] 📦 Collected {count} segments from generator...")
-                            
-                            signal.alarm(0)  # Cancel timeout
-                            convert_time = time.time() - start_convert
-                            logger.info(f"[Faster Whisper] ✅ Converted generator to list, count: {len(segments_list)}, time: {convert_time:.2f}s")
-                            segments_iter = segments_list
-                        except TimeoutError:
-                            signal.alarm(0)
-                            logger.error(f"[Faster Whisper] ❌ list(segments) conversion timeout after 60s (collected {len(segments_list)} segments)")
-                            raise
-                        finally:
-                            signal.alarm(0)  # Ensure timeout is cancelled
-                            
-                    except Exception as e:
-                        logger.error(f"[Faster Whisper] ❌ Error converting generator to list: {e}", exc_info=True)
-                        raise
-                
-                # Process segments
-                for segment in segments_iter:
-                    # เมื่อ without_timestamps=True, segment อาจเป็น dict หรือ object
-                    if isinstance(segment, dict):
-                        segment_dict = {
-                            "start": segment.get("start", 0.0),
-                            "end": segment.get("end", 0.0),
-                            "text": segment.get("text", "").strip()
-                        }
-                    else:
-                        segment_dict = {
-                            "start": getattr(segment, "start", 0.0),
-                            "end": getattr(segment, "end", 0.0),
-                            "text": getattr(segment, "text", "").strip()
-                        }
-                    segments_list.append(segment_dict)
-                    text_parts.append(segment_dict["text"])
-                    segment_count += 1
-                    if segment_count % 10 == 0:
-                        logger.info(f"[Faster Whisper] 📝 Processed {segment_count} segments...")
-                
-                logger.info(f"[Faster Whisper] ✅ Processed {segment_count} segments total")
-            except TimeoutError as timeout_error:
-                # ถ้า GPU timeout ให้ retry ก่อน fallback ไป CPU mode
-                if self.device == "cuda":
-                    logger.warning(f"[Faster Whisper] ⚠️ GPU mode timeout during segments processing")
-                    # Retry logic จะถูกจัดการใน outer exception handler
-                    raise  # Re-raise เพื่อให้ outer handler จัดการ retry
-                else:
-                    logger.error(f"[Faster Whisper] ❌ Error processing segments: {timeout_error}", exc_info=True)
-                    raise
-            except Exception as seg_error:
-                logger.error(f"[Faster Whisper] ❌ Error processing segments: {seg_error}", exc_info=True)
-                raise
-            
-            # Combine all text
-            text = " ".join(text_parts).strip()
-            
-            # Get detected language
-            detected_language = info.language if hasattr(info, 'language') else language
-            
-            logger.info(f"[Faster Whisper] ✅ Transcription completed in {processing_time:.2f}s")
-            logger.info(f"[Faster Whisper] 📝 Text length: {len(text)} characters")
-            logger.info(f"[Faster Whisper] 📦 Segments: {len(segments_list)}")
-            logger.info(f"[Faster Whisper] 🌍 Detected language: {detected_language}")
+            # Convert to TranscriptionResult format
+            text = " ".join([seg.text for seg in segments_list])
+            segments_data = [
+                {
+                    "start": seg.start,
+                    "end": seg.end,
+                    "text": seg.text
+                }
+                for seg in segments_list
+            ]
             
             return TranscriptionResult(
                 text=text,
-                segments=segments_list,
-                language=detected_language,
+                segments=segments_data,
                 provider=self.provider_name,
-                model=model,
-                duration=info.duration if hasattr(info, 'duration') else None,
+                model=f"{model_size} (faster-whisper)",
                 processing_time=processing_time
             )
             
         except Exception as e:
-            error_msg = str(e)
-            # Handle cuDNN warnings/errors gracefully
-            # ตามคำแนะนำ: ไม่ต้องติดตั้ง cuDNN เอง (CTranslate2 จัดการเอง)
-            # แต่ถ้ามี warning เกี่ยวกับ cuDNN อาจจะยังทำงานได้
-            if "cudnn" in error_msg.lower() or "Invalid handle" in error_msg or "Cannot load symbol" in error_msg:
-                logger.warning(f"[Faster Whisper] ⚠️  cuDNN error detected: {error_msg}")
-                logger.warning(f"[Faster Whisper] 💡 Attempting CPU fallback due to cuDNN issue...")
-                
-                # Try CPU fallback instead of crashing
-                try:
-                    logger.info(f"[Faster Whisper] 🔄 Retrying with CPU fallback...")
-                    return await self._transcribe_cpu_fallback(audio_path, language, model_size)
-                except Exception as cpu_error:
-                    logger.error(f"[Faster Whisper] ❌ CPU fallback also failed: {cpu_error}")
-                    raise RuntimeError(f"Both GPU (cuDNN error) and CPU transcription failed. GPU error: {error_msg}, CPU error: {str(cpu_error)}")
-            
-            logger.error(f"[Faster Whisper] ❌ Transcription failed: {e}", exc_info=True)
-            # Re-raise exception เพื่อให้ retry wrapper จัดการ
-            # ถ้าเรียกจาก retry wrapper แล้ว จะ retry ก่อน fallback
-            # ถ้าเรียกจาก CPU mode หรือไม่ใช่ timeout จะ raise ทันที
+            logger.error(f"[Faster Whisper] ❌ Error transcribing: {e}", exc_info=True)
             raise
     
-    async def _transcribe_cpu_fallback(
-        self,
-        audio_path: str,
-        language: str = "th",
-        model_size: str = None
-    ) -> TranscriptionResult:
-        """
-        Fallback to CPU mode when GPU mode times out
-        """
-        logger.info(f"[Faster Whisper] 🔄 Falling back to CPU mode...")
+    async def _get_model(self, model_size: str):
+        """Get or load model (singleton pattern)"""
+        cache_key = f"{model_size}_{self.device}_{self.compute_type}"
         
-        # Load CPU model
-        model_name = model_size or self.default_model
-        cpu_model = WhisperModel(
-            model_name,
-            device="cpu",
-            compute_type="int8",
-            num_workers=1,
-            cpu_threads=4
-        )
+        if cache_key in self._model_cache:
+            logger.debug(f"[Faster Whisper] Using cached model: {cache_key}")
+            return self._model_cache[cache_key]
         
-        # Transcribe with CPU
-        start_time = time.time()
-        segments, info = cpu_model.transcribe(
-            str(audio_path),
-            language=language if language != "auto" else None,
-            vad_filter=False,
-            without_timestamps=True,
-            beam_size=1,
-            temperature=0.0,
-            initial_prompt=initial_prompt,  # ใช้ initial_prompt ถ้ามี
-        )
+        # Load model
+        logger.info(f"[Faster Whisper] Loading model: {model_size} (device: {self.device}, compute_type: {self.compute_type})")
         
-        processing_time = time.time() - start_time
-        
-        # Process segments (CPU mode should return list with without_timestamps=True)
-        segments_list = []
-        text_parts = []
-        
-        if isinstance(segments, list):
-            for segment in segments:
-                if isinstance(segment, dict):
-                    segment_dict = {
-                        "start": segment.get("start", 0.0),
-                        "end": segment.get("end", 0.0),
-                        "text": segment.get("text", "").strip()
-                    }
-                else:
-                    segment_dict = {
-                        "start": getattr(segment, "start", 0.0),
-                        "end": getattr(segment, "end", 0.0),
-                        "text": getattr(segment, "text", "").strip()
-                    }
-                segments_list.append(segment_dict)
-                text_parts.append(segment_dict["text"])
-        else:
-            # ถ้ายังเป็น generator ให้ iterate
-            for segment in segments:
-                segment_dict = {
-                    "start": getattr(segment, "start", 0.0),
-                    "end": getattr(segment, "end", 0.0),
-                    "text": getattr(segment, "text", "").strip()
-                }
-                segments_list.append(segment_dict)
-                text_parts.append(segment_dict["text"])
-        
-        text = " ".join(text_parts).strip()
-        detected_language = info.language if hasattr(info, 'language') else language
-        
-        logger.info(f"[Faster Whisper] ✅ CPU fallback completed in {processing_time:.2f}s")
-        logger.info(f"[Faster Whisper] 📝 Text length: {len(text)} characters")
-        logger.info(f"[Faster Whisper] 📦 Segments: {len(segments_list)}")
-        
-        return TranscriptionResult(
-            text=text,
-            segments=segments_list,
-            language=detected_language,
-            provider=self.provider_name,
-            model=model_name,
-            duration=info.duration if hasattr(info, 'duration') else None,
-            processing_time=processing_time
-        )
+        try:
+            model = WhisperModel(
+                model_size,
+                device=self.device,
+                compute_type=self.compute_type
+            )
+            self._model_cache[cache_key] = model
+            logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
+            return model
+        except Exception as e:
+            logger.error(f"[Faster Whisper] ❌ Error loading model: {e}", exc_info=True)
+            raise
     
     def health_check(self) -> bool:
         """
@@ -678,15 +166,14 @@ class FasterWhisperProvider(WhisperProvider):
             if not FASTER_WHISPER_AVAILABLE:
                 return False
             
-            # Try to load tiny model (smallest, fastest to load)
-            try:
-                test_model = WhisperModel("tiny", device=self.device, compute_type=self.compute_type or "float16")
-                del test_model  # Free memory
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
-                return True
-            except Exception as e:
-                logger.warning(f"[Faster Whisper] Health check failed: {e}")
-                return False
+            # ตรวจสอบว่า CUDA พร้อมใช้งานหรือไม่ (ถ้าใช้ GPU)
+            if self.device == 'cuda':
+                import torch
+                if not torch.cuda.is_available():
+                    logger.warning("[Faster Whisper] CUDA not available")
+                    return False
+            
+            return True
         except Exception as e:
             logger.error(f"[Faster Whisper] Health check error: {e}")
             return False

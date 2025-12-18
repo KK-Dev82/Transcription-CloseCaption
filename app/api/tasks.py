@@ -116,6 +116,14 @@ async def get_tasks_by_date(
                 except:
                     pass
             
+            # Handle chunks and full_text safely
+            chunks = task.get("chunks") or []
+            if not isinstance(chunks, list):
+                chunks = []
+            full_text = task.get("full_text") or ""
+            if not isinstance(full_text, str):
+                full_text = ""
+            
             formatted_tasks.append({
                 "task_id": task.get("task_id"),
                 "video_file": task.get("file_name") or task.get("filename") or (task.get("file_path", "").split("/")[-1] if task.get("file_path") else ""),
@@ -124,13 +132,13 @@ async def get_tasks_by_date(
                 "end_time": end_time,
                 "time_used": time_used,
                 "progress": task.get("progress", 0),
-                "full_text": task.get("full_text", ""),
+                "full_text": full_text,
                 "file_path": task.get("file_path"),
                 "language": task.get("language", "th"),
                 "model_size": task.get("model_size", "base"),
                 "error_message": task.get("error_message"),
-                "chunks_count": len(task.get("chunks", [])),
-                "text_length": len(task.get("full_text", "") or "")
+                "chunks_count": len(chunks),
+                "text_length": len(full_text)
             })
         
         return {
@@ -230,4 +238,47 @@ async def get_available_dates():
         
     except Exception as e:
         logger.error(f"Error getting available dates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{task_id}")
+async def get_task_by_id(task_id: str):
+    """
+    ดึงข้อมูล task ตาม task_id
+    """
+    try:
+        # ดึงข้อมูลจาก storage
+        task_data = json_storage.get_transcription(task_id)
+        
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        # Handle chunks safely - ensure it's a list
+        chunks = task_data.get("chunks") or []
+        if not isinstance(chunks, list):
+            chunks = []
+        
+        return {
+            "task_id": task_id,
+            "status": task_data.get("status", "unknown"),
+            "progress": task_data.get("progress", 0),
+            "file_path": task_data.get("file_path"),
+            "file_name": task_data.get("file_name") or task_data.get("filename"),
+            "language": task_data.get("language", "th"),
+            "model_size": task_data.get("model_size", "base"),
+            "created_at": task_data.get("created_at"),
+            "updated_at": task_data.get("updated_at"),
+            "completed_at": task_data.get("completed_at"),
+            "full_text": task_data.get("full_text") or "",
+            "chunks": chunks,
+            "chunks_count": len(chunks),
+            "error_message": task_data.get("error_message"),
+            "current_stage": task_data.get("current_stage"),
+            "current_stage_description": task_data.get("current_stage_description"),
+            "total_duration": task_data.get("total_duration")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

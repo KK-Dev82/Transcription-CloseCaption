@@ -8,24 +8,23 @@ from typing import Dict, List
 import logging
 import json
 
-from ..services.transcription_service import TranscriptionService
+from ..utils.json_storage import JSONStorage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/progress", tags=["progress-tracking"])
 
-transcription_service = TranscriptionService()
+# ใช้ JSONStorage โดยตรงแทน TranscriptionService
+json_storage = JSONStorage()
 
 @router.get("/transcription/{task_id}")
 async def get_transcription_progress(task_id: str):
     """ดู progress ของ transcription task แบบ real-time"""
     try:
-        task = transcription_service.get_task_status(task_id)
+        # ดึงข้อมูลจาก storage โดยตรง
+        task_dict = json_storage.get_transcription(task_id)
         
-        if not task:
+        if not task_dict:
             raise HTTPException(status_code=404, detail="ไม่พบ task")
-        
-        # แปลง TranscriptionResponse เป็น dict
-        task_dict = task.__dict__
         
         progress_info = {
             "task_id": task_id,
@@ -112,14 +111,11 @@ async def get_transcription_progress(task_id: str):
 async def get_all_active_tasks():
     """ดูรายการ tasks ที่กำลังทำงานอยู่"""
     try:
-        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
-        import asyncio
-        loop = asyncio.get_event_loop()
-        all_tasks = await loop.run_in_executor(None, transcription_service.get_all_tasks)
+        # ดึงข้อมูลจาก storage โดยตรง
+        all_tasks = json_storage.list_all_transcriptions()
         
         active_tasks = []
-        for task in all_tasks:
-            task_dict = task.__dict__
+        for task_dict in all_tasks:
             status = task_dict.get("status", "")
             
             if status not in ["completed", "failed", "cancelled"]:
@@ -146,10 +142,8 @@ async def get_all_active_tasks():
 async def get_progress_stats():
     """สถิติการประมวลผล"""
     try:
-        # ใช้ run_in_executor เพื่อไม่ให้ blocking event loop
-        import asyncio
-        loop = asyncio.get_event_loop()
-        all_tasks = await loop.run_in_executor(None, transcription_service.get_all_tasks)
+        # ดึงข้อมูลจาก storage โดยตรง
+        all_tasks = json_storage.list_all_transcriptions()
         
         stats = {
             "total_tasks": len(all_tasks),
@@ -161,8 +155,7 @@ async def get_progress_stats():
         }
         
         total_progress = 0
-        for task in all_tasks:
-            task_dict = task.__dict__
+        for task_dict in all_tasks:
             status = task_dict.get("status", "")
             progress = task_dict.get("progress", 0)
             

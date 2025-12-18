@@ -1,220 +1,126 @@
 # 🔧 Troubleshooting Guide
 
-## ปัญหา: Connection Refused Error
+## ❌ 502 Bad Gateway
 
-### อาการ
-```
-aiohttp.client_exceptions.ClientConnectorError: Cannot connect to host 213.173.108.6:14237 ssl:default [Connection refused]
-```
+### สาเหตุที่เป็นไปได้
 
-### สาเหตุ
-- Dashboard พยายามเชื่อมต่อกับ remote server `4000-ada-sc` แต่ server ไม่ได้รันอยู่
-- Port mapping ผิด
-- Network issue
+1. **API Server ไม่ได้รัน**
+   ```bash
+   # ตรวจสอบ
+   ps aux | grep uvicorn
+   
+   # Start API
+   bash scripts/start-api-nohup.sh
+   ```
 
-### วิธีแก้
+2. **Port ถูกใช้อยู่แล้ว**
+   ```bash
+   # ตรวจสอบ
+   lsof -i :8001
+   
+   # Kill process
+   kill $(lsof -t -i:8001)
+   ```
 
-#### 1. ตรวจสอบว่า Server รันอยู่หรือไม่
+3. **Import Errors**
+   ```bash
+   # ตรวจสอบ
+   python3 -c "from app.main import app"
+   
+   # แก้ไข import errors
+   ```
 
-```bash
-# SSH เข้าไปที่ server
-ssh 4000-ada-sc
+4. **Proxy Configuration**
+   - ตรวจสอบว่า RunPod proxy ชี้ไปยัง port ที่ถูกต้อง
+   - 8010 → 8001 (API)
+   - 8020 → 8002 (Webhook)
+   - 8030 → 8003 (Monitoring)
 
-# ตรวจสอบว่า service รันอยู่หรือไม่
-ps aux | grep uvicorn
+### วิธีแก้ไข
 
-# ตรวจสอบ port
-netstat -tlnp | grep 8010
-```
+1. **Restart API Server**
+   ```bash
+   bash scripts/stop-all.sh
+   bash scripts/start-api-nohup.sh
+   ```
 
-#### 2. Start Service บน Pod
+2. **ตรวจสอบ Logs**
+   ```bash
+   tail -f logs/api.log
+   tail -f logs/api-error.log
+   ```
 
-```bash
-# SSH เข้าไปที่ pod
-ssh 4000-ada-sc
+3. **ทดสอบ Health Check**
+   ```bash
+   curl http://localhost:8001/health
+   ```
 
-# Start service
-cd /workspace/transcription-service
-bash scripts/pod/start-service-daemon.sh
-```
+4. **ตรวจสอบ Routes**
+   ```bash
+   curl http://localhost:8001/docs
+   ```
 
-#### 3. ตรวจสอบ Port Mapping
+---
 
-```bash
-# ตรวจสอบว่า port mapping ถูกต้องหรือไม่
-# ควรเป็น: External Port 14237 -> Internal Port 8010
-```
+## ❌ Upload File Error
 
-#### 4. ตรวจสอบ Firewall/Network
+### ปัญหา: 502 Bad Gateway เมื่อ Upload
 
-```bash
-# ทดสอบ connection จาก local
-curl http://213.173.108.6:14237/health
+**สาเหตุ:**
+- API server crash
+- FileService methods ไม่มี
+- Import errors
 
-# ถ้าไม่ได้ → อาจเป็น firewall หรือ network issue
-```
+**วิธีแก้ไข:**
 
-## ปัญหา: Import Errors
+1. **ตรวจสอบ FileService**
+   ```python
+   from app.services.file_service import FileService
+   fs = FileService()
+   # ตรวจสอบ methods: save_uploaded_file, get_file_info
+   ```
 
-### อาการ
-```
-ModuleNotFoundError: No module named 'aiofiles'
-```
+2. **ตรวจสอบ Upload Endpoint**
+   ```bash
+   curl -X POST http://localhost:8001/api/upload/ \
+     -F 'file=@test.mp4'
+   ```
 
-### สาเหตุ
-- Dependencies ไม่ได้ติดตั้ง
-- Virtual environment ไม่ได้ activate
+3. **ตรวจสอบ Logs**
+   ```bash
+   tail -f logs/api-error.log
+   ```
 
-### วิธีแก้
+---
 
-```bash
-# ติดตั้ง dependencies
-cd /workspace/transcription-service
-bash scripts/pod/install-dependencies.sh
+## ✅ Checklist
 
-# หรือ
-pip3 install -r requirements.txt
-```
+- [ ] API Server รันอยู่ (`ps aux | grep uvicorn`)
+- [ ] Port 8001 เปิดอยู่ (`netstat -tuln | grep 8001`)
+- [ ] Health check ผ่าน (`curl http://localhost:8001/health`)
+- [ ] ไม่มี import errors (`python3 -c "from app.main import app"`)
+- [ ] FileService มี methods (`save_uploaded_file`, `get_file_info`)
+- [ ] Uploads directory มีอยู่ (`ls -la uploads/`)
 
-## ปัญหา: Storage Type Error
+---
 
-### อาการ
-- Service ไม่สามารถ start ได้
-- Error เกี่ยวกับ SQLite หรือ JSON storage
-
-### วิธีแก้
-
-#### 1. ตรวจสอบ Environment Variables
-
-```bash
-# ตรวจสอบ STORAGE_TYPE
-echo $STORAGE_TYPE
-
-# ควรเป็น: sqlite หรือ json
-```
-
-#### 2. ตรวจสอบ Database Path
-
-```bash
-# สำหรับ SQLite
-ls -lh /workspace/transcription-service/storage/database.db
-
-# ถ้าไม่มี → จะสร้างอัตโนมัติเมื่อ service start
-```
-
-#### 3. Migration จาก JSON → SQLite
-
-```bash
-# ถ้ามีข้อมูลเก่าใน JSON storage
-python3 scripts/migrate_json_to_sqlite.py \
-    --json-dir /workspace/transcription-service/storage \
-    --sqlite-db /workspace/transcription-service/storage/database.db
-```
-
-## ปัญหา: Cleanup Script ไม่ทำงาน
-
-### อาการ
-- Script ไม่ลบไฟล์
-- Error เมื่อรัน script
-
-### วิธีแก้
-
-#### 1. ตรวจสอบ Permissions
+## 🔍 Debug Commands
 
 ```bash
-# ให้ execute permission
-chmod +x scripts/cleanup_old_data.py
-```
+# Check API status
+curl http://localhost:8001/health
 
-#### 2. Dry Run ก่อน
+# Check API docs
+curl http://localhost:8001/docs
 
-```bash
-# ทดสอบก่อน (ไม่ลบจริง)
-python3 scripts/cleanup_old_data.py --dry-run
-```
+# Check upload endpoint
+curl -X POST http://localhost:8001/api/upload/ -F 'file=@test.mp4'
 
-#### 3. ตรวจสอบ Paths
+# Check logs
+tail -f logs/api.log
+tail -f logs/api-error.log
 
-```bash
-# ตรวจสอบว่า paths ถูกต้อง
-python3 scripts/cleanup_old_data.py \
-    --storage-dir /workspace/transcription-service/storage \
-    --uploads-dir /workspace/transcription-service/uploads \
-    --temp-dir /workspace/transcription-service/temp \
-    --dry-run
-```
-
-## ปัญหา: Service ไม่ Start
-
-### อาการ
-- Service ไม่สามารถ start ได้
-- Error เมื่อรัน start-service-daemon.sh
-
-### วิธีแก้
-
-#### 1. ตรวจสอบ Dependencies
-
-```bash
-# ตรวจสอบว่า dependencies ติดตั้งแล้วหรือไม่
-python3 -c "import uvicorn; print('OK')"
-python3 -c "import fastapi; print('OK')"
-```
-
-#### 2. ตรวจสอบ Logs
-
-```bash
-# ดู logs
-tail -f /tmp/transcription-service.log
-
-# หรือ
-journalctl -u transcription-service -f
-```
-
-#### 3. ตรวจสอบ Port
-
-```bash
-# ตรวจสอบว่า port ถูกใช้หรือไม่
-lsof -i :8010
-
-# ถ้ามี → kill process เดิม
-kill <PID>
-```
-
-#### 4. ตรวจสอบ Environment Variables
-
-```bash
-# ตรวจสอบ env.runpod
-cat env.runpod | grep STORAGE_TYPE
-cat env.runpod | grep SAVE_TEMP_FILES
-
-# ควรเป็น:
-# STORAGE_TYPE=sqlite
-# SAVE_TEMP_FILES=not_save
-```
-
-## Checklist สำหรับการ Start Service
-
-1. ✅ Dependencies ติดตั้งแล้ว
-2. ✅ Environment variables ถูกต้อง (STORAGE_TYPE, SAVE_TEMP_FILES)
-3. ✅ Port ไม่ถูกใช้ (8010)
-4. ✅ Directories สร้างแล้ว (storage, uploads, temp)
-5. ✅ Redis รันอยู่ (ถ้าใช้)
-6. ✅ Timezone data ติดตั้งแล้ว (tzdata)
-
-## Quick Fix Commands
-
-```bash
-# 1. Install dependencies
-bash scripts/pod/install-dependencies.sh
-
-# 2. Cleanup old data (optional)
-python3 scripts/cleanup_old_data.py
-
-# 3. Start service
-bash scripts/pod/start-service-daemon.sh
-
-# 4. Check service status
-ps aux | grep uvicorn
-curl http://localhost:8010/health
+# Check processes
+ps aux | grep -E "(uvicorn|python)"
 ```
 

@@ -1,5 +1,7 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, HttpUrl
+from typing import Optional
 import logging
 from datetime import datetime
 import uuid
@@ -12,9 +14,37 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 
 file_service = FileService()
 
+class UploadFromURLRequest(BaseModel):
+    """Request model สำหรับอัปโหลดจาก URL"""
+    url: str
+    filename: Optional[str] = None
+
 @router.post("/", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...)):
-    """อัปโหลดไฟล์วิดีโอหรือเสียง"""
+async def upload_file(
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None)
+):
+    """
+    อัปโหลดไฟล์วิดีโอหรือเสียง
+    รองรับทั้งการอัปโหลดไฟล์โดยตรงและ URL
+    
+    วิธีใช้:
+    1. อัปโหลดไฟล์: POST /api/upload/ (form-data: file=@file.mp4)
+    2. อัปโหลดจาก URL: POST /api/upload/ (form-data: url=https://example.com/video.mp4)
+    """
+    
+    # ตรวจสอบว่ามี file หรือ url
+    if not file and not url:
+        raise HTTPException(
+            status_code=400,
+            detail="ต้องระบุ file หรือ url อย่างใดอย่างหนึ่ง"
+        )
+    
+    if file and url:
+        raise HTTPException(
+            status_code=400,
+            detail="ระบุได้แค่ file หรือ url อย่างใดอย่างหนึ่งเท่านั้น"
+        )
     
     # ตรวจสอบประเภทไฟล์
     allowed_extensions = {
@@ -23,6 +53,91 @@ async def upload_file(file: UploadFile = File(...)):
         # เสียง
         '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a'
     }
+    
+    # กรณีอัปโหลดจาก URL
+    if url:
+        try:
+            import aiohttp
+            import os
+            from urllib.parse import urlparse
+            
+            logger.info(f"กำลังดาวน์โหลดไฟล์จาก URL: {url}")
+            
+            # ดาวน์โหลดไฟล์จาก URL
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"ไม่สามารถดาวน์โหลดไฟล์จาก URL ได้ (Status: {response.status})"
+                        )
+                    
+                    # ดึงชื่อไฟล์จาก URL
+                    parsed_url = urlparse(url)
+                    filename = os.path.basename(parsed_url.path) or "downloaded_file.mp4"
+                    
+                    # ตรวจสอบประเภทไฟล์
+                    file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
+                    if f'.{file_extension}' not in allowed_extensions:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"ประเภทไฟล์ไม่รองรับ กรุณาใช้: {', '.join(allowed_extensions)}"
+                        )
+                    
+                    # อ่านเนื้อหาไฟล์
+                    file_content = await response.read()
+                    
+                    # ตรวจสอบขนาดไฟล์ (สูงสุด 2GB)
+                    max_size = 2 * 1024 * 1024 * 1024  # 2GB
+                    if len(file_content) > max_size:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="ขนาดไฟล์ใหญ่เกินไป (สูงสุด 2GB)"
+                        )
+                    
+                    # บันทึกไฟล์
+                    file_path = await file_service.save_uploaded_file(file_content, filename)
+                    
+                    # ดึงข้อมูลไฟล์
+                    file_info = file_service.get_file_info(file_path)
+                    
+                    # สร้าง response
+                    response_obj = UploadResponse(
+                        file_id=str(uuid.uuid4()),
+                        filename=filename,
+                        file_path=file_path,
+                        file_size=file_info["file_size"],
+                        file_type=file_info["file_type"],
+                        duration=file_info.get("duration"),
+                        uploaded_at=datetime.now(),
+                        status="uploaded"
+                    )
+                    
+                    logger.info(f"ดาวน์โหลดไฟล์จาก URL สำเร็จ: {url} -> {file_path}")
+                    
+                    return response_obj
+                    
+        except aiohttp.ClientError as e:
+            logger.error(f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์จาก URL: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"ไม่สามารถดาวน์โหลดไฟล์จาก URL ได้: {str(e)}"
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์จาก URL: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {str(e)}"
+            )
+    
+    # กรณีอัปโหลดไฟล์โดยตรง (โค้ดเดิม)
+    if not file:
+        raise HTTPException(
+            status_code=400,
+            detail="ต้องระบุ file"
+        )
     
     file_extension = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
     if f'.{file_extension}' not in allowed_extensions:

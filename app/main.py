@@ -1,939 +1,104 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, status
+"""
+FastAPI Main Application
+"""
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-import logging
-import json
-from typing import List, Dict
-import asyncio
-import os
-import sys
-import signal
-import traceback
-import threading
 from pathlib import Path
-from datetime import datetime
+import logging
 
-# Load .env.runpod if exists
-try:
-    from dotenv import load_dotenv
-    env_file = Path(__file__).parent.parent / ".env.runpod"
-    if env_file.exists():
-        load_dotenv(env_file)
-        logger = logging.getLogger(__name__)
-        logger.info(f"✅ Loaded environment from: {env_file}")
-except ImportError:
-    pass
-except Exception as e:
-    logger = logging.getLogger(__name__)
-    logger.warning(f"⚠️  Failed to load .env.runpod: {e}")
+# Create necessary directories
+Path("uploads").mkdir(exist_ok=True)
+Path("temp").mkdir(exist_ok=True)
+Path("storage").mkdir(exist_ok=True)
+Path("models").mkdir(exist_ok=True)
 
-from .api import transcription, caption, upload, video, queue, live_streaming, thai_processing, transcription_enhanced, progress, webhook, dashboard, internal, polling, history, realtime_caption, monitoring, files, tasks, cleanup, control, management
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket imports for migration to separate service
-# from .api import websocket
-# from .api.websocket import router as websocket_router
-# from .api import websocket_status
-from .services.transcription_service import TranscriptionService
-from .services.caption_service import CaptionService
-from .services.video_service import VideoService
-from .utils.storage_factory import get_storage, StorageFactory
-
-# ตั้งค่า logging - เพิ่ม file handler สำหรับ error logs
-LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / "api-service.log"
-ERROR_LOG_FILE = LOG_DIR / "api-service-errors.log"
-
-# Configure root logger
-# Create handlers
-file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
-file_handler.setLevel(logging.INFO)
-
-error_file_handler = logging.FileHandler(ERROR_LOG_FILE, encoding='utf-8')
-error_file_handler.setLevel(logging.ERROR)
-
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
-file_handler.setFormatter(formatter)
-error_file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
-
-# Configure root logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
-root_logger.addHandler(error_file_handler)
-root_logger.addHandler(console_handler)
 logger = logging.getLogger(__name__)
 
-# Log uncaught exceptions
-def handle_exception(exc_type, exc_value, exc_traceback):
-    """Handle uncaught exceptions"""
-    if issubclass(exc_type, KeyboardInterrupt):
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
-    
-    logger.critical(
-        "Uncaught exception",
-        exc_info=(exc_type, exc_value, exc_traceback)
-    )
-
-sys.excepthook = handle_exception
-
-# Signal handlers for graceful shutdown logging
-def signal_handler(signum, frame):
-    """Handle signals (SIGTERM, SIGINT)"""
-    signal_name = signal.Signals(signum).name
-    logger.warning(f"⚠️ Received signal {signal_name} (PID: {os.getpid()})")
-    logger.warning(f"⚠️ Stack trace: {''.join(traceback.format_stack(frame))}")
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-
-# สร้าง FastAPI app
+# Create FastAPI app
 app = FastAPI(
-    title="Transcription & Close Caption Service",
-    description="""
-    ## 🎯 API สำหรับแปลงเสียงเป็นข้อความและสร้าง close caption
-    
-    ### ✨ Features:
-    - **Real-time Transcription** - แปลงเสียงเป็นข้อความแบบ real-time
-    - **Thai Language Optimization** - ปรับปรุงความแม่นยำภาษาไทยด้วย NLP
-    - **Progress Tracking** - ติดตาม progress แบบ real-time
-    - **Multiple Formats** - รองรับไฟล์วิดีโอและเสียงหลากหลาย
-    - **Chunk Processing** - แบ่งไฟล์ใหญ่เป็นส่วนย่อย
-    - **Caption Generation** - สร้าง SRT subtitles
-    - **Live Streaming** - รองรับ live transcription
-    
-    ### 🚀 Production Ready:
-    - **Fast Processing** - ใช้ base model + Thai post-processing
-    - **Scalable** - รองรับ concurrent users
-    - **Reliable** - มี error handling และ retry mechanism
-    
-    ### 📊 For Frontend Integration:
-    - **RESTful API** - Standard HTTP methods
-    - **JSON Response** - ง่ายต่อการ integrate
-    - **Real-time Updates** - WebSocket และ Progress API
-    """,
-    version="1.2.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    contact={
-        "name": "Transcription Service Team",
-        "email": "support@transcription.service"
-    },
-    license_info={
-        "name": "MIT License",
-        "url": "https://opensource.org/licenses/MIT"
-    },
-    servers=[
-        {
-            "url": "http://localhost:8001",
-            "description": "Development server"
-        },
-        {
-            "url": "https://api.transcription.service",
-            "description": "Production server"
-        }
-    ]
+    title="Transcription Service API",
+    description="API for video/audio transcription and close captioning",
+    version="1.0.0"
 )
 
-# เพิ่ม CORS middleware
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ใน production ควรระบุ domain ที่อนุญาต
+    allow_origins=["*"],  # In production, specify actual origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# เพิ่ม Rate Limiting Middleware (Simple in-memory rate limiter)
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-import time
-from collections import defaultdict
+# Include routers
+from app.api import upload_router, caption_router, websocket_router
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple rate limiting middleware"""
-    def __init__(self, app, requests_per_minute: int = 60):
-        super().__init__(app)
-        self.requests_per_minute = requests_per_minute
-        self.request_counts = defaultdict(list)
-        self.cleanup_interval = 60  # Cleanup every 60 seconds
-        self.last_cleanup = time.time()
-    
-    async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health checks
-        if request.url.path == "/health":
-            return await call_next(request)
-        
-        # Skip rate limiting for batch endpoints (internal API calls)
-        if request.url.path.startswith("/api/batch/"):
-            return await call_next(request)
-        
-        # Skip rate limiting for /transcribe/ endpoint when called from batch API
-        # (Batch API sends to /transcribe/ which should not be rate limited)
-        # Check if request comes from internal batch service by checking User-Agent or Referer
-        user_agent = request.headers.get("user-agent", "").lower()
-        referer = request.headers.get("referer", "").lower()
-        if request.url.path.startswith("/transcribe/") and ("batch" in user_agent or "batch" in referer):
-            return await call_next(request)
-        
-        # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
-        
-        # Cleanup old entries periodically
-        current_time = time.time()
-        if current_time - self.last_cleanup > self.cleanup_interval:
-            self._cleanup_old_entries(current_time)
-            self.last_cleanup = current_time
-        
-        # Check rate limit
-        now = time.time()
-        minute_ago = now - 60
-        
-        # Remove requests older than 1 minute
-        self.request_counts[client_ip] = [
-            req_time for req_time in self.request_counts[client_ip]
-            if req_time > minute_ago
-        ]
-        
-        # Check if limit exceeded
-        if len(self.request_counts[client_ip]) >= self.requests_per_minute:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": f"Rate limit exceeded: {self.requests_per_minute} requests per minute",
-                    "retry_after": 60
-                },
-                headers={"Retry-After": "60"}
-            )
-        
-        # Record request
-        self.request_counts[client_ip].append(now)
-        
-        # Process request
-        response = await call_next(request)
-        return response
-    
-    def _cleanup_old_entries(self, current_time: float):
-        """Remove entries older than 1 minute"""
-        minute_ago = current_time - 60
-        for ip in list(self.request_counts.keys()):
-            self.request_counts[ip] = [
-                req_time for req_time in self.request_counts[ip]
-                if req_time > minute_ago
-            ]
-            if not self.request_counts[ip]:
-                del self.request_counts[ip]
+app.include_router(upload_router, prefix="/api", tags=["upload"])
+app.include_router(caption_router, prefix="/api", tags=["caption"])
+app.include_router(websocket_router, tags=["websocket"])
 
-# เพิ่ม rate limiting middleware (60 requests per minute per IP)
-# สำหรับ endpoints ที่มี load สูง (เช่น /transcribe/, /api/server/*/tasks)
-rate_limit_per_minute = int(os.getenv('API_RATE_LIMIT_PER_MINUTE', '60'))
-app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit_per_minute)
-logger.info(f"✅ Rate limiting enabled: {rate_limit_per_minute} requests/minute per IP")
+# Include optional routers
+try:
+    from app.api import transcription_router
+    if transcription_router:
+        app.include_router(transcription_router, prefix="/api", tags=["transcription"])
+except ImportError:
+    pass
 
-# ============================================================
-# Global Exception Handlers
-# ============================================================
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler to catch all unhandled exceptions"""
-    import traceback
-    
-    error_traceback = traceback.format_exc()
-    error_details = {
-        "error_type": type(exc).__name__,
-        "error_message": str(exc),
-        "path": str(request.url.path),
-        "method": request.method,
-        "query_params": dict(request.query_params),
-        "timestamp": datetime.utcnow().isoformat(),
-        "traceback": error_traceback
-    }
-    
-    # Log to error log file
-    logger.critical(
-        f"💥 UNHANDLED EXCEPTION: {type(exc).__name__}: {str(exc)}\n"
-        f"Path: {request.method} {request.url.path}\n"
-        f"Traceback:\n{error_traceback}",
-        exc_info=exc
-    )
-    
-    # Log to separate error file for easier debugging
-    try:
-        with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(f"\n{'='*80}\n")
-            f.write(f"Timestamp: {datetime.utcnow().isoformat()}\n")
-            f.write(f"Error Type: {type(exc).__name__}\n")
-            f.write(f"Error Message: {str(exc)}\n")
-            f.write(f"Request: {request.method} {request.url.path}\n")
-            f.write(f"Traceback:\n{error_traceback}\n")
-            f.write(f"{'='*80}\n\n")
-    except Exception as log_error:
-        logger.error(f"Failed to write to error log file: {log_error}")
-    
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": "Internal server error",
-            "error_type": type(exc).__name__,
-            "error_message": str(exc),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
+# Include enhanced transcription router
+try:
+    from app.api import transcription_enhanced_router
+    if transcription_enhanced_router:
+        app.include_router(transcription_enhanced_router, prefix="/api", tags=["enhanced-transcription"])
+except ImportError:
+    pass
 
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Handle HTTP exceptions"""
-    logger.warning(
-        f"HTTP {exc.status_code}: {exc.detail} - {request.method} {request.url.path}"
-    )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
-    )
+# Include simple transcription router (/api/transcribe/)
+try:
+    from app.api import transcribe_router
+    if transcribe_router:
+        app.include_router(transcribe_router, prefix="/api", tags=["transcription"])
+except ImportError:
+    pass
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle validation errors"""
-    logger.warning(
-        f"Validation error: {exc.errors()} - {request.method} {request.url.path}"
-    )
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "body": exc.body}
-    )
+# Include other API routers
+# Include tasks router (important - must be included)
+try:
+    from app.api import tasks
+    # tasks.router already has prefix="/api/tasks", so don't add prefix again
+    app.include_router(tasks.router, tags=["tasks"])
+    logger.info("✅ Tasks router included")
+except ImportError as e:
+    logger.warning(f"Tasks router not available: {e}")
 
-# สร้าง services
-transcription_service = TranscriptionService()
-caption_service = CaptionService()
-video_service = VideoService()
-storage = get_storage()
+# Include other routers
+try:
+    from app.api import webhook, progress, history
+    app.include_router(webhook.router, prefix="/api", tags=["webhook"])
+    app.include_router(progress.router, prefix="/api", tags=["progress"])
+    app.include_router(history.router, prefix="/api", tags=["history"])
+except ImportError as e:
+    logger.warning(f"Some routers not available: {e}")
 
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket connections for migration to separate service
-# WebSocket connections
-# active_connections: List[WebSocket] = []
+# Include queue router (may fail if rabbitmq_service not available)
+try:
+    from app.api import queue
+    app.include_router(queue.router, prefix="/api", tags=["queue"])
+except ImportError as e:
+    logger.warning(f"Queue router not available: {e}")
 
-# รวม API routes
-app.include_router(transcription.router)
-app.include_router(transcription_enhanced.router)
-app.include_router(progress.router)
-app.include_router(webhook.router)
-app.include_router(dashboard.router)
-app.include_router(caption.router)
-app.include_router(upload.router)
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket routers for migration to separate service
-# app.include_router(websocket.router)
-# app.include_router(websocket_router)
-app.include_router(video.router)
-app.include_router(queue.router)
-app.include_router(live_streaming.router)
-app.include_router(thai_processing.router)
-app.include_router(internal.router)
-
-# 🔄 Polling API (Fallback สำหรับ WebSocket)
-app.include_router(polling.router)
-
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Status API for migration to separate service
-# 📡 WebSocket Status API
-# app.include_router(websocket_status.router)
-
-# 📚 History API
-app.include_router(history.router)
-
-# 🎬 Real-time Caption API
-app.include_router(realtime_caption.router)
-
-# 📊 Monitoring API (Whisper Providers)
-app.include_router(monitoring.router)
-
-# 📁 Files API (รับ notification จาก Backend)
-app.include_router(files.router)
-
-# 📋 Tasks API (ดึง tasks ตามวันที่)
-app.include_router(tasks.router)
-
-# 🧹 Cleanup API (Phase 5: Cleanup & Monitoring)
-app.include_router(cleanup.router)
-
-# 🎛️ Control API (Service Control & Testing)
-app.include_router(control.router)
-app.include_router(management.router)
-
-# Mount static files
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-app.mount("/media-uploads", StaticFiles(directory="uploads"), name="media-uploads")  # For staging compatibility
-app.mount("/test-files", StaticFiles(directory="test-files"), name="test-files")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Mount test frontend
-from fastapi.responses import FileResponse
-from fastapi import HTTPException
-from pathlib import Path
-import os
-
-@app.get("/test-frontend.html")
-async def serve_test_frontend():
-    """Serve test frontend HTML"""
-    return FileResponse("test-frontend.html")
-
-@app.get("/file/{file_path:path}")
-async def serve_uploaded_file(file_path: str):
-    """Serve uploaded files (videos/audio) for playback"""
-    try:
-        # Security: ensure file is in uploads directory
-        full_path = Path("uploads") / file_path
-        
-        # Check if file exists and is within uploads directory
-        if not full_path.exists():
-            # Try alternative paths for compatibility
-            alternative_paths = [
-                Path("uploads") / file_path,
-                Path("storage") / "videos" / file_path,
-                Path("storage") / "uploads" / file_path
-            ]
-            
-            for alt_path in alternative_paths:
-                if alt_path.exists():
-                    full_path = alt_path
-                    break
-            else:
-                raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-        
-        # Resolve path to prevent directory traversal
-        resolved_path = full_path.resolve()
-        uploads_path = Path("uploads").resolve()
-        storage_path = Path("storage").resolve()
-        
-        # Allow access to files in uploads or storage directories
-        if not (str(resolved_path).startswith(str(uploads_path)) or 
-                str(resolved_path).startswith(str(storage_path))):
-            raise HTTPException(status_code=403, detail="Access denied")
-        
-        # Determine media type
-        file_ext = full_path.suffix.lower()
-        media_type = {
-            '.mp4': 'video/mp4',
-            '.mp3': 'audio/mpeg',
-            '.wav': 'audio/wav',
-            '.m4a': 'audio/mp4',
-            '.avi': 'video/x-msvideo',
-            '.mov': 'video/quicktime'
-        }.get(file_ext, 'application/octet-stream')
-        
-        return FileResponse(
-            path=str(resolved_path),
-            media_type=media_type,
-            filename=full_path.name
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error serving file {file_path}: {e}")
-        raise HTTPException(status_code=500, detail="Error serving file")
-
-@app.get("/metadata/{task_id}")
-async def get_file_metadata(task_id: str):
-    """Get file metadata for a specific task"""
-    try:
-        # Get transcription data
-        transcription = storage.get_transcription(task_id)
-        
-        if not transcription:
-            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-        
-        # Get file info
-        file_path = transcription.get("file_path")
-        if not file_path:
-            raise HTTPException(status_code=404, detail="File path not found in task data")
-        
-        # Clean file path (remove uploads/ prefix if present)
-        clean_path = file_path.replace("uploads/", "") if file_path.startswith("uploads/") else file_path
-        
-        # Check if file exists
-        full_path = Path("uploads") / clean_path
-        if not full_path.exists():
-            # Try alternative paths
-            alternative_paths = [
-                Path("uploads") / clean_path,
-                Path("storage") / "videos" / clean_path,
-                Path("storage") / "uploads" / clean_path
-            ]
-            
-            for alt_path in alternative_paths:
-                if alt_path.exists():
-                    full_path = alt_path
-                    break
-            else:
-                raise HTTPException(status_code=404, detail=f"File not found: {clean_path}")
-        
-        # Get file stats
-        file_stats = full_path.stat()
-        
-        return {
-            "task_id": task_id,
-            "file_path": str(full_path),
-            "file_name": full_path.name,
-            "file_size": file_stats.st_size,
-            "file_exists": True,
-            "urls": {
-                "local": f"/file/{clean_path}",
-                "staging": f"/media-uploads/{clean_path}",
-                "uploads": f"/uploads/{clean_path}"
-            },
-            "transcription_info": {
-                "status": transcription.get("status"),
-                "progress": transcription.get("progress", 0),
-                "filename": transcription.get("filename"),
-                "language": transcription.get("language", "th")
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting metadata for task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail="Error getting file metadata")
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "service": "transcription-api"}
 
 @app.get("/")
 async def root():
-    """หน้าแรก"""
+    """Root endpoint"""
     return {
-        "message": "Transcription & Close Caption Service API",
+        "message": "Transcription Service API",
         "version": "1.0.0",
-        "docs": "/docs",
-        "endpoints": {
-            "transcription": "/transcribe",
-            "transcription_enhanced": "/transcribe-enhanced",
-            "progress_tracking": "/progress",
-            "webhook": "/webhook",
-            "dashboard": "/dashboard",
-            "caption": "/caption",
-            "realtime_caption": "/caption/realtime",
-            "upload": "/upload",
-            "video": "/video",
-            "live_streaming": "/live",
-            "thai_processing": "/thai",
-            # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket endpoints for migration to separate service
-            # "websocket": "/ws",
-            # "websocket_caption": "/ws/caption"
-        },
-        "storage": StorageFactory.get_storage_info()
+        "docs": "/docs"
     }
 
-@app.get("/health")
-async def health_check():
-    """
-    ตรวจสอบสถานะระบบ พร้อม ping RabbitMQ (เพื่อป้องกัน idle timeout)
-    
-    Health check นี้จะ:
-    1. Ping RabbitMQ เพื่อแสดง activity จริงๆ
-    2. ตรวจสอบ services ต่างๆ
-    3. Log activity เพื่อให้ platform (RunPod) เห็นว่า service ยัง active
-    """
-    import time
-    from .services.rabbitmq_service import RabbitMQService
-    
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {
-            "transcription": "running",
-            "caption": "running",
-            "video": "running",
-            "storage": "running"
-        },
-        "rabbitmq": {
-            "status": "unknown",
-            "ping_time_ms": None
-        }
-    }
-    
-    # Ping RabbitMQ เพื่อแสดง activity จริงๆ (ป้องกัน idle timeout)
-    try:
-        start_time = time.time()
-        rabbitmq_service = RabbitMQService()
-        
-        # Ping RabbitMQ ด้วย lightweight operation (get queue info)
-        queue_info = rabbitmq_service.get_queue_info()
-        
-        ping_time_ms = (time.time() - start_time) * 1000
-        
-        health_status["rabbitmq"] = {
-            "status": "connected",
-            "ping_time_ms": round(ping_time_ms, 2),
-            "queues_available": len(queue_info)
-        }
-        
-        logger.debug(f"💓 [Health Check] RabbitMQ ping successful ({ping_time_ms:.2f}ms)")
-        
-    except Exception as e:
-        health_status["rabbitmq"] = {
-            "status": "error",
-            "error": str(e)[:200]
-        }
-        health_status["status"] = "degraded"
-        logger.warning(f"⚠️ [Health Check] RabbitMQ ping failed: {e}")
-    
-    return health_status
-
-@app.get("/stats")
-async def get_stats():
-    """ดึงสถิติระบบ"""
-    try:
-        # ดึงสถิติ transcription
-        transcriptions = storage.list_all_transcriptions()
-        
-        # ดึงสถิติ video tasks
-        video_tasks = storage.list_all_video_tasks()
-        
-        # คำนวณสถิติ
-        total_transcriptions = len(transcriptions)
-        total_video_tasks = len(video_tasks)
-        
-        completed_transcriptions = len([t for t in transcriptions if t.get("status") == "completed"])
-        completed_video_tasks = len([v for v in video_tasks if v.get("status") == "completed"])
-        
-        return {
-            "transcriptions": {
-                "total": total_transcriptions,
-                "completed": completed_transcriptions,
-                "pending": total_transcriptions - completed_transcriptions
-            },
-            "video_tasks": {
-                "total": total_video_tasks,
-                "completed": completed_video_tasks,
-                "pending": total_video_tasks - completed_video_tasks
-            },
-            # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket connections count for migration to separate service
-            # "active_websocket_connections": len(active_connections)
-        }
-        
-    except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดในการดึงสถิติ: {e}")
-        return {"error": str(e)}
-
-@app.post("/cleanup")
-async def cleanup_system():
-    """ลบไฟล์เก่าในระบบ"""
-    try:
-        # ลบไฟล์เก่า
-        storage.cleanup_old_files(24)  # ลบไฟล์ที่เก่ากว่า 24 ชั่วโมง
-        
-        return {
-            "message": "ลบไฟล์เก่าเสร็จสิ้น",
-            "status": "success"
-        }
-        
-    except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดในการลบไฟล์เก่า: {e}")
-        return {"error": str(e)}
-
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket endpoint for migration to separate service
-# WebSocket endpoint สำหรับติดตามความคืบหน้า
-# @app.websocket("/ws")
-# async def websocket_endpoint(websocket: WebSocket):
-#     await websocket.accept()
-#     active_connections.append(websocket)
-#     
-#     try:
-#         while True:
-#             # รับข้อความจาก client
-#             data = await websocket.receive_text()
-#             message = json.loads(data)
-#             
-#             # จัดการข้อความตามประเภท
-#             if message.get("type") == "subscribe_task":
-#                 task_id = message.get("task_id")
-#                 task_type = message.get("task_type", "transcription")
-#                 
-#                 # ส่งสถานะปัจจุบัน
-#                 if task_type == "transcription":
-#                     task = storage.load_transcription(task_id)
-#                 elif task_type == "caption":
-#                     task = storage.load_caption(task_id)
-#                 elif task_type == "video":
-#                     task = storage.load_video_task(task_id)
-#                 else:
-#                     task = None
-#                 
-#                 if task:
-#                     await websocket.send_text(json.dumps({
-#                         "type": "task_status",
-#                         "task_id": task_id,
-#                         "task_type": task_type,
-#                         "status": task.get("status"),
-#                         "progress": task.get("progress", 0)
-#                     }))
-#                 else:
-#                     await websocket.send_text(json.dumps({
-#                         "type": "error",
-#                         "message": f"ไม่พบ task: {task_id}"
-#                     }))
-#             
-#             elif message.get("type") == "ping":
-#                 await websocket.send_text(json.dumps({
-#                     "type": "pong",
-#                     "timestamp": asyncio.get_event_loop().time()
-#                 }))
-#                 
-#     except WebSocketDisconnect:
-#         active_connections.remove(websocket)
-#         logger.info("WebSocket client disconnected")
-#     except Exception as e:
-#         logger.error(f"เกิดข้อผิดพลาดใน WebSocket: {e}")
-#         if websocket in active_connections:
-#             active_connections.remove(websocket)
-
-# WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket broadcast functions for migration to separate service
-# ฟังก์ชันสำหรับส่งข้อความไปยัง WebSocket clients
-# async def broadcast_message(message: Dict):
-#     """ส่งข้อความไปยัง WebSocket clients ทั้งหมด"""
-#     if not active_connections:
-#         return
-#     
-#     message_text = json.dumps(message)
-#     disconnected = []
-#     
-#     for connection in active_connections:
-#         try:
-#             await connection.send_text(message_text)
-#         except:
-#             disconnected.append(connection)
-#     
-#     # ลบ connections ที่ขาด
-#     for connection in disconnected:
-#         if connection in active_connections:
-#             active_connections.remove(connection)
-
-# ฟังก์ชันสำหรับส่งการอัปเดตสถานะ task
-# async def broadcast_task_update(task_id: str, task_type: str, status: str, progress: float = 0):
-#     """ส่งการอัปเดตสถานะ task ไปยัง WebSocket clients"""
-#     await broadcast_message({
-#         "type": "task_update",
-#         "task_id": task_id,
-#         "task_type": task_type,
-#         "status": status,
-#         "progress": progress,
-#         "timestamp": asyncio.get_event_loop().time()
-#     })
-
-# ฟังก์ชันสำหรับส่งการแจ้งเตือน
-# async def broadcast_notification(message: str, notification_type: str = "info"):
-#     """ส่งการแจ้งเตือนไปยัง WebSocket clients"""
-#     await broadcast_message({
-#         "type": "notification",
-#         "message": message,
-#         "notification_type": notification_type,
-#         "timestamp": asyncio.get_event_loop().time()
-#     })
-
-# ============================================================
-# Resource Monitoring
-# ============================================================
-def log_resource_usage():
-    """Log current resource usage"""
-    try:
-        import psutil
-        
-        process = psutil.Process(os.getpid())
-        
-        # Memory
-        memory_info = process.memory_info()
-        memory_percent = process.memory_percent()
-        
-        # CPU
-        cpu_percent = process.cpu_percent(interval=1)
-        
-        # Thread count
-        thread_count = threading.active_count()
-        
-        # File descriptors
-        try:
-            fd_count = process.num_fds() if hasattr(process, 'num_fds') else 'N/A'
-        except Exception:
-            fd_count = 'N/A'
-        
-        logger.info(
-            f"📊 Resource Usage - "
-            f"Memory: {memory_info.rss / 1024 / 1024:.2f} MB ({memory_percent:.1f}%), "
-            f"CPU: {cpu_percent:.1f}%, "
-            f"Threads: {thread_count}, "
-            f"FDs: {fd_count}"
-        )
-    except ImportError:
-        logger.warning("psutil not available, skipping resource monitoring")
-    except Exception as e:
-        logger.warning(f"Error logging resource usage: {e}")
-
-# Periodic resource monitoring
-async def periodic_resource_monitor():
-    """Periodically log resource usage"""
-    while True:
-        try:
-            await asyncio.sleep(300)  # Every 5 minutes
-            log_resource_usage()
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error(f"Error in resource monitor: {e}")
-
-async def periodic_worker_health_check():
-    """
-    Ping worker health check endpoint ทุก 30-60 วินาที
-    เพื่อให้ RunPod เห็น inbound activity → ไม่ idle → ไม่ถูก SIGTERM
-    """
-    import aiohttp
-    import random
-    
-    worker_health_port = int(os.getenv('WORKER_HEALTH_PORT', '8030'))
-    worker_health_url = f"http://localhost:{worker_health_port}/health"
-    
-    # Random interval 30-60 seconds เพื่อให้ดูเป็น natural traffic
-    min_interval = 30
-    max_interval = 60
-    
-    # Wait initial grace period for worker to start (30 seconds)
-    await asyncio.sleep(30)
-    
-    while True:
-        try:
-            # Random interval เพื่อให้ดูเป็น natural traffic
-            interval = random.uniform(min_interval, max_interval)
-            await asyncio.sleep(interval)
-            
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        worker_health_url,
-                        timeout=aiohttp.ClientTimeout(total=5)
-                    ) as response:
-                        if response.status == 200:
-                            health_data = await response.json()
-                            logger.debug(f"💓 [Worker Health Check] Worker is healthy: {health_data.get('status')}")
-                        else:
-                            logger.debug(f"💓 [Worker Health Check] Worker health check returned status {response.status}")
-            except aiohttp.ClientError as e:
-                logger.debug(f"💓 [Worker Health Check] Worker may not be running yet: {e}")
-            except Exception as e:
-                logger.debug(f"💓 [Worker Health Check] Error pinging worker: {e}")
-                
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error(f"Error in worker health check: {e}")
-            await asyncio.sleep(60)  # Wait 1 minute before retry
-
-# ฟังก์ชั่น startup สำหรับ cleanup temp folders เก่า
-@app.on_event("startup")
-async def startup_event():
-    """เริ่มต้น application"""
-    try:
-        logger.info("🚀 เริ่มต้น Transcription Service API...")
-        logger.info(f"📁 Process ID: {os.getpid()}")
-        logger.info(f"📁 Python version: {sys.version}")
-        logger.info(f"📁 Working directory: {os.getcwd()}")
-        logger.info(f"📁 Log files: {LOG_FILE}, {ERROR_LOG_FILE}")
-        
-        # Log initial resource usage
-        log_resource_usage()
-        
-        # Start resource monitoring
-        asyncio.create_task(periodic_resource_monitor())
-        
-        # ============================================================
-        # Phase 5: Cleanup Service - Startup Cleanup & Periodic Scheduler
-        # ============================================================
-        try:
-            from .services.cleanup_service import cleanup_service
-            
-            # 1. Startup cleanup (run once on startup)
-            await cleanup_service.cleanup_on_startup()
-            
-            # 2. Start periodic cleanup scheduler
-            cleanup_service.start_periodic_cleanup()
-            
-            logger.info("✅ Cleanup Service initialized and started")
-        except Exception as e:
-            logger.error(f"❌ Error starting Cleanup Service: {e}", exc_info=True)
-        
-        # ============================================================
-        # Phase 6: Worker Monitor - Auto-restart Video Worker
-        # ============================================================
-        if os.getenv('ENABLE_WORKER_MONITOR', 'true').lower() == 'true':
-            try:
-                from .services.worker_monitor import get_worker_monitor
-                monitor = get_worker_monitor()
-                monitor.start()
-                logger.info("✅ Worker Monitor started (auto-restart enabled)")
-            except Exception as e:
-                logger.error(f"❌ Error starting Worker Monitor: {e}", exc_info=True)
-        
-        # ============================================================
-        # Phase 7: Worker Health Check - Ping Worker Health Endpoint
-        # ============================================================
-        # ยิง health check ไปหา worker ทุก 30-60 วินาที เพื่อให้ RunPod เห็น inbound activity
-        if os.getenv('ENABLE_WORKER_HEALTH_CHECK', 'true').lower() == 'true':
-            try:
-                asyncio.create_task(periodic_worker_health_check())
-                logger.info("✅ Worker Health Check started (pinging worker every 30-60s)")
-            except Exception as e:
-                logger.error(f"❌ Error starting Worker Health Check: {e}", exc_info=True)
-        
-        # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
-        # 🔌 เริ่มต้น WebSocket Service
-        # try:
-        #     from .services.websocket_service import initialize_websocket_service
-        #     await initialize_websocket_service()
-        #     logger.info("✅ WebSocket Service เริ่มต้นเสร็จสิ้น")
-        # except Exception as e:
-        #     logger.warning(f"⚠️ ไม่สามารถเริ่มต้น WebSocket Service: {e}")
-        
-        logger.info("✅ API Server พร้อมใช้งาน")
-    except Exception as e:
-        logger.critical(f"❌ CRITICAL: Failed to start API Server: {e}", exc_info=True)
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup เมื่อ application shutdown"""
-    logger.info("🛑 Shutting down Transcription Service API...")
-    logger.info(f"📁 Process ID: {os.getpid()}")
-    
-    # Log final resource usage
-    log_resource_usage()
-    
-    try:
-        from .services.cleanup_service import cleanup_service
-        cleanup_service.stop_periodic_cleanup()
-        logger.info("✅ Cleanup Service stopped")
-    except Exception as e:
-        logger.warning(f"⚠️ Error stopping Cleanup Service: {e}", exc_info=True)
-    
-    try:
-        from .services.worker_monitor import get_worker_monitor
-        monitor = get_worker_monitor()
-        monitor.stop()
-        logger.info("✅ Worker Monitor stopped")
-    except Exception as e:
-        logger.warning(f"⚠️ Error stopping Worker Monitor: {e}", exc_info=True)
-    
-    logger.info("✅ API Server shutdown complete")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8001,
-        reload=True,
-        log_level="info"
-    ) 

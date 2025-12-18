@@ -9,10 +9,12 @@ if __name__ == "__main__":
     Path("models").mkdir(exist_ok=True)
     
     # รันเซิร์ฟเวอร์
+    # ⚠️  หมายเหตุ: Port 8001 ถูกใช้โดย RunPod Nginx/Proxy
+    # ใช้ port 8010 ตาม RunPod HTTP Expose
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8001,
+        port=8010,
         reload=True,
         log_level="info"
     ) 
