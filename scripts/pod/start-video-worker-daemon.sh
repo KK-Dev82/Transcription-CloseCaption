@@ -78,6 +78,7 @@ start_worker() {
 
 # Function to check worker health
 check_worker_health() {
+    # First check if PID file exists and process is running
     if [ ! -f "$WORKER_PID_FILE" ]; then
         return 1
     fi
@@ -91,7 +92,12 @@ check_worker_health() {
         return 1
     fi
     
-    # Check if worker is consuming messages
+    # Check health endpoint (port 8030) - primary check
+    if curl -s -f "http://localhost:8030/health" > /dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Fallback: Check if worker is consuming messages from RabbitMQ
     python3 -c "
 import pika
 import os
@@ -101,13 +107,13 @@ RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'senate')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'qP2VtHz6fAX4xDksEpMrLT')
 try:
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=credentials))
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=credentials, heartbeat=600))
     channel = connection.channel()
     method = channel.queue_declare('audio_extraction_queue', passive=True)
     consumer_count = method.method.consumer_count
     connection.close()
     exit(0 if consumer_count > 0 else 1)
-except:
+except Exception as e:
     exit(1)
 " 2>/dev/null && return 0 || return 1
 }

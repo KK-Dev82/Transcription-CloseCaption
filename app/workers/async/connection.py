@@ -120,6 +120,22 @@ class AsyncRabbitMQConnection:
                 logger.warning("⚠️ Connection not ready for reconnection setup")
                 return False
             
+            # Wait a bit for connection to stabilize
+            import asyncio
+            await asyncio.sleep(0.3)
+            
+            # Double-check connection is still ready
+            if not self.connection or self.connection.is_closed:
+                logger.warning("⚠️ Connection closed during stabilization wait")
+                return False
+            
+            # Close old channel if exists (cleanup)
+            if self.channel and not self.channel.is_closed:
+                try:
+                    await self.channel.close()
+                except Exception:
+                    pass  # Ignore errors when closing old channel
+            
             # Recreate channel
             self.channel = await self.connection.channel()
             logger.info("✅ Channel recreated after reconnect")
@@ -145,6 +161,40 @@ class AsyncRabbitMQConnection:
                 
         except Exception as e:
             logger.error(f"❌ Error during reconnection setup: {e}", exc_info=True)
+            return False
+    
+    async def check_connection_health(self) -> bool:
+        """Check if connection and channel are healthy"""
+        try:
+            # Check connection
+            if not self.connection or self.connection.is_closed:
+                return False
+            
+            # Check channel
+            if not self.channel or self.channel.is_closed:
+                return False
+            
+            # Try a simple operation to verify channel is working
+            # Use a lightweight operation (declare a temporary queue with passive=True)
+            # If this fails, channel is not healthy
+            try:
+                # Try to get a queue (passive check - won't create if doesn't exist)
+                # This is a lightweight operation to test channel health
+                test_queue = await self.channel.get_queue('transcription_request_queue', ensure=False)
+                if test_queue:
+                    return True
+            except Exception:
+                # If get_queue fails, try declaring a test queue
+                try:
+                    test_queue = await self.channel.declare_queue('_health_check_temp', auto_delete=True, durable=False)
+                    await test_queue.delete()
+                    return True
+                except Exception:
+                    return False
+            
+            return True
+        except Exception as e:
+            logger.debug(f"Connection health check error: {e}")
             return False
     
     def set_reconnect_callback(self, callback):
@@ -327,7 +377,7 @@ class AsyncRabbitMQConnection:
                 max_length=max_extraction,
                 enable_dlx=True,
                 enable_quorum=True,
-                enable_priority=True  # Enable priority for CloseCaption
+                enable_priority=False  # Priority ไม่จำเป็นสำหรับ audio extraction (CPU-bound, ไม่ใช่ real-time)
             )
             await self.channel.declare_queue(
                 self.audio_extraction_queue_name,

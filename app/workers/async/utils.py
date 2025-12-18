@@ -176,6 +176,96 @@ class AsyncWorkerUtils:
         except Exception as e:
             logger.error(f"❌ Monitor error for task {task_id}: {e}", exc_info=True)
     
+    def save_chunk_result(self, parent_task_id: str, chunk_index: int, chunk_data: Dict, total_chunks: int):
+        """บันทึกผลลัพธ์ของ chunk ลง storage และอัปเดต progress"""
+        try:
+            from datetime import datetime, timezone
+            
+            logger.debug(f"💾 save_chunk_result called: task={parent_task_id}, chunk={chunk_index+1}/{total_chunks}")
+            
+            # Load parent task
+            parent_task = self.worker.json_storage.get_transcription(parent_task_id)
+            if not parent_task:
+                logger.error(f"❌ Parent task {parent_task_id} not found in storage")
+                return
+            
+            # Initialize chunks array if not exists
+            if 'chunks' not in parent_task or parent_task['chunks'] is None:
+                parent_task['chunks'] = [None] * total_chunks
+                logger.debug(f"   Initialized chunks array with {total_chunks} slots")
+            
+            # Ensure chunks array has correct size
+            current_length = len(parent_task['chunks'])
+            if current_length < total_chunks:
+                # Extend array if needed
+                parent_task['chunks'].extend([None] * (total_chunks - current_length))
+                logger.debug(f"   Extended chunks array from {current_length} to {total_chunks}")
+            elif current_length > total_chunks:
+                # Truncate if too large (shouldn't happen, but handle it)
+                parent_task['chunks'] = parent_task['chunks'][:total_chunks]
+                logger.warning(f"   Truncated chunks array from {current_length} to {total_chunks}")
+            
+            # Validate chunk_index
+            if chunk_index < 0 or chunk_index >= total_chunks:
+                logger.error(f"❌ Invalid chunk_index {chunk_index} (valid range: 0-{total_chunks-1})")
+                return
+            
+            # Save chunk result
+            parent_task['chunks'][chunk_index] = chunk_data
+            logger.debug(f"   Saved chunk {chunk_index+1} data (text length: {len(chunk_data.get('text', ''))})")
+            
+            # Update progress
+            completed_chunks = sum(1 for c in parent_task['chunks'] if c is not None)
+            
+            # อัปเดต total_chunks และ completed_chunks
+            parent_task['total_chunks'] = total_chunks
+            parent_task['completed_chunks'] = completed_chunks
+            
+            # คำนวณ progress percentage
+            # สำหรับ display_mode='full_text': progress = 10 + (completed_chunks / total_chunks) * 80
+            # สำหรับ display_mode='realtime_chunks': progress = (completed_chunks / total_chunks) * 100
+            display_mode = parent_task.get('display_mode', 'full_text')
+            if display_mode == 'realtime_chunks':
+                progress = int((completed_chunks / total_chunks) * 100) if total_chunks > 0 else 0
+            else:
+                # Full text: 10% = starting, 10-90% = processing chunks, 90-100% = merging/finalizing
+                progress = 10 + int((completed_chunks / total_chunks) * 80) if total_chunks > 0 else 0
+            
+            parent_task['progress'] = progress
+            
+            # อัปเดต status
+            if completed_chunks == total_chunks:
+                # ถ้า chunks เสร็จหมดแล้ว แต่ยังไม่ finalize ให้รอ finalize
+                if parent_task.get('status') != 'completed':
+                    parent_task['status'] = 'processing'  # ยังไม่ completed จนกว่าจะ finalize
+                    parent_task['current_stage'] = 'merging_results'
+                    parent_task['current_stage_description'] = 'กำลังรวมผลลัพธ์จาก chunks'
+            elif parent_task.get('status') == 'pending':
+                parent_task['status'] = 'processing'
+                if not parent_task.get('current_stage'):
+                    parent_task['current_stage'] = 'transcribing_chunks'
+                    parent_task['current_stage_description'] = f'กำลังแปลงเสียง chunk {completed_chunks}/{total_chunks}'
+            
+            # อัปเดต updated_at ทุกครั้งที่บันทึก chunk result
+            parent_task['updated_at'] = datetime.now(timezone.utc).isoformat()
+            
+            # อัปเดต total_tasks และ completed_tasks
+            audio_extraction_done = parent_task.get('audio_extraction_time') is not None
+            total_tasks = (1 if audio_extraction_done else 0) + total_chunks
+            completed_tasks = (1 if audio_extraction_done else 0) + completed_chunks
+            parent_task['total_tasks'] = total_tasks
+            parent_task['completed_tasks'] = completed_tasks
+            
+            # Save to storage
+            self.worker.json_storage.save_transcription(parent_task_id, parent_task)
+            
+            logger.info(f"📊 Task {parent_task_id}: Progress {progress}% ({completed_chunks}/{total_chunks} chunks completed)")
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving chunk result for task {parent_task_id}, chunk {chunk_index+1}: {e}", exc_info=True)
+            # Re-raise เพื่อให้ caller รู้ว่ามี error
+            raise
+    
     async def execute_chunk_transcription_async(self, chunk_task: Dict[str, Any]):
         """Execute chunk transcription async (สำหรับ asyncio tasks)"""
         chunk_index = chunk_task.get('chunk_index', 0)

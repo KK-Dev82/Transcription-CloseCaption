@@ -80,9 +80,20 @@ echo ""
 # ============================================
 print_header "2. Starting Video-Worker"
 
-if pgrep -f "python.*video_worker" > /dev/null; then
+# Check worker with multiple patterns
+WORKER_RUNNING=false
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_RUNNING=true
+        WORKER_PID=$(pgrep -f "$pattern" | head -1)
+        break
+    fi
+done
+
+if [ "$WORKER_RUNNING" = true ]; then
     print_warning "Video-Worker is already running"
-    PID=$(pgrep -f "python.*video_worker" | head -1)
+    PID="$WORKER_PID"
     echo "   PID: $PID"
 else
     print_status "Starting Video-Worker..."
@@ -94,8 +105,16 @@ else
         # Wait a bit for worker to start
         sleep 5
         
-        # Check if worker started
-        if pgrep -f "python.*video_worker" > /dev/null; then
+        # Check if worker started (try multiple patterns)
+        WORKER_STARTED=false
+        for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+            if pgrep -f "$pattern" > /dev/null; then
+                WORKER_STARTED=true
+                break
+            fi
+        done
+        
+        if [ "$WORKER_STARTED" = true ]; then
             print_success "Video-Worker started successfully"
         else
             print_warning "Video-Worker may not have started. Check logs: /tmp/worker-start.log"
@@ -149,11 +168,91 @@ fi
 echo ""
 
 # ============================================
-# Part 4: Verify Services
+# Part 4: Wait for All Services to be Ready
 # ============================================
-print_header "4. Verifying Services"
+print_header "4. Waiting for All Services to be Ready"
 
-sleep 2
+MAX_WAIT=60  # Maximum wait time in seconds
+WAIT_INTERVAL=2  # Check every 2 seconds
+ELAPSED=0
+
+print_status "Waiting for services to start (max ${MAX_WAIT}s)..."
+echo ""
+
+# Wait for MainAPI
+API_READY=false
+while [ $ELAPSED -lt $MAX_WAIT ] && [ "$API_READY" = false ]; do
+    if pgrep -f "uvicorn.*app.main.*${API_PORT}" > /dev/null; then
+        if curl -s -f "http://localhost:${API_PORT}/health" > /dev/null 2>&1; then
+            API_READY=true
+            print_success "✅ MainAPI is ready (${ELAPSED}s)"
+            break
+        fi
+    fi
+    sleep $WAIT_INTERVAL
+    ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+    if [ $((ELAPSED % 10)) -eq 0 ]; then
+        print_status "   Waiting for MainAPI... (${ELAPSED}s/${MAX_WAIT}s)"
+    fi
+done
+
+if [ "$API_READY" = false ]; then
+    print_warning "⚠️  MainAPI did not become ready within ${MAX_WAIT}s"
+fi
+
+# Wait for Video-Worker
+WORKER_READY=false
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ] && [ "$WORKER_READY" = false ]; do
+    for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+        if pgrep -f "$pattern" > /dev/null; then
+            WORKER_READY=true
+            print_success "✅ Video-Worker is ready (${ELAPSED}s)"
+            break
+        fi
+    done
+    if [ "$WORKER_READY" = true ]; then
+        break
+    fi
+    sleep $WAIT_INTERVAL
+    ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+    if [ $((ELAPSED % 10)) -eq 0 ]; then
+        print_status "   Waiting for Video-Worker... (${ELAPSED}s/${MAX_WAIT}s)"
+    fi
+done
+
+if [ "$WORKER_READY" = false ]; then
+    print_warning "⚠️  Video-Worker did not become ready within ${MAX_WAIT}s"
+fi
+
+# Wait for Dashboard
+DASHBOARD_READY=false
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ] && [ "$DASHBOARD_READY" = false ]; do
+    if pgrep -f "uvicorn.*main:app.*${DASHBOARD_PORT}" > /dev/null; then
+        if curl -s -f "http://localhost:${DASHBOARD_PORT}/" > /dev/null 2>&1; then
+            DASHBOARD_READY=true
+            print_success "✅ Dashboard is ready (${ELAPSED}s)"
+            break
+        fi
+    fi
+    sleep $WAIT_INTERVAL
+    ELAPSED=$((ELAPSED + WAIT_INTERVAL))
+    if [ $((ELAPSED % 10)) -eq 0 ]; then
+        print_status "   Waiting for Dashboard... (${ELAPSED}s/${MAX_WAIT}s)"
+    fi
+done
+
+if [ "$DASHBOARD_READY" = false ]; then
+    print_warning "⚠️  Dashboard did not become ready within ${MAX_WAIT}s"
+fi
+
+echo ""
+
+# ============================================
+# Part 5: Initial Health Check
+# ============================================
+print_header "5. Initial Health Check (Immediate)"
 
 # Check MainAPI
 if pgrep -f "uvicorn.*app.main.*${API_PORT}" > /dev/null; then
@@ -168,8 +267,16 @@ else
     print_error "MainAPI is NOT running"
 fi
 
-# Check Video-Worker
-if pgrep -f "python.*video_worker" > /dev/null; then
+# Check Video-Worker (try multiple patterns)
+WORKER_RUNNING=false
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_RUNNING=true
+        break
+    fi
+done
+
+if [ "$WORKER_RUNNING" = true ]; then
     print_success "Video-Worker is running"
 else
     print_error "Video-Worker is NOT running"
@@ -190,6 +297,59 @@ fi
 echo ""
 
 # ============================================
+# Part 6: Delayed Health Check (10 seconds)
+# ============================================
+print_header "6. Delayed Health Check (After 10 seconds)"
+
+print_status "Waiting 10 seconds before final health check..."
+sleep 10
+echo ""
+
+# Check MainAPI again
+API_STILL_RUNNING=false
+if pgrep -f "uvicorn.*app.main.*${API_PORT}" > /dev/null; then
+    API_STILL_RUNNING=true
+    API_RESPONSE=$(curl -s -m 3 "http://localhost:${API_PORT}/health" 2>&1 || echo "ERROR")
+    if echo "$API_RESPONSE" | grep -q "healthy\|status"; then
+        print_success "✅ MainAPI: Still running and healthy"
+    else
+        print_warning "⚠️  MainAPI: Running but health check failed"
+    fi
+else
+    print_error "❌ MainAPI: DIED after start!"
+fi
+
+# Check Video-Worker again
+WORKER_STILL_RUNNING=false
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_STILL_RUNNING=true
+        break
+    fi
+done
+
+if [ "$WORKER_STILL_RUNNING" = true ]; then
+    print_success "✅ Video-Worker: Still running"
+else
+    print_error "❌ Video-Worker: DIED after start!"
+fi
+
+# Check Dashboard again
+DASHBOARD_STILL_RUNNING=false
+if pgrep -f "uvicorn.*main:app.*${DASHBOARD_PORT}" > /dev/null; then
+    DASHBOARD_STILL_RUNNING=true
+    DASHBOARD_RESPONSE=$(curl -s -m 3 "http://localhost:${DASHBOARD_PORT}/" 2>&1 || echo "ERROR")
+    if echo "$DASHBOARD_RESPONSE" | grep -q "Transcription\|dashboard\|html"; then
+        print_success "✅ Dashboard: Still running and responding"
+    else
+        print_warning "⚠️  Dashboard: Running but not responding"
+    fi
+else
+    print_error "❌ Dashboard: DIED after start!"
+fi
+echo ""
+
+# ============================================
 # Summary
 # ============================================
 print_header "📋 Summary"
@@ -201,7 +361,16 @@ else
     echo -e "   ${RED}❌ MainAPI: NOT RUNNING${NC}"
 fi
 
-if pgrep -f "python.*video_worker" > /dev/null; then
+# Check Video-Worker (try multiple patterns)
+WORKER_RUNNING=false
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_RUNNING=true
+        break
+    fi
+done
+
+if [ "$WORKER_RUNNING" = true ]; then
     echo -e "   ${GREEN}✅ Video-Worker: RUNNING${NC}"
 else
     echo -e "   ${RED}❌ Video-Worker: NOT RUNNING${NC}"

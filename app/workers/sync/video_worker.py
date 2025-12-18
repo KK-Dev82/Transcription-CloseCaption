@@ -99,7 +99,7 @@ class VideoWorkerPika:
         while self.running:
             try:
                 # เชื่อมต่อ RabbitMQ (with retry)
-                if not self.connection.connect(max_retries=10, retry_delay=5):
+                if not self.connection.connect_rabbitmq(max_retries=10, retry_delay=5):
                     logger.error("ไม่สามารถเชื่อมต่อ RabbitMQ ได้ - Worker will retry")
                     logger.warning("💡 Video Worker will retry connection in 30 seconds...")
                     time.sleep(30)

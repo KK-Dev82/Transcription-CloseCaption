@@ -254,7 +254,14 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🛑 Step 2: Stopping Video Worker..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-WORKER_PID=$(pgrep -f "python.*video_worker" | head -1 || echo "")
+# Check worker with multiple patterns (priority: app.workers.video_worker > python3.*video_worker > python.*video_worker)
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    WORKER_PID=$(pgrep -f "$pattern" | head -1 || echo "")
+    if [ -n "$WORKER_PID" ]; then
+        break
+    fi
+done
 if [ -n "$WORKER_PID" ]; then
     print_status "Found Video Worker (PID: $WORKER_PID)"
     
@@ -272,20 +279,47 @@ if [ -n "$WORKER_PID" ]; then
     kill -TERM $WORKER_PID 2>/dev/null || true
     sleep 3
     
-    # Check if still running
-    if pgrep -f "python.*video_worker" > /dev/null; then
+    # Check if still running (try multiple patterns)
+    WORKER_STILL_RUNNING=false
+    for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+        if pgrep -f "$pattern" > /dev/null; then
+            WORKER_STILL_RUNNING=true
+            break
+        fi
+    done
+    
+    if [ "$WORKER_STILL_RUNNING" = true ]; then
         print_warning "Worker still running, waiting a bit more..."
         sleep 2
         
-        # Force kill if still running
-        if pgrep -f "python.*video_worker" > /dev/null; then
+        # Force kill if still running (try all patterns)
+        WORKER_STILL_RUNNING=false
+        for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+            if pgrep -f "$pattern" > /dev/null; then
+                WORKER_STILL_RUNNING=true
+                break
+            fi
+        done
+        
+        if [ "$WORKER_STILL_RUNNING" = true ]; then
             print_warning "Force killing Video Worker..."
-            pkill -9 -f "python.*video_worker" 2>/dev/null || true
+            for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+                pkill -9 -f "$pattern" 2>/dev/null || true
+            done
             sleep 1
         fi
     fi
     
-    if ! pgrep -f "python.*video_worker" > /dev/null; then
+    # Final check (try all patterns)
+    WORKER_STILL_RUNNING=false
+    for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+        if pgrep -f "$pattern" > /dev/null; then
+            WORKER_STILL_RUNNING=true
+            break
+        fi
+    done
+    
+    if [ "$WORKER_STILL_RUNNING" = false ]; then
         print_success "✅ Video Worker stopped"
     else
         print_error "❌ Failed to stop Video Worker"
@@ -383,21 +417,22 @@ bash scripts/pod/start-service-daemon.sh "${INTERNAL_PORT}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "⏳ Waiting for Service to be Ready..."
+echo "⏳ Waiting for All Services to be Ready..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Wait for service to be ready with health check
+# Wait for API service to be ready
 MAX_WAIT=60  # Maximum wait time in seconds
 WAIT_INTERVAL=2  # Check every 2 seconds
 ELAPSED=0
-SERVICE_READY=false
+API_READY=false
+WORKER_READY=false
 
-print_status "Waiting for service to respond on port ${INTERNAL_PORT}..."
+print_status "Waiting for API service to respond on port ${INTERNAL_PORT}..."
 while [ $ELAPSED -lt $MAX_WAIT ]; do
     # Check if process is running
     if ! pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" > /dev/null; then
-        print_error "❌ Service process not found!"
+        print_error "❌ API service process not found!"
         echo "   Check logs: tail -f /tmp/transcription-service.log"
         exit 1
     fi
@@ -408,22 +443,43 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
        lsof -i :${INTERNAL_PORT} 2>/dev/null | grep LISTEN > /dev/null; then
         # Port is listening, check health endpoint
         if curl -s -f "http://localhost:${INTERNAL_PORT}/health" > /dev/null 2>&1; then
-            SERVICE_READY=true
-            print_success "✅ Service is ready and responding!"
-            break
+            if [ "$API_READY" = false ]; then
+                API_READY=true
+                print_success "✅ API service is ready and responding! (${ELAPSED}s)"
+            fi
         else
+            if [ $((ELAPSED % 10)) -eq 0 ]; then
             print_status "   Port listening but health check not ready yet... (${ELAPSED}s/${MAX_WAIT}s)"
+            fi
         fi
     else
+        if [ $((ELAPSED % 10)) -eq 0 ]; then
         print_status "   Waiting for port ${INTERNAL_PORT} to listen... (${ELAPSED}s/${MAX_WAIT}s)"
+        fi
+    fi
+    
+    # Check worker
+    if [ "$WORKER_READY" = false ]; then
+        for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+            if pgrep -f "$pattern" > /dev/null; then
+                WORKER_READY=true
+                print_success "✅ Video-Worker is ready! (${ELAPSED}s)"
+                break
+            fi
+        done
+    fi
+    
+    # If both are ready, break
+    if [ "$API_READY" = true ] && [ "$WORKER_READY" = true ]; then
+        break
     fi
     
     sleep $WAIT_INTERVAL
     ELAPSED=$((ELAPSED + WAIT_INTERVAL))
 done
 
-if [ "$SERVICE_READY" = false ]; then
-    print_error "❌ Service did not become ready within ${MAX_WAIT} seconds"
+if [ "$API_READY" = false ]; then
+    print_error "❌ API service did not become ready within ${MAX_WAIT} seconds"
     echo ""
     echo "📋 Troubleshooting:"
     echo "   1. Check if service process is running:"
@@ -440,6 +496,55 @@ if [ "$SERVICE_READY" = false ]; then
     echo ""
     exit 1
 fi
+
+if [ "$WORKER_READY" = false ]; then
+    print_warning "⚠️  Video-Worker did not become ready within ${MAX_WAIT} seconds"
+    print_status "   Worker may start later, check logs: tail -f logs/video-worker.log"
+fi
+
+echo ""
+
+# ============================================
+# Delayed Health Check (10 seconds)
+# ============================================
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔍 Delayed Health Check (After 10 seconds)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+print_status "Waiting 10 seconds before final health check..."
+sleep 10
+echo ""
+
+# Check API service again
+API_STILL_RUNNING=false
+if pgrep -f "uvicorn.*app.main.*${INTERNAL_PORT}" > /dev/null; then
+    API_STILL_RUNNING=true
+    if curl -s -f "http://localhost:${INTERNAL_PORT}/health" > /dev/null 2>&1; then
+        print_success "✅ API Service: Still running and healthy"
+    else
+        print_warning "⚠️  API Service: Running but health check failed"
+    fi
+else
+    print_error "❌ API Service: DIED after start!"
+fi
+
+# Check Worker again
+WORKER_STILL_RUNNING=false
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_STILL_RUNNING=true
+        break
+    fi
+done
+
+if [ "$WORKER_STILL_RUNNING" = true ]; then
+    print_success "✅ Video-Worker: Still running"
+else
+    print_error "❌ Video-Worker: DIED after start!"
+fi
+
+echo ""
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -469,8 +574,18 @@ else
     print_error "❌ API Service: NOT RUNNING"
 fi
 
-if pgrep -f "python.*video_worker" > /dev/null; then
-    WORKER_PID=$(pgrep -f "python.*video_worker" | head -1)
+# Check worker with multiple patterns
+WORKER_RUNNING=false
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_RUNNING=true
+        WORKER_PID=$(pgrep -f "$pattern" | head -1)
+        break
+    fi
+done
+
+if [ "$WORKER_RUNNING" = true ]; then
     print_success "✅ Video Worker: RUNNING (PID: $WORKER_PID)"
 else
     print_error "❌ Video Worker: NOT RUNNING"
@@ -480,6 +595,7 @@ echo ""
 print_status "💡 Useful Commands:"
 echo "   Check status: bash scripts/pod/check-logs-diagnosis.sh"
 echo "   View API logs: tail -f /tmp/transcription-service.log"
-echo "   View Worker logs: tail -f /tmp/video-worker.log"
+echo "   View Worker logs: tail -f logs/video-worker.log"
+echo "   Or use: bash scripts/pod/tail-worker-log.sh"
 echo ""
 

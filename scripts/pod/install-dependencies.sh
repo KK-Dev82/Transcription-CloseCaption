@@ -96,27 +96,77 @@ if command -v apt-get > /dev/null 2>&1; then
     fi
     
     # Install/check timezone data (required for pythainlp)
+    # ใช้ persistent volume เพื่อไม่ต้องติดตั้งใหม่ทุกครั้งหลัง restart
     echo ""
     echo "📋 Checking timezone data..."
-    if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-        echo "📦 Installing tzdata..."
-        apt-get update -qq > /dev/null 2>&1
-        apt-get install -y -qq tzdata > /dev/null 2>&1 || {
-            echo "⚠️  Failed to install tzdata (may continue anyway)"
+    PERSISTENT_ZONEINFO="/workspace/.local/share/zoneinfo"
+    SYSTEM_ZONEINFO="/usr/share/zoneinfo"
+    
+    if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+        # ใช้ timezone data จาก persistent volume (เร็วที่สุด - ไม่ต้องติดตั้ง)
+        export TZDIR="$PERSISTENT_ZONEINFO"
+        echo "✅ Using timezone data from persistent volume: $TZDIR"
+        echo "   (Skipping installation - already available)"
+    elif [ -d "$SYSTEM_ZONEINFO" ] && [ -f "$SYSTEM_ZONEINFO/Asia/Bangkok" ]; then
+        # Fallback: ใช้ system timezone และ copy ไป persistent volume
+        echo "📦 Copying timezone data to persistent volume..."
+        mkdir -p "$PERSISTENT_ZONEINFO"
+        cp -r "$SYSTEM_ZONEINFO"/* "$PERSISTENT_ZONEINFO/" 2>/dev/null || {
+            echo "⚠️  Some files may have failed to copy (this is usually OK)"
         }
-        if [ -d "/usr/share/zoneinfo" ] && [ -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-            echo "✅ tzdata installed successfully"
+        if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+            export TZDIR="$PERSISTENT_ZONEINFO"
+            echo "✅ Timezone data copied to persistent volume: $TZDIR"
         else
-            echo "⚠️  tzdata installation may have failed, but continuing..."
+            export TZDIR="$SYSTEM_ZONEINFO"
+            echo "⚠️  Using system timezone (persistent copy failed): $TZDIR"
         fi
     else
-        echo "✅ Timezone data already available (skipping installation)"
-    fi
-    if [ -d "/usr/share/zoneinfo" ]; then
-        export TZDIR=/usr/share/zoneinfo
-        echo "✅ Timezone data ready"
+        # ติดตั้ง tzdata และ copy ไป persistent volume (ใช้เวลานานที่สุด)
+        echo "📦 Installing tzdata..."
+        echo "   ⚠️  This may take a while (downloading from apt repository)..."
+        
+        # ตั้งค่า non-interactive mode และ timezone เพื่อหลีกเลี่ยง interactive prompt
+        export DEBIAN_FRONTEND=noninteractive
+        export TZ=Asia/Bangkok
+        ln -sf /usr/share/zoneinfo/Asia/Bangkok /etc/localtime 2>/dev/null || true
+        
+        # ตรวจสอบว่ามี process tzdata ที่ติดค้างอยู่หรือไม่
+        if pgrep -f "tzdata" > /dev/null 2>&1; then
+            echo "   ⚠️  Detected stuck tzdata process, attempting to fix..."
+            # พยายาม configure tzdata ที่ติดค้าง
+            DEBIAN_FRONTEND=noninteractive TZ=Asia/Bangkok dpkg --configure -a 2>/dev/null || true
+            sleep 2
+        fi
+        
+        apt-get update -qq > /dev/null 2>&1
+        DEBIAN_FRONTEND=noninteractive TZ=Asia/Bangkok apt-get install -y -qq tzdata > /dev/null 2>&1 || {
+            echo "⚠️  Failed to install tzdata (may continue anyway)"
+            # พยายาม configure ใหม่ถ้าติดค้าง
+            DEBIAN_FRONTEND=noninteractive TZ=Asia/Bangkok dpkg --configure -a 2>/dev/null || true
+        }
+        if [ -d "$SYSTEM_ZONEINFO" ] && [ -f "$SYSTEM_ZONEINFO/Asia/Bangkok" ]; then
+            # Copy ไป persistent volume เพื่อใช้ครั้งต่อไป
+            echo "📦 Copying timezone data to persistent volume..."
+            mkdir -p "$PERSISTENT_ZONEINFO"
+            cp -r "$SYSTEM_ZONEINFO"/* "$PERSISTENT_ZONEINFO/" 2>/dev/null || {
+                echo "⚠️  Some files may have failed to copy (this is usually OK)"
+            }
+            if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+                export TZDIR="$PERSISTENT_ZONEINFO"
+                echo "✅ tzdata installed and copied to persistent volume: $TZDIR"
+            else
+                export TZDIR="$SYSTEM_ZONEINFO"
+                echo "✅ tzdata installed (using system location): $TZDIR"
+            fi
+        else
+            echo "⚠️  tzdata installation may have failed, but continuing..."
+            export TZDIR="${TZDIR:-/usr/share/zoneinfo}"
+        fi
     fi
     export TZ=Asia/Bangkok
+    echo "   TZ=$TZ"
+    echo "   TZDIR=$TZDIR"
 else
     echo "⚠️  apt-get not found, skipping system dependencies installation"
     echo "   Please install FFmpeg and tzdata manually if needed"
@@ -336,9 +386,13 @@ else
     VERIFY_FAILED=$((VERIFY_FAILED + 1))
 fi
 
-# Verify tzdata
-if [ -d "/usr/share/zoneinfo" ] && [ -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-    echo "✅ tzdata - available"
+# Verify tzdata (check both persistent and system locations)
+PERSISTENT_ZONEINFO="/workspace/.local/share/zoneinfo"
+SYSTEM_ZONEINFO="/usr/share/zoneinfo"
+if [ -f "$PERSISTENT_ZONEINFO/Asia/Bangkok" ]; then
+    echo "✅ tzdata - available (persistent volume: $PERSISTENT_ZONEINFO)"
+elif [ -d "$SYSTEM_ZONEINFO" ] && [ -f "$SYSTEM_ZONEINFO/Asia/Bangkok" ]; then
+    echo "✅ tzdata - available (system: $SYSTEM_ZONEINFO)"
 else
     echo "⚠️  tzdata - not found (may cause issues with pythainlp)"
 fi

@@ -531,16 +531,59 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """ตรวจสอบสถานะระบบ"""
-    return {
+    """
+    ตรวจสอบสถานะระบบ พร้อม ping RabbitMQ (เพื่อป้องกัน idle timeout)
+    
+    Health check นี้จะ:
+    1. Ping RabbitMQ เพื่อแสดง activity จริงๆ
+    2. ตรวจสอบ services ต่างๆ
+    3. Log activity เพื่อให้ platform (RunPod) เห็นว่า service ยัง active
+    """
+    import time
+    from .services.rabbitmq_service import RabbitMQService
+    
+    health_status = {
         "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
         "services": {
             "transcription": "running",
             "caption": "running",
             "video": "running",
             "storage": "running"
+        },
+        "rabbitmq": {
+            "status": "unknown",
+            "ping_time_ms": None
         }
     }
+    
+    # Ping RabbitMQ เพื่อแสดง activity จริงๆ (ป้องกัน idle timeout)
+    try:
+        start_time = time.time()
+        rabbitmq_service = RabbitMQService()
+        
+        # Ping RabbitMQ ด้วย lightweight operation (get queue info)
+        queue_info = rabbitmq_service.get_queue_info()
+        
+        ping_time_ms = (time.time() - start_time) * 1000
+        
+        health_status["rabbitmq"] = {
+            "status": "connected",
+            "ping_time_ms": round(ping_time_ms, 2),
+            "queues_available": len(queue_info)
+        }
+        
+        logger.debug(f"💓 [Health Check] RabbitMQ ping successful ({ping_time_ms:.2f}ms)")
+        
+    except Exception as e:
+        health_status["rabbitmq"] = {
+            "status": "error",
+            "error": str(e)[:200]
+        }
+        health_status["status"] = "degraded"
+        logger.warning(f"⚠️ [Health Check] RabbitMQ ping failed: {e}")
+    
+    return health_status
 
 @app.get("/stats")
 async def get_stats():
@@ -743,6 +786,52 @@ async def periodic_resource_monitor():
         except Exception as e:
             logger.error(f"Error in resource monitor: {e}")
 
+async def periodic_worker_health_check():
+    """
+    Ping worker health check endpoint ทุก 30-60 วินาที
+    เพื่อให้ RunPod เห็น inbound activity → ไม่ idle → ไม่ถูก SIGTERM
+    """
+    import aiohttp
+    import random
+    
+    worker_health_port = int(os.getenv('WORKER_HEALTH_PORT', '8030'))
+    worker_health_url = f"http://localhost:{worker_health_port}/health"
+    
+    # Random interval 30-60 seconds เพื่อให้ดูเป็น natural traffic
+    min_interval = 30
+    max_interval = 60
+    
+    # Wait initial grace period for worker to start (30 seconds)
+    await asyncio.sleep(30)
+    
+    while True:
+        try:
+            # Random interval เพื่อให้ดูเป็น natural traffic
+            interval = random.uniform(min_interval, max_interval)
+            await asyncio.sleep(interval)
+            
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        worker_health_url,
+                        timeout=aiohttp.ClientTimeout(total=5)
+                    ) as response:
+                        if response.status == 200:
+                            health_data = await response.json()
+                            logger.debug(f"💓 [Worker Health Check] Worker is healthy: {health_data.get('status')}")
+                        else:
+                            logger.debug(f"💓 [Worker Health Check] Worker health check returned status {response.status}")
+            except aiohttp.ClientError as e:
+                logger.debug(f"💓 [Worker Health Check] Worker may not be running yet: {e}")
+            except Exception as e:
+                logger.debug(f"💓 [Worker Health Check] Error pinging worker: {e}")
+                
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in worker health check: {e}")
+            await asyncio.sleep(60)  # Wait 1 minute before retry
+
 # ฟังก์ชั่น startup สำหรับ cleanup temp folders เก่า
 @app.on_event("startup")
 async def startup_event():
@@ -787,6 +876,17 @@ async def startup_event():
                 logger.info("✅ Worker Monitor started (auto-restart enabled)")
             except Exception as e:
                 logger.error(f"❌ Error starting Worker Monitor: {e}", exc_info=True)
+        
+        # ============================================================
+        # Phase 7: Worker Health Check - Ping Worker Health Endpoint
+        # ============================================================
+        # ยิง health check ไปหา worker ทุก 30-60 วินาที เพื่อให้ RunPod เห็น inbound activity
+        if os.getenv('ENABLE_WORKER_HEALTH_CHECK', 'true').lower() == 'true':
+            try:
+                asyncio.create_task(periodic_worker_health_check())
+                logger.info("✅ Worker Health Check started (pinging worker every 30-60s)")
+            except Exception as e:
+                logger.error(f"❌ Error starting Worker Health Check: {e}", exc_info=True)
         
         # WEBSOCKET_SERVICE_MIGRATION: Comment out WebSocket Service initialization for migration to separate service
         # 🔌 เริ่มต้น WebSocket Service

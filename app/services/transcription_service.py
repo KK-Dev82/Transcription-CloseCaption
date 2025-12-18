@@ -15,7 +15,7 @@ import inspect
 from .file_service import FileService
 from .whisper_service import WhisperService
 from .video_service import VideoService
-from .rabbitmq_service import RabbitMQService
+from .redis_queue_service import RedisQueueService
 from .webhook_service import webhook_service
 from .websocket_service import websocket_manager
 from .dictionary_service import DictionaryService
@@ -35,7 +35,7 @@ class TranscriptionService:
         self.file_service = FileService()
         self.whisper_service = WhisperService()
         self.video_service = VideoService()
-        self.rabbitmq_service = RabbitMQService()
+        self.redis_queue_service = RedisQueueService()
         self.webhook_service = webhook_service
         
         # ใช้ StorageFactory เพื่อเลือก storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
@@ -349,7 +349,9 @@ class TranscriptionService:
         initial_prompt: Optional[str] = None,
         use_backend_dictionary: bool = True,
         dictionary_scope: str = "Global",
-        dictionary_max_words: int = 50
+        dictionary_max_words: int = 50,
+        # BackgroundTasks from FastAPI (optional)
+        background_tasks = None
     ) -> str:
         """เริ่มการแปลงเสียงเป็นข้อความ - ส่งไปยัง RabbitMQ queue"""
         
@@ -570,59 +572,111 @@ class TranscriptionService:
                     partial(self.rabbitmq_service.send_close_caption_request_task_thread_safe, **send_kwargs)
                 )
             elif use_3queue_architecture:
-                # 3-Queue Architecture: ส่งไปยัง transcription_request_queue
-                logger.info("📤 Using 3-Queue Architecture: sending to transcription_request_queue")
+                # ใช้ Redis Streams: ส่ง request ไปยัง Redis queue แล้วให้ worker process
+                logger.info("📤 Using Redis Streams: sending transcription request to queue")
                 
-                try:
-                    signature = inspect.signature(self.rabbitmq_service.send_transcription_request_task)
-                    if "callback_url" in signature.parameters and callback_url:
-                        send_kwargs["callback_url"] = callback_url
-                    elif callback_url:
-                        logger.warning(
-                            "RabbitMQService.send_transcription_request_task does not accept 'callback_url'. Skipping this parameter."
-                        )
-                except (ValueError, TypeError):
-                    if callback_url:
-                        logger.warning(
-                            "Unable to inspect send_transcription_request_task signature; skipping 'callback_url' parameter."
-                        )
+                # สร้าง task_id
+                task_id = str(uuid.uuid4())
                 
-                # Run send_transcription_request_task_thread_safe in executor to avoid blocking event loop
-                # ใช้ thread-safe version ที่สร้าง connection ใหม่ในแต่ละ thread
-                import asyncio
-                from functools import partial
-                loop = asyncio.get_event_loop()
-                task_id = await loop.run_in_executor(
-                    None, 
-                    partial(self.rabbitmq_service.send_transcription_request_task_thread_safe, **send_kwargs)
+                # สร้าง task response และเพิ่มเข้า self.tasks
+                task = TranscriptionResponse(
+                    task_id=task_id,
+                    status="pending",
+                    file_path=file_path or (file_name or file_url or ""),
+                    file_url=file_url,
+                    file_name=file_name,
+                    language=language,
+                    created_at=datetime.now()
                 )
+                
+                # เก็บ callback_url, job_id สำหรับ callback ภายหลัง
+                if callback_url:
+                    task.callback_url = callback_url
+                if job_id:
+                    task.job_id = job_id
+                if user_id:
+                    task.user_id = user_id
+                
+                self.tasks[task_id] = task
+                self.task_contexts[task_id] = {
+                    "file_url": file_url,
+                    "file_name": file_name
+                }
+                
+                # ส่งไปยัง Redis Streams
+                task_data = {
+                    "task_id": task_id,
+                    "file_path": file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "display_mode": display_mode,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "initial_prompt": built_initial_prompt,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                # ใช้ Redis Streams (มี acknowledgment support)
+                self.redis_queue_service.send_transcription_task(task_data, use_streams=True)
+                logger.info(f"✅ ส่ง transcription request ไปยัง Redis Stream: {task_id}")
             else:
-                # Legacy: ส่งไปยัง transcription_queue เก่า (backward compatible)
-                logger.info("📤 Using Legacy Architecture: sending to transcription_queue")
+                # ใช้ Redis Streams: ส่ง request ไปยัง Redis queue แล้วให้ worker process
+                logger.info("📤 Using Redis Streams: sending transcription request to queue")
                 
-                try:
-                    signature = inspect.signature(self.rabbitmq_service.send_transcription_task)
-                    if "callback_url" in signature.parameters and callback_url:
-                        send_kwargs["callback_url"] = callback_url
-                    elif callback_url:
-                        logger.warning(
-                            "RabbitMQService.send_transcription_task does not accept 'callback_url'. Skipping this parameter to maintain compatibility."
-                        )
-                except (ValueError, TypeError):
-                    if callback_url:
-                        logger.warning(
-                            "Unable to inspect send_transcription_task signature; skipping 'callback_url' parameter."
-                        )
+                # สร้าง task_id
+                task_id = str(uuid.uuid4())
                 
-                # Run send_transcription_task_thread_safe in executor to avoid blocking event loop
-                # ใช้ thread-safe version ที่สร้าง connection ใหม่ในแต่ละ thread
-                import asyncio
-                from functools import partial
-                loop = asyncio.get_event_loop()
-                task_id = await loop.run_in_executor(
-                    None,
-                    partial(self.rabbitmq_service.send_transcription_task_thread_safe, **send_kwargs)
+                # สร้าง task response และเพิ่มเข้า self.tasks
+                task = TranscriptionResponse(
+                    task_id=task_id,
+                    status="pending",
+                    file_path=file_path or (file_name or file_url or ""),
+                    file_url=file_url,
+                    file_name=file_name,
+                    language=language,
+                    created_at=datetime.now()
                 )
+                
+                # เก็บ callback_url, job_id สำหรับ callback ภายหลัง
+                if callback_url:
+                    task.callback_url = callback_url
+                if job_id:
+                    task.job_id = job_id
+                if user_id:
+                    task.user_id = user_id
+                
+                self.tasks[task_id] = task
+                self.task_contexts[task_id] = {
+                    "file_url": file_url,
+                    "file_name": file_name
+                }
+                
+                # ส่งไปยัง Redis Streams
+                task_data = {
+                    "task_id": task_id,
+                    "file_path": file_path,
+                    "file_url": file_url,
+                    "file_name": file_name,
+                    "language": language,
+                    "model_size": model_size,
+                    "chunk_duration": chunk_duration,
+                    "use_chunking": use_chunking,
+                    "display_mode": display_mode,
+                    "callback_url": callback_url,
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "initial_prompt": built_initial_prompt,
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                # ใช้ Redis Streams (มี acknowledgment support)
+                self.redis_queue_service.send_transcription_task(task_data, use_streams=True)
+                logger.info(f"✅ ส่ง transcription request ไปยัง Redis Stream: {task_id}")
             
             # สร้าง task response
             task = TranscriptionResponse(
@@ -1064,7 +1118,13 @@ class TranscriptionService:
                     raise ValueError(f"ไม่สามารถสร้าง audio chunks จากไฟล์ {local_file_path} ได้")
                 
                 # ตรวจสอบว่า chunks มีไฟล์จริงหรือไม่
-                for i, chunk_path in enumerate(chunks[:3]):  # ตรวจสอบแค่ 3 chunks แรก
+                for i, chunk_info in enumerate(chunks[:3]):  # ตรวจสอบแค่ 3 chunks แรก
+                    # รองรับทั้งรูปแบบเก่า (string) และรูปแบบใหม่ (dict)
+                    if isinstance(chunk_info, dict):
+                        chunk_path = chunk_info.get("path")
+                    else:
+                        chunk_path = chunk_info
+                    
                     chunk_file = Path(chunk_path)
                     if chunk_file.exists():
                         logger.info(f"   Chunk {i+1}: {chunk_path} exists ({chunk_file.stat().st_size} bytes)")
@@ -1129,8 +1189,9 @@ class TranscriptionService:
                 }
                 
                 try:
-                    self.rabbitmq_service.send_chunk_transcription_task(chunk_task)
-                    logger.info(f"✅ ส่ง chunk {i+1}/{total_chunks} ไปยัง queue: {chunk_path}")
+                    # ใช้ Redis Streams (มี acknowledgment support)
+                    self.redis_queue_service.send_chunk_transcription_task(chunk_task, use_streams=True)
+                    logger.info(f"✅ ส่ง chunk {i+1}/{total_chunks} ไปยัง Redis Stream: {chunk_path}")
                 except Exception as e:
                     logger.error(f"❌ ไม่สามารถส่ง chunk {i+1}/{total_chunks} ไปยัง queue: {e}")
                     # Continue sending other chunks even if one fails
@@ -1703,6 +1764,7 @@ class TranscriptionService:
                                 return task
             
             # ถ้าไม่มี idempotency_key ให้ค้นหาจาก file_path/file_url + parameters
+            # ⚠️  Disable idempotency check สำหรับ pending/processing tasks (เพื่อให้สามารถ retry ได้)
             if file_path or file_url:
                 all_tasks = self.json_storage.list_all_transcriptions()
                 for task_data in all_tasks:
@@ -1733,12 +1795,12 @@ class TranscriptionService:
                                 if task:
                                     logger.info(f"✅ Found completed task with matching file: {task.task_id}")
                                     return task
-                            elif task_status in ['pending', 'processing']:
-                                # Return existing task ID
-                                logger.info(f"✅ Found existing task with matching file: {task_data.get('task_id')} (status: {task_status})")
-                                task = self._build_task_from_storage(task_data.get('task_id'), task_data)
-                                if task:
-                                    return task
+                            # ⚠️  Disable idempotency check สำหรับ pending/processing tasks
+                            # เพื่อให้สามารถ retry ได้ถ้า task เก่าไม่ทำงาน
+                            # elif task_status in ['pending', 'processing']:
+                            #     # Skip idempotency check for pending/processing tasks
+                            #     logger.info(f"⚠️  Found pending/processing task with matching file: {task_data.get('task_id')} (status: {task_status}) - Skipping idempotency check to allow retry")
+                            #     # Continue to create new task
             
             return None
             

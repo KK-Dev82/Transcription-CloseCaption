@@ -36,11 +36,11 @@ def find_ffmpeg_binary():
         logger.info(f"✅ Using FFmpeg from FFMPEG_BINARY: {ffmpeg_binary}")
         return ffmpeg_binary
     
-    # 2. Check common system paths
+    # 2. Check common system paths (prioritize system FFmpeg for compatibility)
     common_paths = [
-        '/usr/bin/ffmpeg',
+        '/usr/bin/ffmpeg',  # System FFmpeg (preferred - has proper libraries)
         '/usr/local/bin/ffmpeg',
-        '/workspace/.local/bin/ffmpeg',
+        '/workspace/.local/bin/ffmpeg',  # Persistent FFmpeg (may have library issues)
     ]
     
     for path in common_paths:
@@ -797,10 +797,76 @@ class VideoService:
                     timeout=600  # 10 minutes timeout
                 )
                 
+                # Check if output file was created successfully
+                output_exists = output_path and Path(output_path).exists()
+                output_valid = False
+                if output_exists:
+                    file_size = Path(output_path).stat().st_size
+                    if file_size > 0:
+                        output_valid = True
+                        logger.debug(f"   [Audio Extraction Thread] Output file created: {output_path} ({file_size} bytes)")
+                
                 if result.returncode != 0:
+                    # Parse error message properly
                     error_msg = result.stderr or result.stdout or "Unknown error"
-                    logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error: {error_msg[:500]}")
-                    raise Exception(f"FFmpeg failed: {error_msg[:200]}")
+                    
+                    # Filter out version info, configuration details, and metadata
+                    error_lines = error_msg.split('\n')
+                    filtered_errors = []
+                    in_metadata = False
+                    
+                    for line in error_lines:
+                        line_lower = line.lower()
+                        
+                        # Skip version info and configuration lines
+                        if any(keyword in line_lower for keyword in ['ffmpeg version', 'copyright', 'built with', 'configuration:', 'lib', '--prefix', '--extra-version', '--tool']):
+                            continue
+                        
+                        # Skip metadata section (Input #0, Metadata:, major_brand, etc.)
+                        if 'input #' in line_lower or 'metadata:' in line_lower:
+                            in_metadata = True
+                            continue
+                        if in_metadata and (line.strip().startswith(' ') or ':' in line):
+                            continue
+                        if in_metadata and not line.strip():
+                            in_metadata = False
+                            continue
+                        
+                        # Skip empty lines at the start
+                        if not line.strip() and not filtered_errors:
+                            continue
+                        
+                        # Skip duration/info lines (these are not errors)
+                        if any(keyword in line_lower for keyword in ['duration:', 'start:', 'bitrate:', 'stream #']):
+                            continue
+                        
+                        # Collect actual error messages (usually contain "error", "failed", "cannot", etc.)
+                        if line.strip():
+                            # If it looks like an error message
+                            if any(keyword in line_lower for keyword in ['error', 'failed', 'cannot', 'unable', 'invalid', 'missing', 'not found']):
+                                filtered_errors.append(line)
+                            # Or if it's not metadata/info, it might be an error
+                            elif not in_metadata and not any(keyword in line_lower for keyword in ['input', 'output', 'stream', 'metadata', 'duration']):
+                                filtered_errors.append(line)
+                    
+                    # Use filtered error or fallback to original
+                    final_error = '\n'.join(filtered_errors[:10]) if filtered_errors else error_msg[:500]
+                    
+                    # If output file is valid, it might be a false positive error
+                    if output_valid:
+                        logger.warning(f"   [Audio Extraction Thread] ⚠️  FFmpeg returned code {result.returncode} but output file is valid")
+                        logger.warning(f"   Error message: {final_error[:200]}")
+                        logger.info(f"   [Audio Extraction Thread] ✅ Using output file despite error code")
+                        return output_path
+                    
+                    logger.error(f"   [Audio Extraction Thread] ❌ FFmpeg error (returncode={result.returncode}):")
+                    logger.error(f"   {final_error}")
+                    
+                    raise Exception(f"FFmpeg failed (code={result.returncode}): {final_error[:300]}")
+                
+                # Success case
+                if not output_valid:
+                    raise Exception(f"FFmpeg succeeded but output file is missing or empty: {output_path}")
                 
                 # Alternative: ใช้ python-ffmpeg library ถ้า FFMPEG_BINARY ถูกตั้งค่าแล้ว
                 # แต่เนื่องจาก library ไม่รองรับ FFMPEG_BINARY attribute

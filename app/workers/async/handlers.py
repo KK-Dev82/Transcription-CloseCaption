@@ -354,14 +354,44 @@ class AsyncMessageHandlers:
                 extraction_start_time = time.time()
                 
                 # Run extract_audio in thread pool (blocking operation)
-                audio_path = await asyncio.to_thread(
-                    self.worker.video_service.extract_audio,
-                    video_file_path,
-                    task_id=task_id
-                )
-                extraction_time = time.time() - extraction_start_time
-                logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
-                logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+                # Note: extract_audio already uses ThreadPoolExecutor internally,
+                # but we wrap it in asyncio.to_thread to make it async-compatible
+                try:
+                    audio_path = await asyncio.to_thread(
+                        self.worker.video_service.extract_audio,
+                        video_file_path,
+                        task_id=task_id
+                    )
+                    extraction_time = time.time() - extraction_start_time
+                    logger.info(f"✅ [Audio Extraction] Audio extracted: {audio_path}")
+                    logger.info(f"   ⏱️  ใช้เวลา: {extraction_time:.2f} วินาที")
+                except Exception as extraction_error:
+                    extraction_time = time.time() - extraction_start_time
+                    logger.error(f"❌ [Audio Extraction] Failed to extract audio after {extraction_time:.2f}s: {extraction_error}")
+                    logger.error(f"   Error type: {type(extraction_error).__name__}")
+                    
+                    # Update task status to failed
+                    task_data['status'] = 'failed'
+                    task_data['error_message'] = f"Audio extraction failed: {str(extraction_error)[:500]}"
+                    task_data['failed_at'] = datetime.now(timezone.utc).isoformat()
+                    task_data['stage_progress'] = 0
+                    task_data['current_stage_description'] = f'แยกเสียงล้มเหลว: {str(extraction_error)[:100]}'
+                    self.worker.json_storage.save_transcription(task_id, task_data)
+                    
+                    # Send webhook callback for failure
+                    await send_webhook_callback(
+                        callback_url=callback_url,
+                        task_id=task_id,
+                        status='failed',
+                        progress=15,
+                        job_id=job_id,
+                        task_data=task_data,
+                        stage='extracting_audio',
+                        stage_description=f'แยกเสียงล้มเหลว: {str(extraction_error)[:100]}'
+                    )
+                    
+                    # Re-raise to trigger message nack and DLQ
+                    raise
                 
                 # บันทึก audio_extraction_time ใน task metadata
                 task_data['audio_extraction_time'] = extraction_time

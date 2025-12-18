@@ -53,16 +53,24 @@ print_header "🔍 ตรวจสอบ Activity ของ Video Worker"
 # Step 1: Check recent logs activity
 print_header "Step 1: ตรวจสอบ Logs Activity (500 บรรทัดล่าสุด)"
 
-if [ -f "/tmp/video-worker.log" ]; then
-    LOG_SIZE=$(wc -l < /tmp/video-worker.log 2>/dev/null || echo "0")
-    print_status "Log file: /tmp/video-worker.log (Total lines: $LOG_SIZE)"
+# Check both log locations (current and legacy)
+WORKER_LOG=""
+if [ -f "logs/video-worker.log" ]; then
+    WORKER_LOG="logs/video-worker.log"
+elif [ -f "/tmp/video-worker.log" ]; then
+    WORKER_LOG="/tmp/video-worker.log"
+fi
+
+if [ -n "$WORKER_LOG" ] && [ -f "$WORKER_LOG" ]; then
+    LOG_SIZE=$(wc -l < "$WORKER_LOG" 2>/dev/null || echo "0")
+    print_status "Log file: $WORKER_LOG (Total lines: $LOG_SIZE)"
     echo ""
     
     # Check last 30 minutes activity
     LAST_30MIN=$(date -d '30 minutes ago' '+%Y-%m-%d %H:%M' 2>/dev/null || date -v-30M '+%Y-%m-%d %H:%M' 2>/dev/null || echo "")
     
     if [ -n "$LAST_30MIN" ]; then
-        RECENT_LOGS=$(grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}" /tmp/video-worker.log | tail -100 | grep -E "(INFO|ERROR|WARNING)" | tail -20 || echo "")
+        RECENT_LOGS=$(grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}" "$WORKER_LOG" | tail -100 | grep -E "(INFO|ERROR|WARNING)" | tail -20 || echo "")
         
         if [ -n "$RECENT_LOGS" ]; then
             print_status "Recent activity (last 20 log entries):"
@@ -77,30 +85,30 @@ if [ -f "/tmp/video-worker.log" ]; then
     print_status "Checking for specific patterns..."
     
     # Check if worker is consuming
-    CONSUMING_COUNT=$(tail -500 /tmp/video-worker.log | grep -iE "processing.*task|received.*message|starting.*transcription|extract.*audio" | wc -l | tr -d ' ' || echo "0")
+    CONSUMING_COUNT=$(tail -500 "$WORKER_LOG" | grep -iE "processing.*task|received.*message|starting.*transcription|extract.*audio" | wc -l | tr -d ' ' || echo "0")
     print_status "  Processing tasks: $CONSUMING_COUNT (ใน 500 บรรทัดล่าสุด)"
     
     # Check for transcription activity
-    TRANSCRIBE_COUNT=$(tail -500 /tmp/video-worker.log | grep -iE "transcrib|faster.*whisper|whisper.*transcribe" | wc -l | tr -d ' ' || echo "0")
+    TRANSCRIBE_COUNT=$(tail -500 "$WORKER_LOG" | grep -iE "transcrib|faster.*whisper|whisper.*transcribe" | wc -l | tr -d ' ' || echo "0")
     print_status "  Transcription activity: $TRANSCRIBE_COUNT (ใน 500 บรรทัดล่าสุด)"
     
     # Check for errors
-    ERROR_COUNT=$(tail -500 /tmp/video-worker.log | grep -iE "error|exception|traceback|failed" | wc -l | tr -d ' ' || echo "0")
+    ERROR_COUNT=$(tail -500 "$WORKER_LOG" | grep -iE "error|exception|traceback|failed" | wc -l | tr -d ' ' || echo "0")
     if [ "$ERROR_COUNT" -gt 0 ]; then
         print_warning "  Errors: $ERROR_COUNT (ใน 500 บรรทัดล่าสุด)"
-        tail -500 /tmp/video-worker.log | grep -iE "error|exception|traceback|failed" | tail -5
+        tail -500 "$WORKER_LOG" | grep -iE "error|exception|traceback|failed" | tail -5
     else
         print_success "  Errors: 0"
     fi
     
     # Check for "Channel is closed"
-    CHANNEL_CLOSED=$(tail -500 /tmp/video-worker.log | grep -i "channel is closed" | wc -l | tr -d ' ' || echo "0")
+    CHANNEL_CLOSED=$(tail -500 "$WORKER_LOG" | grep -i "channel is closed" | wc -l | tr -d ' ' || echo "0")
     if [ "$CHANNEL_CLOSED" -gt 0 ]; then
         print_warning "  'Channel is closed': $CHANNEL_CLOSED ครั้ง"
     fi
     
     # Check last log timestamp
-    LAST_LOG_TIME=$(tail -1 /tmp/video-worker.log | grep -oE "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" || echo "")
+    LAST_LOG_TIME=$(tail -1 "$WORKER_LOG" | grep -oE "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" || echo "")
     if [ -n "$LAST_LOG_TIME" ]; then
         print_status "  Last log time: $LAST_LOG_TIME"
         
@@ -121,7 +129,10 @@ if [ -f "/tmp/video-worker.log" ]; then
     fi
     
 else
-    print_warning "ไม่พบ log file: /tmp/video-worker.log"
+    print_warning "ไม่พบ log file ทั้ง 2 ที่:"
+    print_warning "  - logs/video-worker.log"
+    print_warning "  - /tmp/video-worker.log"
+    print_status "💡 Worker อาจไม่ได้ทำงาน หรือยังไม่ได้ start"
 fi
 echo ""
 
@@ -187,7 +198,14 @@ echo ""
 # Step 3: Check worker process state
 print_header "Step 3: ตรวจสอบ Worker Process State"
 
-WORKER_PID=$(pgrep -f "python.*video_worker" | head -1)
+# Check worker with multiple patterns (priority: app.workers.video_worker > python3.*video_worker > python.*video_worker)
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    WORKER_PID=$(pgrep -f "$pattern" | head -1)
+    if [ -n "$WORKER_PID" ]; then
+        break
+    fi
+done
 
 if [ -n "$WORKER_PID" ]; then
     print_success "Worker PID: $WORKER_PID"
@@ -260,7 +278,8 @@ if [ -n "$WORKER_PID" ] && [ "$CONSUMING_COUNT" -eq 0 ] && [ "$TRANSCRIBE_COUNT"
     print_warning "⚠️ Worker ทำงานอยู่แต่ไม่มีการ process messages"
     echo ""
     print_status "💡 แนะนำให้:"
-    echo "   1. ตรวจสอบ logs อย่างละเอียด: tail -200 /tmp/video-worker.log"
+    echo "   1. ตรวจสอบ logs อย่างละเอียด: tail -200 logs/video-worker.log"
+    echo "      หรือใช้: bash scripts/pod/tail-worker-log.sh"
     echo "   2. Restart worker: bash scripts/pod/restart-pod.sh"
     echo "   3. ตรวจสอบ RabbitMQ connection ใน logs"
     echo "   4. ตรวจสอบว่ามี errors ที่ซ่อนอยู่"

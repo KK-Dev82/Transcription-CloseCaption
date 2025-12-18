@@ -132,7 +132,8 @@ class AsyncConsumerManager:
                     queue_name,
                     max_length=max_extraction,
                     enable_dlx=True,
-                    enable_quorum=True
+                    enable_quorum=True,
+                    enable_priority=False  # Priority ไม่จำเป็นสำหรับ audio extraction
                 )
             elif queue_name == self.close_caption_request_queue_name:
                 max_close_caption_request = int(os.getenv('MAX_QUEUE_CLOSE_CAPTION_REQUEST', '10'))
