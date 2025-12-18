@@ -7,7 +7,7 @@
 - [เกี่ยวกับระบบ](#เกี่ยวกับระบบ)
 - [Features](#features)
 - [System Requirements](#system-requirements)
-- [การติดตั้ง (เริ่มจาก 0)](#การติดตั้ง-เริ่มจาก-0)
+- [การติดตั้ง](#การติดตั้ง)
 - [การใช้งาน](#การใช้งาน)
 - [API Documentation](#api-documentation)
 - [การแก้ไขปัญหา](#การแก้ไขปัญหา)
@@ -85,7 +85,34 @@
 
 ---
 
-## 🚀 การติดตั้ง (เริ่มจาก 0)
+## 🚀 การติดตั้ง
+
+### ⭐ สำหรับ RunPod (แนะนำ - เสถียรที่สุด)
+
+**📖 ดูคู่มือการติดตั้งแบบละเอียด:** [INSTALLATION.md](./docs/INSTALLATION.md)
+
+**Quick Start:**
+```bash
+# 1. Clone repository
+cd /workspace
+git clone <repository-url> transcription-service
+cd transcription-service
+
+# 2. Setup Pod (ครั้งแรก)
+bash scripts/pod/setup-pod.sh
+
+# 3. Start Services
+bash scripts/pod/start-pod.sh
+
+# 4. Check Status
+bash scripts/pod/check-pod.sh
+```
+
+### สำหรับ Local/Docker (Development)
+
+---
+
+## 🚀 การติดตั้งแบบเดิม (Local/Docker)
 
 ### Step 1: เตรียม Server Linux
 
