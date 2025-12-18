@@ -221,16 +221,26 @@ class WorkerUtils:
                 loop.close()
                 asyncio.set_event_loop(None)  # Clear event loop for the thread
             
-            # Clean up
-            if delivery_tag in self.worker.active_chunks:
+            # Clean up (รองรับทั้ง RabbitMQ และ Redis)
+            if delivery_tag is not None and delivery_tag in self.worker.active_chunks:
                 del self.worker.active_chunks[delivery_tag]
                 logger.info(f"🧹 [Thread {thread_name}] Cleaned up chunk {chunk_index+1} (remaining active: {len(self.worker.active_chunks)})")
+            elif hasattr(self.worker, 'active_chunks'):
+                # สำหรับ Redis: ใช้ task_id แทน delivery_tag
+                task_id = chunk_task.get('task_id', f"{parent_task_id}_chunk_{chunk_index}")
+                if task_id in self.worker.active_chunks:
+                    del self.worker.active_chunks[task_id]
+                    logger.info(f"🧹 [Thread {thread_name}] Cleaned up chunk {chunk_index+1} (remaining active: {len(self.worker.active_chunks)})")
                 
         except Exception as e:
             logger.error(f"❌ [Thread {thread_name}] Error in chunk {chunk_index+1} transcription: {e}", exc_info=True)
-            # Clean up
-            if delivery_tag in self.worker.active_chunks:
+            # Clean up (รองรับทั้ง RabbitMQ และ Redis)
+            if delivery_tag is not None and delivery_tag in self.worker.active_chunks:
                 del self.worker.active_chunks[delivery_tag]
+            elif hasattr(self.worker, 'active_chunks'):
+                task_id = chunk_task.get('task_id', f"{parent_task_id}_chunk_{chunk_index}")
+                if task_id in self.worker.active_chunks:
+                    del self.worker.active_chunks[task_id]
     
     def maintain_connection(self):
         """Background thread เพื่อ maintain RabbitMQ connection"""

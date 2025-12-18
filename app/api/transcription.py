@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pathlib import Path
 import logging
@@ -23,12 +23,13 @@ class CleanupRequest(BaseModel):
     )
 
 @router.post("/", response_model=TranscriptionResponse)
-async def start_transcription(request: TranscriptionRequest):
+async def start_transcription(request: TranscriptionRequest, background_tasks: BackgroundTasks):
     """เริ่มการแปลงเสียงเป็นข้อความ"""
     
     try:
         # เริ่มการแปลงเสียง
         task_id = await transcription_service.start_transcription(
+            background_tasks=background_tasks,
             file_path=request.file_path,
             file_url=str(request.file_url) if request.file_url else None,
             file_name=request.file_name,

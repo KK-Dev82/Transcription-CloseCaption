@@ -81,27 +81,33 @@ class RabbitMQService:
             self.channel.queue_declare(queue=self.resize_queue, durable=True)
             
             # Transcription Queue (Legacy - ยังใช้อยู่)
-            # ตั้ง max-length เพื่อรองรับ 25 concurrency + buffer
-            max_transcribe = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '30'))
+            # ใช้ passive declaration เพื่อไม่ให้เปลี่ยน arguments ของ queue ที่มีอยู่แล้ว
+            # เพื่อป้องกัน PRECONDITION_FAILED error
             try:
-                # พยายามสร้าง queue ใหม่ด้วย max-length
-                transcription_args = self._get_queue_arguments(
-                    self.transcription_queue,
-                    max_length=max_transcribe,
-                    enable_dlx=True,
-                    enable_quorum=False,  # Legacy queue ไม่ใช้ quorum
-                    enable_priority=False
-                )
-                self.channel.queue_declare(
-                    queue=self.transcription_queue,
-                    durable=True,
-                    arguments=transcription_args if transcription_args else None
-                )
-                logger.info(f"✅ Created/Updated {self.transcription_queue} (max: {max_transcribe})")
-            except Exception as e:
-                # ถ้า queue มีอยู่แล้วและ arguments ไม่ตรงกัน จะใช้ queue เดิม
-                logger.warning(f"⚠️ Transcription queue exists with different arguments, using existing queue: {e}")
-                self.channel.queue_declare(queue=self.transcription_queue, durable=True)
+                # พยายามใช้ passive declaration ก่อน (ไม่เปลี่ยน arguments)
+                self.channel.queue_declare(queue=self.transcription_queue, durable=True, passive=True)
+                logger.info(f"✅ Using existing {self.transcription_queue} (passive declaration)")
+            except Exception:
+                # ถ้า queue ยังไม่มี สร้างใหม่โดยไม่ใช้ DLX (legacy queue)
+                try:
+                    max_transcribe = int(os.getenv('MAX_QUEUE_TRANSCRIBE', '30'))
+                    transcription_args = self._get_queue_arguments(
+                        self.transcription_queue,
+                        max_length=max_transcribe,
+                        enable_dlx=False,  # Legacy queue ไม่ใช้ DLX เพื่อป้องกัน conflict
+                        enable_quorum=False,
+                        enable_priority=False
+                    )
+                    self.channel.queue_declare(
+                        queue=self.transcription_queue,
+                        durable=True,
+                        arguments=transcription_args if transcription_args else None
+                    )
+                    logger.info(f"✅ Created {self.transcription_queue} (max: {max_transcribe}, no DLX)")
+                except Exception as e:
+                    # Fallback: สร้าง queue แบบธรรมดา
+                    logger.warning(f"⚠️ Failed to create transcription_queue with args, using simple queue: {e}")
+                    self.channel.queue_declare(queue=self.transcription_queue, durable=True)
             
             self.channel.queue_declare(queue=self.transcription_chunk_queue, durable=True)
             

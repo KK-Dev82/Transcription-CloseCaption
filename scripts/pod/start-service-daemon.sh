@@ -383,9 +383,18 @@ WORKER_LOG="$WORKER_LOG_DIR/video-worker.log"
 WORKER_ERROR_LOG="$WORKER_LOG_DIR/video-worker-errors.log"
 WORKER_PID_FILE="/tmp/video-worker.pid"
 
-# Check if worker is already running
-if pgrep -f "python.*video_worker" > /dev/null; then
-    WORKER_PID=$(pgrep -f "python.*video_worker" | head -1)
+# Check if worker is already running (try multiple patterns)
+WORKER_RUNNING=false
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    if pgrep -f "$pattern" > /dev/null; then
+        WORKER_RUNNING=true
+        WORKER_PID=$(pgrep -f "$pattern" | head -1)
+        break
+    fi
+done
+
+if [ "$WORKER_RUNNING" = true ]; then
     echo "⚠️  Video Worker is already running (PID: $WORKER_PID)"
     echo "   Keeping existing worker running"
 else

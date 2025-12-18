@@ -24,11 +24,11 @@ def find_ffmpeg_binary():
     if ffmpeg_binary and os.path.exists(ffmpeg_binary) and os.access(ffmpeg_binary, os.X_OK):
         return ffmpeg_binary
     
-    # 2. Check common system paths
+    # 2. Check common system paths (prioritize system FFmpeg for compatibility)
     common_paths = [
-        '/usr/bin/ffmpeg',
+        '/usr/bin/ffmpeg',  # System FFmpeg (preferred - has proper libraries)
         '/usr/local/bin/ffmpeg',
-        '/workspace/.local/bin/ffmpeg',
+        '/workspace/.local/bin/ffmpeg',  # Persistent FFmpeg (may have library issues)
     ]
     
     for path in common_paths:

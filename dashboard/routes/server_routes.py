@@ -365,7 +365,8 @@ async def get_task_status(server_name: str, task_id: str):
         async with aiohttp.ClientSession() as session:
             # Try /transcribe/{task_id} endpoint
             endpoint = f"{api_url}/transcribe/{task_id}"
-            async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            # Increase timeout for slow responses (especially when worker is processing)
+            async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 if response.status == 200:
                     return await response.json()
                 else:

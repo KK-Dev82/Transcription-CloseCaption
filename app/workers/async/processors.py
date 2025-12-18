@@ -325,14 +325,47 @@ class AsyncTaskProcessors:
             logger.info(f"📝 Transcribing chunk {chunk_index+1}/{total_chunks}...")
             if initial_prompt:
                 logger.debug(f"   Using initial_prompt: {initial_prompt[:100]}..." if len(initial_prompt) > 100 else f"   Using initial_prompt: {initial_prompt}")
+            # #region agent log
+            try:
+                import json
+                import time
+                with open('/workspace/transcription-service/.cursor/debug.log', 'a') as f:
+                    f.write(json.dumps({
+                        "location": "processors.py:328",
+                        "message": "BEFORE await transcribe",
+                        "data": {"chunk_index": chunk_index, "chunk_path": str(chunk_path), "parent_task_id": parent_task_id},
+                        "timestamp": int(time.time() * 1000),
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "F"
+                    }) + "\n")
+            except: pass
+            # #endregion
             transcription_result = await self.worker.transcription_service.whisper_service.provider.transcribe(
                 str(chunk_path),
                 language,
                 model_size,
                 initial_prompt=initial_prompt  # ส่ง initial_prompt ไปยัง Whisper
             )
+            # #region agent log
+            try:
+                import json
+                import time
+                with open('/workspace/transcription-service/.cursor/debug.log', 'a') as f:
+                    f.write(json.dumps({
+                        "location": "processors.py:333",
+                        "message": "AFTER await transcribe",
+                        "data": {"chunk_index": chunk_index, "has_result": transcription_result is not None, "text_length": len(transcription_result.text) if transcription_result and hasattr(transcription_result, 'text') else 0},
+                        "timestamp": int(time.time() * 1000),
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "F"
+                    }) + "\n")
+            except: pass
+            # #endregion
             
             # Convert TranscriptionResult to dict format
+            logger.debug(f"   Converting TranscriptionResult to dict...")
             result = {
                 "text": transcription_result.text,
                 "segments": transcription_result.segments,
@@ -341,9 +374,32 @@ class AsyncTaskProcessors:
                 "processing_time": transcription_result.processing_time
             }
             
+            # Extract avg_logprob from segments if available
+            # avg_logprob อาจอยู่ใน segments หรือ transcription_result
+            avg_logprob = None
+            if hasattr(transcription_result, 'avg_logprob'):
+                avg_logprob = transcription_result.avg_logprob
+            elif transcription_result.segments:
+                # ลองหา avg_logprob จาก segments แรก
+                first_segment = transcription_result.segments[0] if isinstance(transcription_result.segments, list) else None
+                if first_segment:
+                    if isinstance(first_segment, dict):
+                        avg_logprob = first_segment.get('avg_logprob')
+                    elif hasattr(first_segment, 'avg_logprob'):
+                        avg_logprob = first_segment.avg_logprob
+            
+            result["avg_logprob"] = avg_logprob
+            logger.debug(f"   TranscriptionResult converted: text_length={len(result.get('text', ''))}, segments={len(result.get('segments', []))}, avg_logprob={avg_logprob}")
+            
             # Apply Thai processing if needed
+            logger.debug(f"   Applying Thai processing (language={language})...")
             if language == "th":
-                result = self.worker.transcription_service.whisper_service._apply_thai_processing(result)
+                try:
+                    result = self.worker.transcription_service.whisper_service._apply_thai_processing(result)
+                    logger.debug(f"   Thai processing completed")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Thai processing failed, using original result: {e}")
+                    # Continue with original result if Thai processing fails
             
             if not result or not result.get('text'):
                 logger.warning(f"⚠️ Chunk {chunk_index+1} returned empty result")
@@ -357,12 +413,12 @@ class AsyncTaskProcessors:
                 # ใช้ timestamp จริงจาก chunk metadata
                 start_time = chunk_start_time
                 end_time = chunk_end_time
-                logger.info(f"📌 ใช้ timestamp จริง: {start_time:.2f}s - {end_time:.2f}s")
+                logger.debug(f"   📌 ใช้ timestamp จริง: {start_time:.2f}s - {end_time:.2f}s")
             else:
                 # Fallback: คำนวณแบบเดิม (backward compatibility)
                 start_time = chunk_index * chunk_duration
                 end_time = start_time + chunk_duration
-                logger.warning(f"⚠️ ไม่มี timestamp จริงใน chunk_task, ใช้การคำนวณ: {start_time:.2f}s - {end_time:.2f}s")
+                logger.debug(f"   ⚠️ ไม่มี timestamp จริงใน chunk_task, ใช้การคำนวณ: {start_time:.2f}s - {end_time:.2f}s")
             
             # สร้าง chunk data (รวม chunk_path เพื่อให้สามารถเล่น audio ได้)
             chunk_data = {
@@ -375,8 +431,16 @@ class AsyncTaskProcessors:
                 "chunk_path": chunk_path  # เพิ่ม chunk_path เพื่อให้สามารถเล่น audio ได้
             }
             
+            logger.info(f"   ✅ Chunk data created: text_length={len(chunk_data['text'])}, segments={len(chunk_data['segments'])}, confidence={chunk_data.get('confidence')}")
+            
             # บันทึก chunk result ลง storage
-            self.worker.utils.save_chunk_result(parent_task_id, chunk_index, chunk_data, total_chunks)
+            logger.info(f"   💾 Calling save_chunk_result for chunk {chunk_index+1}/{total_chunks}...")
+            try:
+                self.worker.utils.save_chunk_result(parent_task_id, chunk_index, chunk_data, total_chunks)
+                logger.info(f"   ✅ save_chunk_result completed for chunk {chunk_index+1}/{total_chunks}")
+            except Exception as e:
+                logger.error(f"   ❌ Error in save_chunk_result for chunk {chunk_index+1}: {e}", exc_info=True)
+                raise  # Re-raise to ensure task is marked as failed
             
             logger.info(f"✅ Chunk {chunk_index+1}/{total_chunks} transcribed: text length={len(chunk_data['text'])}, segments={len(chunk_data['segments'])}")
             

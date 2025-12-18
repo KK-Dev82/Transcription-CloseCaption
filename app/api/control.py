@@ -77,38 +77,34 @@ async def get_service_status():
         
         # ตรวจสอบ Video Worker
         # Check multiple patterns to catch different worker process names
+        # Priority: app.workers.video_worker > python3.*video_worker > python.*video_worker
         worker_pid = None
+        worker_patterns = [
+            "python3.*-m.*app.workers",  # python3 -m app.workers.async.video_worker (most common)
+            "python.*-m.*app.workers",  # python -m app.workers.async.video_worker
+            "app.workers.async.video_worker",  # Async worker
+            "app.workers.video_worker",  # Sync worker
+            "python3.*video_worker",      # python3 -m app.workers.video_worker
+            "python.*video_worker",      # python -m app.workers.video_worker
+            "app.workers"  # Fallback: any app.workers process
+        ]
+        
         try:
-            # Pattern 1: python.*video_worker
-            result = subprocess.run(
-                ["pgrep", "-f", "python.*video_worker"],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                worker_pid = int(result.stdout.strip().split('\n')[0])
-                worker_running = True
-            else:
-                # Pattern 2: app.workers.video_worker
+            for pattern in worker_patterns:
                 result = subprocess.run(
-                    ["pgrep", "-f", "app.workers.video_worker"],
+                    ["pgrep", "-f", pattern],
                     capture_output=True,
                     text=True
                 )
                 if result.returncode == 0 and result.stdout.strip():
-                    worker_pid = int(result.stdout.strip().split('\n')[0])
-                    worker_running = True
-                else:
-                    # Pattern 3: app.workers.async.video_worker
-                    result = subprocess.run(
-                        ["pgrep", "-f", "app.workers.async.video_worker"],
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        worker_pid = int(result.stdout.strip().split('\n')[0])
+                    # Get first PID (in case multiple workers)
+                    pids = [int(pid.strip()) for pid in result.stdout.strip().split('\n') if pid.strip()]
+                    if pids:
+                        worker_pid = pids[0]
                         worker_running = True
-        except Exception:
+                        break
+        except Exception as e:
+            logger.debug(f"Error checking worker process: {e}")
             pass
         
         # Return worker status with more details

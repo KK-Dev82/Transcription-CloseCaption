@@ -38,7 +38,14 @@ cd "$(dirname "$0")/../.." || exit 1
 
 print_header "🔍 ตรวจสอบรายละเอียด Worker Activity"
 
-WORKER_PID=$(pgrep -f "python.*video_worker" | head -1)
+# Check worker with multiple patterns (priority: app.workers.video_worker > python3.*video_worker > python.*video_worker)
+WORKER_PID=""
+for pattern in "app.workers.video_worker" "python3.*video_worker" "python.*video_worker"; do
+    WORKER_PID=$(pgrep -f "$pattern" | head -1)
+    if [ -n "$WORKER_PID" ]; then
+        break
+    fi
+done
 
 if [ -z "$WORKER_PID" ]; then
     print_error "ไม่พบ Video Worker process"

@@ -286,11 +286,14 @@ async function refreshServerStatus() {
         
         // Worker Status
         if (status && status.worker && !status.worker.error) {
+            // Support both is_running (from API) and running (legacy)
+            const isRunning = status.worker.is_running !== undefined ? status.worker.is_running : status.worker.running;
             html += `
-                <div class="status-card ${status.worker.running ? 'success' : 'error'}">
+                <div class="status-card ${isRunning ? 'success' : 'error'}">
                     <h4>Video Worker</h4>
-                    <p>${status.worker.running ? 'Running' : 'Not Running'}</p>
+                    <p>${isRunning ? 'Running' : 'Not Running'}</p>
                     ${status.worker.pid ? `<small>PID: ${status.worker.pid}</small>` : ''}
+                    ${status.worker.uptime ? `<small>Uptime: ${status.worker.uptime}</small>` : ''}
                 </div>
             `;
         }

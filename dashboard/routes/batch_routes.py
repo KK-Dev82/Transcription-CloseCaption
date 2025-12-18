@@ -211,7 +211,18 @@ async def send_all_tasks(
     
     # Get webhook URL if not provided
     if not callback_url:
-        dashboard_base_url = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8020")
+        # Try to get dashboard base URL from environment or use request host
+        dashboard_base_url = os.getenv("DASHBOARD_BASE_URL")
+        
+        # If not set, try to construct from request (if available)
+        # For background tasks, we need to use environment variable
+        if not dashboard_base_url:
+            # Default to localhost for same-pod deployment
+            # In production, should be set via DASHBOARD_BASE_URL env var
+            dashboard_base_url = os.getenv("DASHBOARD_EXTERNAL_URL", "http://localhost:8020")
+            logger.warning(f"⚠️  DASHBOARD_BASE_URL not set, using default: {dashboard_base_url}")
+            logger.warning(f"   💡 Set DASHBOARD_BASE_URL environment variable for proper webhook URLs")
+        
         callback_url = f"{dashboard_base_url}/api/webhook/transcription"
         logger.info(f"📞 Using webhook callback URL: {callback_url}")
     

@@ -63,19 +63,24 @@ def main():
     logger.info(f"🚀 Starting Video Worker (Type: {WORKER_TYPE.upper()})")
     logger.info("=" * 80)
     
-    worker = VideoWorker()
-    
     if WORKER_TYPE == 'async':
         import asyncio
         logger.info("🔄 Running async worker...")
+        # สำหรับ async worker ให้เรียก main() โดยตรง (มี infinite retry loop)
+        # ไม่ต้องสร้าง worker instance ที่นี่ เพราะ main() จะสร้างเอง
         try:
-            asyncio.run(worker.start())
+            # ใช้ importlib เพราะ 'async' เป็น keyword ใน Python
+            import importlib
+            async_module = importlib.import_module('app.workers.async.video_worker')
+            async_main = async_module.main
+            asyncio.run(async_main())
         except KeyboardInterrupt:
             logger.info("ได้รับ interrupt signal")
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดใน async worker: {e}", exc_info=True)
     else:
         logger.info("🔄 Running pika worker...")
+        worker = VideoWorker()
         try:
             worker.run()
         except KeyboardInterrupt:
