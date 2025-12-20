@@ -104,8 +104,8 @@ fi
 if [ "$BUILD_TYPE" = "template" ] || [ "$BUILD_TYPE" = "all" ]; then
     build_and_push \
         "Dockerfile.runpod-template" \
-        "kksenateacr.azurecr.io/kk-transcription-runpod-template" \
-        "RunPod Template Image (Recommended ⭐)"
+        "kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template" \
+        "RunPod Template Image with Faster Whisper (Recommended ⭐)"
 fi
 
 echo ""
