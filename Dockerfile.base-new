@@ -90,6 +90,13 @@ RUN mkdir -p /var/run/sshd && \
 RUN python3 --version && \
     python3 -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ CUDA version: {torch.version.cuda}'); print(f'✅ cuDNN version: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else \"N/A\"}')" || true
 
+# Upgrade PyTorch และติดตั้ง torchaudio (ตาม requirements.txt)
+# ⚠️ สำคัญ: Base image มี PyTorch 2.1.0 แต่ requirements.txt ต้องการ 2.1.1
+RUN pip3 install --no-cache-dir --upgrade \
+    torch==2.1.1 \
+    torchaudio==2.1.1 \
+    --index-url https://download.pytorch.org/whl/cu118
+
 # Install faster-whisper with compatible versions (CUDA 11.8)
 # ⚠️ สำคัญ: ใช้ CTranslate2 4.4.0 เพื่อให้ compatible กับ cuDNN 8 (ไม่ใช่ 4.5.0+ ที่ต้องการ cuDNN 9)
 RUN pip3 install --no-cache-dir \
