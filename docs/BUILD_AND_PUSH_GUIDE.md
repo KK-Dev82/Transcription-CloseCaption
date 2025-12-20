@@ -34,7 +34,7 @@ az acr login --name kksenateacr
 
 ```bash
 # วิธีที่ 1: Build โดยตรง
-docker build -f Dockerfile.base-new -t kksenateacr.azurecr.io/kk-transcription-base:latest .
+docker build -f Dockerfile.base-new -t kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest .
 
 # วิธีที่ 2: ใช้ Script (แนะนำ)
 bash scripts/pod/build-and-push-base-new.sh
@@ -44,7 +44,7 @@ bash scripts/pod/build-and-push-base-new.sh
 
 ```bash
 # วิธีที่ 1: Push โดยตรง
-docker push kksenateacr.azurecr.io/kk-transcription-base:latest
+docker push kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest
 
 # วิธีที่ 2: ใช้ Script (จะ push อัตโนมัติ)
 bash scripts/pod/build-and-push-base-new.sh
@@ -54,8 +54,8 @@ bash scripts/pod/build-and-push-base-new.sh
 
 ## 📦 Images ที่จะถูก Push
 
-- `kksenateacr.azurecr.io/kk-transcription-base:latest`
-- `kksenateacr.azurecr.io/kk-transcription-base:v1.0.0` (timestamp version)
+- `kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest`
+- `kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:v1.0.0` (timestamp version)
 
 ---
 
@@ -92,13 +92,13 @@ az acr repository list --name kksenateacr
 ### List Tags
 
 ```bash
-az acr repository show-tags --name kksenateacr --repository kk-transcription-base
+az acr repository show-tags --name kksenateacr --repository kk-transcription-faster-whisper-runpod-template
 ```
 
 ### View Image Details
 
 ```bash
-az acr repository show --name kksenateacr --repository kk-transcription-base
+az acr repository show --name kksenateacr --repository kk-transcription-faster-whisper-runpod-template
 ```
 
 ---
@@ -109,7 +109,7 @@ az acr repository show --name kksenateacr --repository kk-transcription-base
 
 1. ไปที่ RunPod Dashboard
 2. สร้าง Pod ใหม่
-3. เลือก **Custom Image**: `kksenateacr.azurecr.io/kk-transcription-base:latest`
+3. เลือก **Custom Image**: `kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest`
 
 ### 2. Clone Repository
 
@@ -198,13 +198,13 @@ az role assignment list --scope /subscriptions/<subscription-id>/resourceGroups/
 - ✅ Ready to use - Clone repo และ start services ได้ทันที
 
 **ACR Images**:
-- `kksenateacr.azurecr.io/kk-transcription-base:latest`
-- `kksenateacr.azurecr.io/kk-transcription-base:v1.0.0`
+- `kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest`
+- `kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:v1.0.0`
 
 ---
 
 **Last Updated**: 2025-01-XX  
 **ACR**: `kksenateacr.azurecr.io`  
-**Repository**: `kk-transcription-base`  
+**Repository**: `kk-transcription-faster-whisper-runpod-template`  
 **Branch**: `job-based-workers`
 

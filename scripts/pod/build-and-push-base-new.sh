@@ -7,8 +7,8 @@
 #   2. Run script: bash scripts/pod/build-and-push-base-new.sh
 #
 # Image จะถูก push ไป:
-#   - kksenateacr.azurecr.io/kk-transcription-base:latest
-#   - kksenateacr.azurecr.io/kk-transcription-base:v1.0.0
+#   - kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:latest
+#   - kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template:v1.0.0
 
 set -e
 
@@ -47,7 +47,7 @@ cd "$PROJECT_DIR"
 
 # Configuration
 ACR_NAME="kksenateacr"
-IMAGE_NAME="kksenateacr.azurecr.io/kk-transcription-base"
+IMAGE_NAME="kksenateacr.azurecr.io/kk-transcription-faster-whisper-runpod-template"
 DOCKERFILE="Dockerfile.base-new"
 VERSION=$(date +%Y%m%d-%H%M%S)  # Version based on timestamp
 
@@ -93,8 +93,19 @@ fi
 # Build image
 print_header "🔨 Building Image"
 
+# Detect architecture and use --platform for cross-platform build
+ARCH=$(uname -m)
+if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+    print_warning "Detected ARM64 architecture (macOS M1/M2)"
+    print_warning "Using --platform=linux/amd64 for RunPod compatibility"
+    BUILD_CMD="docker build --platform=linux/amd64 -f \"$DOCKERFILE\" -t \"$IMAGE_NAME:latest\" ."
+else
+    BUILD_CMD="docker build -f \"$DOCKERFILE\" -t \"$IMAGE_NAME:latest\" ."
+fi
+
 echo "Building: $IMAGE_NAME:latest"
-if docker build -f "$DOCKERFILE" -t "$IMAGE_NAME:latest" .; then
+echo "Command: $BUILD_CMD"
+if eval "$BUILD_CMD"; then
     print_success "Image built successfully: $IMAGE_NAME:latest"
 else
     print_error "Failed to build image"
@@ -161,6 +172,6 @@ echo ""
 echo "   ✅ No need to run install-dependencies.sh!"
 echo ""
 echo "📋 Verify images:"
-echo "   az acr repository show-tags --name $ACR_NAME --repository kk-transcription-base"
+echo "   az acr repository show-tags --name $ACR_NAME --repository kk-transcription-faster-whisper-runpod-template"
 echo ""
 

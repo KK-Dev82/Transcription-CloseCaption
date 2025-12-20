@@ -1,8 +1,16 @@
 # Base Image ใหม่สำหรับ Transcription Service
 # ⭐ Image นี้มี dependencies ทั้งหมดติดตั้งไว้แล้ว ไม่ต้อง install ใหม่ทุกครั้งที่ restart POD
 #
-# Base Image: pytorch/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
-# ✅ ใช้ PyTorch Official Image ที่มี PyTorch + CUDA + cuDNN พร้อมแล้ว
+# Base Image: pytorch/pytorch:2.1.0-cuda11.8-cudnn8-devel
+# ✅ ใช้ PyTorch Official Image ที่มี PyTorch + CUDA + cuDNN + Build Tools พร้อมแล้ว
+# ✅ มี Python 3.10 (ตรวจสอบแล้ว: 2.1.0-cuda11.8-cudnn8-runtime มี Python 3.10.13)
+# ⚠️ หมายเหตุ: Tag ที่ระบุ py3.10 ชัดเจน (2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04) ไม่มีใน Docker Hub
+#    แต่ devel image มี Python 3.10 อยู่แล้ว (ตรวจสอบจาก runtime image)
+#
+# Build for linux/amd64 (RunPod)
+# ⚠️ สำคัญ: RunPod ใช้ linux/amd64 (x86_64)
+#    ถ้า build บน macOS (ARM64) ต้องใช้ --platform=linux/amd64
+#    Script จะ auto-detect และใช้ --platform อัตโนมัติ
 #
 # Build:
 #   docker build -f Dockerfile.base-new -t your-registry/transcription-base:latest .
@@ -15,10 +23,17 @@
 # - Start services ได้ทันทีหลัง clone repo
 # - ลดเวลา startup และความเสี่ยงจาก network issues
 # - ใช้ PyTorch Official Image ที่เสถียร
+# - มี Build Tools (devel image) + Python 3.10
 
-FROM pytorch/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-devel
+
+# Set environment variables for non-interactive installation (ต้องตั้งก่อน RUN apt-get)
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Bangkok
+ENV TZDIR=/usr/share/zoneinfo
 
 # Install system dependencies
+# ✅ Devel image มี build tools อยู่แล้ว แต่ติดตั้งเพิ่มเพื่อความแน่ใจ
 RUN apt-get update && apt-get install -y \
     # Build tools (devel image มีอยู่แล้วบางส่วน แต่ติดตั้งเพื่อความแน่ใจ)
     build-essential \
@@ -41,6 +56,8 @@ RUN apt-get update && apt-get install -y \
     netcat \
     telnet \
     jq \
+    # SSH server (สำหรับ RunPod SSH access)
+    openssh-server \
     # Audio libraries (required for librosa, soundfile, pydub)
     libmagic1 \
     libsndfile1 \
@@ -52,9 +69,26 @@ RUN apt-get update && apt-get install -y \
 # Initialize git-lfs (สำหรับโมเดล/ไฟล์ใหญ่ใน Git)
 RUN git lfs install
 
+# Setup SSH server (สำหรับ RunPod SSH access)
+# ⚠️ หมายเหตุ: RunPod จะจัดการ SSH port forwarding อัตโนมัติ
+#    แต่ต้องมี SSH server ติดตั้งและเปิดพอร์ท 22 ไว้
+RUN mkdir -p /var/run/sshd && \
+    # ตั้งค่า SSH config พื้นฐาน
+    echo 'Port 22' >> /etc/ssh/sshd_config && \
+    echo 'ListenAddress 0.0.0.0' >> /etc/ssh/sshd_config && \
+    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
+    echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config && \
+    echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config && \
+    # สร้าง SSH directory สำหรับ root
+    mkdir -p /root/.ssh && \
+    chmod 700 /root/.ssh && \
+    touch /root/.ssh/authorized_keys && \
+    chmod 600 /root/.ssh/authorized_keys
+
 # Base image มี PyTorch 2.1.0+cu118 อยู่แล้ว
-# ตรวจสอบ PyTorch version (optional - for verification)
-RUN python3 -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ CUDA version: {torch.version.cuda}'); print(f'✅ cuDNN version: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else \"N/A\"}')" || true
+# ตรวจสอบ Python และ PyTorch version (optional - for verification)
+RUN python3 --version && \
+    python3 -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ CUDA version: {torch.version.cuda}'); print(f'✅ cuDNN version: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else \"N/A\"}')" || true
 
 # Install faster-whisper with compatible versions (CUDA 11.8)
 # ⚠️ สำคัญ: ใช้ CTranslate2 4.4.0 เพื่อให้ compatible กับ cuDNN 8 (ไม่ใช่ 4.5.0+ ที่ต้องการ cuDNN 9)
@@ -153,7 +187,6 @@ RUN mkdir -p $HF_HOME && chmod -R 777 /workspace
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_VISIBLE_DEVICES=0
 # ป้องกัน freeze ของ CTranslate2/CUDA
 ENV CT2_USE_CUDA_GRAPH=0
@@ -165,12 +198,17 @@ ENV WHISPER_MODEL=medium
 ENV WHISPER_DEVICE=auto
 # เริ่มด้วย VAD=false (ผ่านแล้วค่อยเปิด true)
 ENV WHISPER_VAD_FILTER=false
-# Timezone
+# Timezone (ตั้งไว้แล้วด้านบน แต่ตั้งซ้ำเพื่อความแน่ใจ)
 ENV TZ=Asia/Bangkok
 ENV TZDIR=/usr/share/zoneinfo
 
 # Expose ports (สำหรับ services ที่จะ start แบบ Direct mode)
-EXPOSE 8001 8002 6379 8010
+# Port 22: SSH (สำหรับ RunPod SSH access)
+# Port 8001: Transcription API
+# Port 8002: Whisper API (optional)
+# Port 6379: Redis
+# Port 8010: Dashboard/Management API
+EXPOSE 22 8001 8002 6379 8010
 
 # ⚠️ ไม่มี CMD - Image นี้เป็น complete base
 # User ต้อง:
@@ -181,5 +219,7 @@ EXPOSE 8001 8002 6379 8010
 # ✅ ไม่ต้องรัน install-dependencies.sh อีกต่อไป!
 
 # Default: Keep container running (wait for user to start services)
-CMD ["/bin/bash", "-c", "echo '🚀 Base Image Ready - All Dependencies Installed!'; echo '📋 Base Image: pytorch/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/start-pod.sh'; echo '   ✅ No need to run install-dependencies.sh!'; echo ''; tail -f /dev/null"]
+# Start SSH server in background (สำหรับ RunPod SSH access)
+# ⚠️ หมายเหตุ: RunPod มักจะจัดการ SSH service เอง แต่เราติดตั้งและเปิดพอร์ท 22 ไว้
+CMD ["/bin/bash", "-c", "echo '🚀 Base Image Ready - All Dependencies Installed!'; echo '📋 Base Image: pytorch/pytorch:2.1.0-cuda11.8-cudnn8-devel'; echo '📋 Python: $(python3 --version)'; echo '📋 PyTorch: $(python3 -c \"import torch; print(torch.__version__)\" 2>/dev/null || echo \"N/A\")'; echo '📋 SSH: Starting SSH server on port 22...'; mkdir -p /var/run/sshd; /usr/sbin/sshd -D & sleep 2 && echo '✅ SSH server started on port 22'; echo '📋 Next steps:'; echo '   1. Clone repo: git clone <repo> /workspace/transcription-service'; echo '   2. Start services: bash scripts/pod/start-pod.sh'; echo '   ✅ No need to run install-dependencies.sh!'; echo ''; tail -f /dev/null"]
 
