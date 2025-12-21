@@ -3,6 +3,7 @@ FastAPI Main Application
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import logging
 
@@ -11,6 +12,7 @@ Path("uploads").mkdir(exist_ok=True)
 Path("temp").mkdir(exist_ok=True)
 Path("storage").mkdir(exist_ok=True)
 Path("models").mkdir(exist_ok=True)
+Path("static").mkdir(exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,16 @@ try:
     app.include_router(queue.router, prefix="/api", tags=["queue"])
 except ImportError as e:
     logger.warning(f"Queue router not available: {e}")
+
+# RTMP streaming router moved to dashboard
+# No longer included in main API
+
+# Mount static files
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    logger.info("✅ Static files mounted")
+except Exception as e:
+    logger.warning(f"Static files not available: {e}")
 
 # Health check endpoint
 @app.get("/health")

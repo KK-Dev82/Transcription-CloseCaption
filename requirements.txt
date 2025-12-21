@@ -10,9 +10,12 @@ ffmpeg-python==0.2.0
 
 # Whisper และ dependencies
 openai-whisper==20231117
-faster-whisper==1.0.3  # ⚡ Faster Whisper (CTranslate2) - เร็วกว่า 2-4x
-torch==2.1.1
-torchaudio==2.1.1
+faster-whisper==1.2.1
+# ctranslate2 จะถูกติดตั้งอัตโนมัติโดย faster-whisper (>=4.0,<6)  # ⚡ Faster Whisper (CTranslate2) - เร็วกว่า 2-4x
+# torch และ torchaudio ใช้จาก base image (2.1.0+cu118)
+# ไม่ต้องติดตั้งใหม่ เพื่อหลีกเลี่ยง conflict กับ torchvision 0.16.0+cu118
+# torch==2.1.0+cu118  (ใช้จาก base image)
+# torchaudio==2.1.0+cu118  (ใช้จาก base image)
 
 # Audio processing
 librosa==0.10.1

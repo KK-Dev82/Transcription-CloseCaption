@@ -76,6 +76,15 @@ except ImportError:
     except ImportError:
         live_streaming_routes = None
 
+# Try to import rtmp_streaming_routes (optional)
+try:
+    from .routes import rtmp_streaming_routes
+except ImportError:
+    try:
+        from routes import rtmp_streaming_routes
+    except ImportError:
+        rtmp_streaming_routes = None
+
 # Try to import webhook_routes (optional)
 try:
     from .routes import webhook_routes
@@ -114,6 +123,14 @@ if live_streaming_routes:
         logger.info("✅ Live Streaming routes included")
     except Exception as e:
         logger.debug(f"Live Streaming routes not available: {e}")
+
+# Include RTMP Streaming router (if available)
+if rtmp_streaming_routes:
+    try:
+        app.include_router(rtmp_streaming_routes.router)
+        logger.info("✅ RTMP Streaming routes included")
+    except Exception as e:
+        logger.debug(f"RTMP Streaming routes not available: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)

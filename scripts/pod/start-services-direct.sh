@@ -10,6 +10,16 @@ export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
 export MKL_NUM_THREADS=${MKL_NUM_THREADS:-4}
 export NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-0}
 
+# แก้ไข cuDNN version mismatch สำหรับ faster-whisper
+# ใช้ cuDNN 9.1.0 จาก CTranslate2 package แทน cuDNN 8.7.0 จาก PyTorch
+CUDNN_LIB="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs/libcudnn-74a4c495.so.9.1.0"
+if [ -f "$CUDNN_LIB" ]; then
+    export LD_PRELOAD="$CUDNN_LIB"
+    echo "✅ Using cuDNN 9.1.0 from CTranslate2 package (LD_PRELOAD)"
+else
+    echo "⚠️  cuDNN library not found, faster-whisper may have issues"
+fi
+
 echo "=========================================="
 echo "🚀 Starting Services (Direct Mode)"
 echo "=========================================="
@@ -75,21 +85,10 @@ if [ -f "sample.mp4" ] || [ -f "uploads/sample.mp4" ]; then
     echo ""
 fi
 
-# Start Redis (ถ้ายังไม่รัน)
-echo "=== Starting Redis ==="
-if pgrep -x "redis-server" > /dev/null; then
-    echo "✅ Redis already running"
-else
-    redis-server --daemonize yes --port 6379 --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru || {
-        echo "⚠️  Redis failed to start (may already be running)"
-    }
-    sleep 2
-    if redis-cli ping > /dev/null 2>&1; then
-        echo "✅ Redis started"
-    else
-        echo "⚠️  Redis not responding"
-    fi
-fi
+# Redis: Using Redis Cloud (external) - ไม่ต้อง start local Redis
+# REDIS_URL configured in .env.runpod (redis://default:...@redis-12598.c252.ap-southeast-1-1.ec2.cloud.redislabs.com:12598)
+echo "=== Redis Configuration ==="
+echo "✅ Using Redis Cloud (external) - no local Redis server needed"
 echo ""
 
 # Load environment variables
@@ -102,14 +101,22 @@ if [ -f ".env.runpod" ]; then
     echo ""
 fi
 
-# Start Main API
-echo "=== Starting Main API ==="
-echo "📡 API will be available at: http://0.0.0.0:8001"
-echo "📋 Health check: http://0.0.0.0:8001/health"
+# Start Main API (Direct Mode - ไม่ใช้ RabbitMQ)
+echo "=== Starting Main API (Direct Mode) ==="
+echo "📡 API will be available at: http://0.0.0.0:8010"
+echo "📋 Health check: http://0.0.0.0:8010/health"
+echo "📋 API Docs: http://0.0.0.0:8010/docs"
+echo ""
+echo "💡 Direct Mode: Process transcription directly in API service (no RabbitMQ)"
+echo "💡 Endpoints available:"
+echo "   - POST /api/transcribe/ - Start transcription"
+echo "   - GET /api/tasks/{task_id} - Get task status"
+echo "   - POST /api/upload/ - Upload files"
+echo "   - GET /api/queue/status - Queue status (if using RabbitMQ)"
 echo ""
 echo "🚀 Starting uvicorn..."
 echo ""
 
-# รัน API (foreground)
-exec uvicorn app.main:app --host 0.0.0.0 --port 8001
+# รัน API (foreground) - port 8010 (ตรงกับ start-pod.sh)
+exec uvicorn app.main:app --host 0.0.0.0 --port 8010
 

@@ -28,6 +28,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# แก้ไข cuDNN version mismatch สำหรับ faster-whisper
+# ใช้ cuDNN 9.1.0 จาก CTranslate2 package แทน cuDNN 8.7.0 จาก PyTorch
+CUDNN_LIB="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs/libcudnn-74a4c495.so.9.1.0"
+if [ -f "$CUDNN_LIB" ]; then
+    export LD_PRELOAD="$CUDNN_LIB"
+    print_success "✅ Using cuDNN 9.1.0 from CTranslate2 package (LD_PRELOAD)"
+else
+    print_warning "⚠️  cuDNN library not found, faster-whisper may have issues"
+fi
+echo ""
+
 # Check GPU
 print_status "Checking GPU..."
 if command -v nvidia-smi &> /dev/null; then
@@ -64,7 +75,7 @@ RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
 RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
 RABBITMQ_USER=${RABBITMQ_USER:-senate}
 RABBITMQ_PASSWORD=qP2VtHz6fAX4xDksEpMrLT
-REDIS_URL=redis://localhost:6379
+REDIS_URL=redis://default:Guls3SwcxCfzYNoigtrlNq7bKZWklCCf@redis-12598.c252.ap-southeast-1-1.ec2.cloud.redislabs.com:12598
 WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
 WHISPER_API_URL=http://localhost:8002
 CUDA_VISIBLE_DEVICES=0
@@ -77,18 +88,8 @@ EOF
 fi
 echo ""
 
-# Install system timezone data (required for pythainlp)
-print_status "Checking system timezone data..."
-if [ ! -d "/usr/share/zoneinfo" ] || [ ! -f "/usr/share/zoneinfo/Asia/Bangkok" ]; then
-    print_warning "⚠️  System timezone data not found, installing..."
-    apt-get update -qq && apt-get install -y -qq tzdata > /dev/null 2>&1 || {
-        print_warning "⚠️  Failed to install system tzdata, trying alternative..."
-        # Try to set TZDIR if available
-        if [ -d "/usr/share/zoneinfo" ]; then
-            export TZDIR=/usr/share/zoneinfo
-        fi
-    }
-fi
+# Note: tzdata removed - using UTC timezone (datetime.now(timezone.utc))
+# Frontend/Dashboard handles timezone conversion to UTC+7
 
 # Install Python dependencies if needed
 print_status "Checking Python dependencies..."
@@ -111,11 +112,11 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ] || [ ! -f ".deps_installed" ]; then
     if [ -f "requirements.txt" ]; then
         pip3 install --no-cache-dir -r requirements.txt 2>&1 | tail -5 || {
             print_warning "⚠️  Failed to install from requirements.txt, installing core dependencies..."
-            pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
+            pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv || true
         }
     else
         print_warning "⚠️  requirements.txt not found, installing core dependencies..."
-        pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv tzdata || true
+        pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv || true
     fi
     
     # Verify critical dependencies
@@ -136,19 +137,10 @@ else
     echo ""
 fi
 
-# Start Redis
-print_status "Starting Redis..."
-if pgrep -x "redis-server" > /dev/null; then
-    print_warning "⚠️  Redis already running"
-else
-    redis-server --daemonize yes --port 6379 --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru || true
-    sleep 2
-    if redis-cli ping > /dev/null 2>&1; then
-        print_success "✅ Redis started"
-    else
-        print_error "❌ Redis failed to start"
-    fi
-fi
+# Redis: Using Redis Cloud (external)
+# REDIS_URL configured in .env.runpod (redis://default:...@redis-12598.c252.ap-southeast-1-1.ec2.cloud.redislabs.com:12598)
+# No need to start local Redis server
+print_status "Using Redis Cloud (external) - no local Redis server needed"
 echo ""
 
 # Start Whisper API
@@ -234,9 +226,7 @@ else
     export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
     export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
     export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
-    # Set timezone environment variables for pythainlp
-    export TZ=Asia/Bangkok
-    [ -d "/usr/share/zoneinfo" ] && export TZDIR=/usr/share/zoneinfo || true
+    # Note: Using UTC timezone (datetime.now(timezone.utc)) - frontend handles conversion
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
@@ -244,8 +234,6 @@ else
              WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
              WHISPER_MODEL="${WHISPER_MODEL}" \
              WHISPER_DEVICE="${WHISPER_DEVICE}" \
-             TZ="${TZ}" \
-             TZDIR="${TZDIR:-/usr/share/zoneinfo}" \
              python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 > /tmp/main-api.log 2>&1 & disown
     sleep 5
     # Check if process is still running (not crashed)

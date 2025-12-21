@@ -133,12 +133,23 @@ class TranscriptionService:
         """ประมวลผลทั้งไฟล์เลย (ไม่ใช้ chunking)"""
         logger.info(f"🔄 Processing full file (no chunking)...")
         
-        # ใช้ WhisperService โดยตรง
-        result = self.whisper_service.transcribe_file(
-            file_path,
-            model_size=model_size,
-            language=language,
-            use_thai_processor=True
+        # อัปเดต progress
+        task = self.tasks.get(task_id)
+        if task:
+            task.progress = 20
+            self._save_task(task)
+        
+        # ใช้ WhisperService โดยตรง - รันใน thread pool เพื่อไม่ block event loop
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: self.whisper_service.transcribe_file(
+                file_path,
+                model_size=model_size,
+                language=language,
+                use_thai_processor=True
+            )
         )
         
         return result

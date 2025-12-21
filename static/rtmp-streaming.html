@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTMP Streaming with Transcription & Close Caption</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 32px;
+            margin-bottom: 30px;
+            color: #1d1d1f;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .section h2 {
+            font-size: 20px;
+            margin-bottom: 16px;
+            color: #1d1d1f;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #1d1d1f;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #0071e3;
+        }
+        
+        button {
+            background: #0071e3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #0077ed;
+        }
+        
+        button:disabled {
+            background: #d2d2d7;
+            cursor: not-allowed;
+        }
+        
+        .btn-danger {
+            background: #ff3b30;
+        }
+        
+        .btn-danger:hover {
+            background: #ff453a;
+        }
+        
+        .btn-secondary {
+            background: #86868b;
+        }
+        
+        .btn-secondary:hover {
+            background: #949499;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        
+        video {
+            width: 100%;
+            display: block;
+        }
+        
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        
+        .status.success {
+            background: #d1f2eb;
+            color: #006644;
+        }
+        
+        .status.error {
+            background: #ffe5e5;
+            color: #bf0000;
+        }
+        
+        .status.info {
+            background: #e5f3ff;
+            color: #004085;
+        }
+        
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .transcription-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        
+        .transcription-item {
+            padding: 8px;
+            border-bottom: 1px solid #f5f5f7;
+            font-size: 14px;
+        }
+        
+        .transcription-item:last-child {
+            border-bottom: none;
+        }
+        
+        .transcription-time {
+            color: #86868b;
+            font-size: 12px;
+            margin-right: 8px;
+        }
+        
+        .search-results {
+            margin-top: 16px;
+        }
+        
+        .search-result-item {
+            padding: 12px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: #f5f5f7;
+        }
+        
+        .search-result-time {
+            color: #0071e3;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .stream-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+        
+        .info-item {
+            padding: 12px;
+            background: #f5f5f7;
+            border-radius: 8px;
+        }
+        
+        .info-label {
+            font-size: 12px;
+            color: #86868b;
+            margin-bottom: 4px;
+        }
+        
+        .info-value {
+            font-size: 16px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 RTMP Streaming with Transcription & Close Caption</h1>
+        
+        <!-- Stream Configuration -->
+        <div class="section">
+            <h2>📡 Stream Configuration</h2>
+            <div class="form-group">
+                <label>RTMP Stream Key:</label>
+                <input type="text" id="streamKey" value="test_stream" placeholder="stream_key">
+            </div>
+            <div class="form-group">
+                <label>Stream Name:</label>
+                <input type="text" id="streamName" value="test_stream" placeholder="stream_name">
+            </div>
+            <div class="form-group">
+                <label>Language:</label>
+                <select id="language">
+                    <option value="th">ไทย</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Model Size:</label>
+                <select id="modelSize">
+                    <option value="tiny">Tiny (เร็วที่สุด)</option>
+                    <option value="base" selected>Base (สมดุล)</option>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                </select>
+            </div>
+            <div class="button-group">
+                <button onclick="startStream()">▶️ Start Stream</button>
+                <button onclick="stopStream()" class="btn-danger">⏹️ Stop Stream</button>
+                <button onclick="refreshStatus()" class="btn-secondary">🔄 Refresh Status</button>
+            </div>
+            <div id="streamStatus" class="status info" style="display: none;"></div>
+        </div>
+        
+        <!-- Video Players -->
+        <div class="section">
+            <h2>📺 Video Players</h2>
+            <div class="grid">
+                <div>
+                    <h3>Clean Stream (ไม่มี CC)</h3>
+                    <div class="video-container">
+                        <video id="cleanVideo" controls></video>
+                    </div>
+                    <div class="form-group">
+                        <label>HLS URL (Clean):</label>
+                        <input type="text" id="cleanHlsUrl" value="http://localhost:8080/hls/clean/test_stream.m3u8" readonly>
+                    </div>
+                    <button onclick="loadCleanStream()">▶️ Load Clean Stream</button>
+                </div>
+                <div>
+                    <h3>CC Stream (มี Close Caption)</h3>
+                    <div class="video-container">
+                        <video id="ccVideo" controls></video>
+                    </div>
+                    <div class="form-group">
+                        <label>HLS URL (CC):</label>
+                        <input type="text" id="ccHlsUrl" value="http://localhost:8080/hls/cc/test_stream.m3u8" readonly>
+                    </div>
+                    <div class="button-group">
+                        <button onclick="loadCCStream()">▶️ Load CC Stream</button>
+                        <button onclick="startBurnin()" class="btn-secondary">🔥 Start Burn-in</button>
+                        <button onclick="stopBurnin()" class="btn-danger">⏹️ Stop Burn-in</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Stream Status -->
+        <div class="section">
+            <h2>📊 Stream Status</h2>
+            <div id="streamInfo" class="stream-info"></div>
+        </div>
+        
+        <!-- Transcriptions -->
+        <div class="section">
+            <h2>📝 Transcriptions</h2>
+            <div class="button-group">
+                <button onclick="loadTranscriptions()">🔄 Refresh Transcriptions</button>
+            </div>
+            <div id="transcriptions" class="transcription-list"></div>
+        </div>
+        
+        <!-- Search -->
+        <div class="section">
+            <h2>🔍 Search Captions</h2>
+            <div class="form-group">
+                <label>Search Query:</label>
+                <input type="text" id="searchQuery" placeholder="ค้นหาข้อความ...">
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="caseSensitive"> Case Sensitive
+                </label>
+            </div>
+            <div class="button-group">
+                <button onclick="searchCaptions()">🔍 Search</button>
+                <button onclick="getTimeline()" class="btn-secondary">📅 Get Timeline</button>
+            </div>
+            <div id="searchResults" class="search-results"></div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8010/api/rtmp';
+        let currentStreamId = null;
+        let cleanHlsPlayer = null;
+        let ccHlsPlayer = null;
+        
+        // HLS Players
+        function loadCleanStream() {
+            const url = document.getElementById('cleanHlsUrl').value;
+            const video = document.getElementById('cleanVideo');
+            
+            if (Hls.isSupported()) {
+                if (cleanHlsPlayer) {
+                    cleanHlsPlayer.destroy();
+                }
+                cleanHlsPlayer = new Hls();
+                cleanHlsPlayer.loadSource(url);
+                cleanHlsPlayer.attachMedia(video);
+                cleanHlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+                    video.play();
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.play();
+            }
+        }
+        
+        function loadCCStream() {
+            const url = document.getElementById('ccHlsUrl').value;
+            const video = document.getElementById('ccVideo');
+            
+            if (Hls.isSupported()) {
+                if (ccHlsPlayer) {
+                    ccHlsPlayer.destroy();
+                }
+                ccHlsPlayer = new Hls();
+                ccHlsPlayer.loadSource(url);
+                ccHlsPlayer.attachMedia(video);
+                ccHlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+                    video.play();
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+                video.play();
+            }
+        }
+        
+        // Stream Management
+        async function startStream() {
+            const streamKey = document.getElementById('streamKey').value;
+            const streamName = document.getElementById('streamName').value;
+            const language = document.getElementById('language').value;
+            const modelSize = document.getElementById('modelSize').value;
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/start`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({streamKey, stream_name: streamName, language, model_size: modelSize})
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentStreamId = data.stream_id;
+                    showStatus('success', `✅ Stream started: ${data.stream_id}`);
+                    await refreshStatus();
+                } else {
+                    showStatus('error', `❌ Error: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        async function stopStream() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/stop/${currentStreamId}`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', '✅ Stream stopped');
+                    currentStreamId = null;
+                    await refreshStatus();
+                } else {
+                    showStatus('error', `❌ Error: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        async function refreshStatus() {
+            if (!currentStreamId) {
+                document.getElementById('streamInfo').innerHTML = '<p>No active stream</p>';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/status/${currentStreamId}`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const info = `
+                        <div class="info-item">
+                            <div class="info-label">Stream ID</div>
+                            <div class="info-value">${data.stream_id}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Status</div>
+                            <div class="info-value">${data.status}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Transcriptions</div>
+                            <div class="info-value">${data.transcription_count || 0}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Started At</div>
+                            <div class="info-value">${new Date(data.started_at).toLocaleString('th-TH')}</div>
+                        </div>
+                    `;
+                    document.getElementById('streamInfo').innerHTML = info;
+                }
+            } catch (error) {
+                console.error('Error refreshing status:', error);
+            }
+        }
+        
+        // Transcriptions
+        async function loadTranscriptions() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/${currentStreamId}/transcriptions`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const list = document.getElementById('transcriptions');
+                    if (data.transcriptions.length === 0) {
+                        list.innerHTML = '<p>No transcriptions yet</p>';
+                        return;
+                    }
+                    
+                    list.innerHTML = data.transcriptions.map(trans => `
+                        <div class="transcription-item">
+                            <span class="transcription-time">${formatTime(trans.segment_start_time || 0)}</span>
+                            <span>${trans.text || ''}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Error loading transcriptions:', error);
+            }
+        }
+        
+        // Burn-in
+        async function startBurnin() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/${currentStreamId}/burnin/start`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', `✅ Burn-in started: ${data.caption_segments_count} segments`);
+                } else {
+                    showStatus('error', `❌ Error: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        async function stopBurnin() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/${currentStreamId}/burnin/stop`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', '✅ Burn-in stopped');
+                } else {
+                    showStatus('error', `❌ Error: ${data.detail || 'Unknown error'}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        // Search
+        async function searchCaptions() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            const query = document.getElementById('searchQuery').value;
+            const caseSensitive = document.getElementById('caseSensitive').checked;
+            
+            if (!query) {
+                showStatus('warning', '⚠️ Please enter a search query');
+                return;
+            }
+            
+            try {
+                const response = await fetch(
+                    `${API_BASE}/stream/${currentStreamId}/search?query=${encodeURIComponent(query)}&case_sensitive=${caseSensitive}`
+                );
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const resultsDiv = document.getElementById('searchResults');
+                    if (data.results.length === 0) {
+                        resultsDiv.innerHTML = '<p>No results found</p>';
+                        return;
+                    }
+                    
+                    resultsDiv.innerHTML = data.results.map(result => `
+                        <div class="search-result-item">
+                            <div class="search-result-time">${result.timestamp_formatted}</div>
+                            <div>${result.text}</div>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        async function getTimeline() {
+            if (!currentStreamId) {
+                showStatus('warning', '⚠️ No active stream');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/stream/${currentStreamId}/timeline`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    const resultsDiv = document.getElementById('searchResults');
+                    resultsDiv.innerHTML = `
+                        <h3>Timeline (${data.count} segments)</h3>
+                        ${data.timeline.map(item => `
+                            <div class="search-result-item">
+                                <div class="search-result-time">${item.timestamp_formatted}</div>
+                                <div>${item.text}</div>
+                            </div>
+                        `).join('')}
+                    `;
+                }
+            } catch (error) {
+                showStatus('error', `❌ Error: ${error.message}`);
+            }
+        }
+        
+        // Utilities
+        function showStatus(type, message) {
+            const statusDiv = document.getElementById('streamStatus');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        function formatTime(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+        
+        // Auto-refresh
+        setInterval(() => {
+            if (currentStreamId) {
+                refreshStatus();
+                loadTranscriptions();
+            }
+        }, 5000);
+    </script>
+</body>
+</html>
+

@@ -34,7 +34,10 @@ class FasterWhisperProvider(WhisperProvider):
         if not FASTER_WHISPER_AVAILABLE:
             raise ImportError("faster-whisper not installed. Please install: pip install faster-whisper")
         
-        # Configuration
+        # Configuration - Model
+        self.default_model = (config or {}).get('model') or os.getenv('WHISPER_MODEL', 'medium')
+        
+        # Configuration - Device
         self.device = os.getenv('WHISPER_DEVICE', 'cuda')
         self.compute_type = os.getenv('WHISPER_COMPUTE_TYPE', None)
         

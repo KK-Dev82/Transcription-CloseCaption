@@ -5,20 +5,85 @@ Thai Text Post-Processor
 
 import re
 import logging
-from typing import Dict, List, Tuple
-from pythainlp import word_tokenize, spell
-from pythainlp.corpus import thai_words
-from pythainlp.spell import correct
-from pythainlp.util import normalize
-from pythainlp.tokenize import word_tokenize as thai_word_tokenize
+from typing import Dict, List, Tuple, Optional
 import requests
+import importlib
 
 logger = logging.getLogger(__name__)
 
+# Optional PyThaiNLP imports (may fail if tzdata is missing)
+PYTHAINLP_AVAILABLE = False
+_pythainlp_modules = {}
+
+def _try_import_pythainlp():
+    """Try to import PyThaiNLP modules lazily"""
+    global PYTHAINLP_AVAILABLE, _pythainlp_modules
+    
+    if PYTHAINLP_AVAILABLE:
+        return True
+    
+    try:
+        # Try importing pythainlp module first
+        pythainlp = importlib.import_module('pythainlp')
+        _pythainlp_modules['pythainlp'] = pythainlp
+        
+        # Import submodules
+        _pythainlp_modules['corpus'] = importlib.import_module('pythainlp.corpus')
+        _pythainlp_modules['spell'] = importlib.import_module('pythainlp.spell')
+        _pythainlp_modules['util'] = importlib.import_module('pythainlp.util')
+        _pythainlp_modules['tokenize'] = importlib.import_module('pythainlp.tokenize')
+        
+        PYTHAINLP_AVAILABLE = True
+        logger.info("✅ PyThaiNLP loaded successfully")
+        return True
+    except (ImportError, ModuleNotFoundError, Exception) as e:
+        logger.warning(f"⚠️ PyThaiNLP not available: {e}. Using fallback mode (basic text processing only).")
+        PYTHAINLP_AVAILABLE = False
+        return False
+
+# Fallback functions (used when PyThaiNLP is not available)
+def normalize(text: str) -> str:
+    """Normalize text (fallback: just strip)"""
+    if PYTHAINLP_AVAILABLE and 'util' in _pythainlp_modules:
+        return _pythainlp_modules['util'].normalize(text)
+    return text.strip()
+
+def thai_word_tokenize(text: str, engine: str = 'newmm') -> List[str]:
+    """Tokenize Thai text (fallback: split by spaces)"""
+    if PYTHAINLP_AVAILABLE and 'tokenize' in _pythainlp_modules:
+        return _pythainlp_modules['tokenize'].word_tokenize(text, engine=engine)
+    # Simple word tokenization by spaces
+    return text.split()
+
+def correct(word: str) -> str:
+    """Correct spelling (fallback: return as-is)"""
+    if PYTHAINLP_AVAILABLE and 'spell' in _pythainlp_modules:
+        return _pythainlp_modules['spell'].correct(word)
+    return word
+
+def thai_words() -> List[str]:
+    """Get Thai words dictionary (fallback: empty list)"""
+    if PYTHAINLP_AVAILABLE and 'corpus' in _pythainlp_modules:
+        try:
+            return _pythainlp_modules['corpus'].thai_words()
+        except:
+            return []
+    return []
+
 class ThaiTextProcessor:
     def __init__(self):
-        # โหลดพจนานุกรมภาษาไทย
-        self.thai_words_set = set(thai_words())
+        # ลอง import PyThaiNLP (lazy import)
+        _try_import_pythainlp()
+        
+        # โหลดพจนานุกรมภาษาไทย (ถ้ามี PyThaiNLP)
+        if PYTHAINLP_AVAILABLE:
+            try:
+                self.thai_words_set = set(thai_words())
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load Thai words dictionary: {e}. Using empty set.")
+                self.thai_words_set = set()
+        else:
+            self.thai_words_set = set()
         
         # คำที่มักจะแปลงผิด (Common mistakes from Whisper)
         self.common_corrections = {
@@ -202,7 +267,10 @@ class ThaiTextProcessor:
         return corrected.strip()
     
     def _spell_check(self, text: str) -> str:
-        """ตรวจสอบการสะกดด้วย PyThaiNLP"""
+        """ตรวจสอบการสะกดด้วย PyThaiNLP (ถ้ามี)"""
+        if not PYTHAINLP_AVAILABLE:
+            return text  # Skip spell check if PyThaiNLP not available
+            
         try:
             # แยกคำด้วย PyThaiNLP
             tokens = thai_word_tokenize(text, engine='newmm')
@@ -240,7 +308,10 @@ class ThaiTextProcessor:
         return text
     
     def _improve_word_segmentation(self, text: str) -> str:
-        """ปรับปรุงการแยกคำด้วย PyThaiNLP"""
+        """ปรับปรุงการแยกคำด้วย PyThaiNLP (ถ้ามี)"""
+        if not PYTHAINLP_AVAILABLE:
+            return text  # Skip word segmentation if PyThaiNLP not available
+            
         try:
             # ใช้ PyThaiNLP word tokenization
             tokens = thai_word_tokenize(text, engine='newmm')
@@ -261,21 +332,29 @@ class ThaiTextProcessor:
         """คำนวณคะแนนความมั่นใจในการแก้ไข"""
         if original == corrected:
             return 1.0
+        
+        if not PYTHAINLP_AVAILABLE:
+            # Fallback: simple comparison
+            return 0.8 if original != corrected else 1.0
             
-        # นับจำนวนคำที่ถูกต้องในพจนานุกรม
-        original_tokens = thai_word_tokenize(original, engine='newmm')
-        corrected_tokens = thai_word_tokenize(corrected, engine='newmm')
-        
-        original_correct = sum(1 for token in original_tokens if token in self.thai_words_set)
-        corrected_correct = sum(1 for token in corrected_tokens if token in self.thai_words_set)
-        
-        if len(corrected_tokens) == 0:
-            return 0.0
+        try:
+            # นับจำนวนคำที่ถูกต้องในพจนานุกรม
+            original_tokens = thai_word_tokenize(original, engine='newmm')
+            corrected_tokens = thai_word_tokenize(corrected, engine='newmm')
             
-        improvement = (corrected_correct - original_correct) / len(corrected_tokens)
-        base_score = corrected_correct / len(corrected_tokens)
-        
-        return min(1.0, base_score + improvement * 0.1)
+            original_correct = sum(1 for token in original_tokens if token in self.thai_words_set)
+            corrected_correct = sum(1 for token in corrected_tokens if token in self.thai_words_set)
+            
+            if len(corrected_tokens) == 0:
+                return 0.0
+                
+            improvement = (corrected_correct - original_correct) / len(corrected_tokens)
+            base_score = corrected_correct / len(corrected_tokens)
+            
+            return min(1.0, base_score + improvement * 0.1)
+        except Exception as e:
+            logger.error(f"Confidence score error: {e}")
+            return 0.8  # Fallback score
     
     def process_transcription_chunks(self, chunks: List[Dict]) -> List[Dict]:
         """ประมวลผล chunks ทั้งหมด"""
