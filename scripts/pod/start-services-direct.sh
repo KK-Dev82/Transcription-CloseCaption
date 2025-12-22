@@ -14,8 +14,17 @@ export NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-0}
 # ใช้ cuDNN 9.1.0 จาก CTranslate2 package แทน cuDNN 8.7.0 จาก PyTorch
 CUDNN_LIB="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs/libcudnn-74a4c495.so.9.1.0"
 if [ -f "$CUDNN_LIB" ]; then
-    export LD_PRELOAD="$CUDNN_LIB"
-    echo "✅ Using cuDNN 9.1.0 from CTranslate2 package (LD_PRELOAD)"
+    # ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN libraries
+    CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+    if [ -d "$CUDNN_LIB_PATH" ]; then
+        # ตรวจสอบว่า LD_LIBRARY_PATH มีอยู่หรือไม่
+        if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="$CUDNN_LIB_PATH"
+        else
+            export LD_LIBRARY_PATH="$CUDNN_LIB_PATH:$LD_LIBRARY_PATH"
+        fi
+        echo "✅ Set LD_LIBRARY_PATH for cuDNN libraries"
+    fi
 else
     echo "⚠️  cuDNN library not found, faster-whisper may have issues"
 fi

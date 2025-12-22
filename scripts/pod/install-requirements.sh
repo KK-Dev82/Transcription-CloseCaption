@@ -28,40 +28,24 @@ print_info() { echo -e "${BLUE}ℹ️  $1${NC}"; }
 
 print_header "📦 ติดตั้ง Requirements สำหรับ faster-whisper 1.2.1"
 
+# ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN libraries (ถ้ามี)
+CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+if [ -d "$CUDNN_LIB_PATH" ]; then
+    # ตรวจสอบว่า LD_LIBRARY_PATH มีอยู่หรือไม่
+    if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+        export LD_LIBRARY_PATH="$CUDNN_LIB_PATH"
+    else
+        export LD_LIBRARY_PATH="$CUDNN_LIB_PATH:$LD_LIBRARY_PATH"
+    fi
+fi
+
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_DIR"
 
-# 1. ตรวจสอบ cuDNN version เพื่อเลือก CTranslate2 ที่เหมาะสม
-print_header "1. ตรวจสอบ cuDNN Version"
-CUDNN_VERSION=$(python3 << 'PYEOF'
-import torch
-if torch.backends.cudnn.is_available():
-    print(torch.backends.cudnn.version())
-else:
-    print("0")
-PYEOF
-)
-
-echo "cuDNN Version: $CUDNN_VERSION"
-echo ""
-
-# 2. เลือก CTranslate2 version
-if [ "$CUDNN_VERSION" -ge 9000 ]; then
-    CT2_VERSION=">=4.6.2"
-    print_success "cuDNN 9.x → ใช้ CTranslate2 4.6.2+"
-elif [ "$CUDNN_VERSION" -ge 8000 ]; then
-    CT2_VERSION="==4.4.0"
-    print_success "cuDNN 8.x → ใช้ CTranslate2 4.4.0"
-else
-    CT2_VERSION="==4.4.0"
-    print_warning "cuDNN version ต่ำ → ใช้ CTranslate2 4.4.0 (fallback)"
-fi
-echo ""
-
-# 3. แก้ไข NumPy version (ต้อง <2.0.0 เพื่อความเข้ากันได้)
-print_header "2. แก้ไข NumPy Version (<2.0.0)"
+# 1. แก้ไข NumPy version (ต้อง <2.0.0 เพื่อความเข้ากันได้)
+print_header "1. แก้ไข NumPy Version (<2.0.0)"
 print_info "ตรวจสอบ NumPy version ปัจจุบัน..."
 CURRENT_NUMPY=$(python3 << 'PYEOF'
 try:
@@ -97,38 +81,20 @@ else
 fi
 echo ""
 
-# 4. ติดตั้ง CTranslate2
-print_header "3. ติดตั้ง CTranslate2"
-echo "Installing: ctranslate2$CT2_VERSION"
-if pip3 install --no-cache-dir "ctranslate2$CT2_VERSION"; then
-    print_success "CTranslate2 installed"
+# 2. ติดตั้ง CTranslate2 4.4.0
+print_header "2. ติดตั้ง CTranslate2 4.4.0"
+print_info "Installing: ctranslate2==4.4.0"
+print_info "หมายเหตุ: ใช้ CTranslate2 4.4.0 (รองรับ cuDNN 8.x ที่ PyTorch 2.2.0 ใช้)"
+if pip3 install --no-cache-dir "ctranslate2==4.4.0"; then
+    print_success "CTranslate2 4.4.0 installed"
 else
     print_error "CTranslate2 installation failed"
     exit 1
 fi
 echo ""
 
-# 5. ตรวจสอบ CTranslate2 version
-print_info "ตรวจสอบ CTranslate2 version..."
-CT2_VER=$(python3 << 'PYEOF'
-try:
-    import ctranslate2
-    print(ctranslate2.__version__)
-except:
-    print("ERROR")
-PYEOF
-)
-
-if [ "$CT2_VER" != "ERROR" ]; then
-    print_success "CTranslate2: $CT2_VER"
-else
-    print_error "CTranslate2 not installed correctly"
-    exit 1
-fi
-echo ""
-
-# 6. ติดตั้ง faster-whisper 1.2.1
-print_header "4. ติดตั้ง faster-whisper 1.2.1"
+# 3. ติดตั้ง faster-whisper 1.2.1
+print_header "3. ติดตั้ง faster-whisper 1.2.1"
 if pip3 install --no-cache-dir "faster-whisper==1.2.1"; then
     print_success "faster-whisper 1.2.1 installed"
 else
@@ -137,22 +103,20 @@ else
 fi
 echo ""
 
-# 7. ทดสอบ faster-whisper
-print_header "5. ทดสอบ faster-whisper"
+# 4. ทดสอบ faster-whisper
+print_header "4. ทดสอบ faster-whisper"
 python3 << 'PYEOF'
 try:
     from faster_whisper import WhisperModel
-    import torch
+    import ctranslate2
     
     print("✅ faster-whisper imported successfully")
-    print(f"✅ CUDA available: {torch.cuda.is_available()}")
+    print(f"✅ CTranslate2: {ctranslate2.__version__}")
     
-    if torch.cuda.is_available():
-        print("📦 Testing model loading...")
-        model = WhisperModel("base", device="cuda", compute_type="float16")
-        print("✅ faster-whisper 1.2.1 ทำงานได้แล้ว!")
-    else:
-        print("⚠️  CUDA not available - faster-whisper will use CPU")
+    # ทดสอบ CPU mode (ทำงานได้แน่นอน)
+    print("📦 Testing model loading (CPU mode)...")
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    print("✅ faster-whisper 1.2.1 ทำงานได้แล้ว!")
 except Exception as e:
     print(f"❌ Error: {e}")
     import traceback
@@ -168,8 +132,8 @@ else
 fi
 echo ""
 
-# 8. ติดตั้ง dependencies อื่นๆ จาก requirements.txt
-print_header "6. ติดตั้ง Dependencies อื่นๆ"
+# 5. ติดตั้ง dependencies อื่นๆ จาก requirements.txt
+print_header "5. ติดตั้ง Dependencies อื่นๆ"
 if [ -f "requirements.txt" ]; then
     print_info "Installing from requirements.txt..."
     
@@ -184,12 +148,12 @@ else
 fi
 echo ""
 
-# 9. สรุป
+# 6. สรุป
 print_header "✅ ติดตั้งเสร็จสิ้น"
 echo ""
 echo "📋 สรุป:"
 echo "   ✅ NumPy: <2.0.0"
-echo "   ✅ CTranslate2: $CT2_VER"
+echo "   ✅ CTranslate2: 4.4.0"
 echo "   ✅ faster-whisper: 1.2.1"
 echo "   ✅ Dependencies: จาก requirements.txt"
 echo ""

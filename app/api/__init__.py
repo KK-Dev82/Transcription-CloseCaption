@@ -20,6 +20,12 @@ try:
 except ImportError:
     transcribe_router = None
 
+# Internal router (for worker endpoints)
+try:
+    from .internal import router as internal_router
+except ImportError:
+    internal_router = None
+
 __all__ = [
     "upload_router",
     "caption_router", 
@@ -27,4 +33,7 @@ __all__ = [
 ]
 
 if transcription_router:
-    __all__.append("transcription_router") 
+    __all__.append("transcription_router")
+
+if internal_router:
+    __all__.append("internal_router") 

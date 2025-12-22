@@ -37,13 +37,16 @@ class FasterWhisperProvider(WhisperProvider):
         # Configuration - Model
         self.default_model = (config or {}).get('model') or os.getenv('WHISPER_MODEL', 'medium')
         
-        # Configuration - Device
-        self.device = os.getenv('WHISPER_DEVICE', 'cuda')
+        # Configuration - Device (รองรับ multi-GPU)
+        # ใช้ 'cuda' เป็น default สำหรับ GPU acceleration
+        # ⚠️ device จะถูกอ่านใหม่ทุกครั้งใน _get_device() เพื่อรองรับ multi-GPU
+        self.base_device = os.getenv('WHISPER_DEVICE', 'cuda')
+        
         self.compute_type = os.getenv('WHISPER_COMPUTE_TYPE', None)
         
         # Auto-detect compute_type based on device
         if self.compute_type is None:
-            if self.device == 'cuda':
+            if self.base_device.startswith('cuda'):
                 self.compute_type = 'float16'
             else:
                 self.compute_type = 'float32'
@@ -51,11 +54,26 @@ class FasterWhisperProvider(WhisperProvider):
         # Check for CUDNN_DISABLE
         self.cudnn_disable = os.getenv('CUDNN_DISABLE', '0') == '1'
         
-        # Model cache (singleton pattern)
+        # Model cache (singleton pattern) - รองรับ multi-GPU
+        # Key format: "{model_size}_{device}_{compute_type}"
         self._model_cache = {}
         self._model_lock = asyncio.Lock()
         
-        logger.info(f"✅ FasterWhisperProvider initialized (device: {self.device}, compute_type: {self.compute_type})")
+        logger.info(f"✅ FasterWhisperProvider initialized (base_device: {self.base_device}, compute_type: {self.compute_type})")
+    
+    def _get_device(self) -> str:
+        """
+        อ่าน device จาก environment variable
+        
+        ⚠️  faster-whisper ไม่รองรับ "cuda:0" หรือ "cuda:1"
+        ใช้ CUDA_VISIBLE_DEVICES ที่ตั้งไว้ตอนเริ่ม process แทน
+        """
+        device_str = self.base_device
+        
+        # ใช้ device_str ตามปกติ (cuda หรือ cpu)
+        # CUDA_VISIBLE_DEVICES ถูกตั้งไว้ตอนเริ่ม process แล้ว (ใน start script)
+        logger.debug(f"[Faster Whisper] Using device: {device_str} (CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES', 'not set')})")
+        return device_str
     
     async def transcribe(
         self,
@@ -88,19 +106,35 @@ class FasterWhisperProvider(WhisperProvider):
             # Get or load model
             model = await self._get_model(model_size)
             
+            # อ่าน device ปัจจุบัน (อาจเปลี่ยนตาม WHISPER_DEVICE_ID)
+            current_device = self._get_device()
+            
             # Transcribe
             logger.info(f"[Faster Whisper] Transcribing: {audio_path}")
-            logger.info(f"   Model: {model_size}, Language: {language}, Device: {self.device}")
+            logger.info(f"   Model: {model_size}, Language: {language}, Device: {current_device}")
             
             import time
             start_time = time.time()
             
             # Run transcription (faster-whisper is synchronous)
+            # ปรับแต่ง parameters เพื่อความเร็วสูงสุด
+            vad_filter = os.getenv('WHISPER_VAD_FILTER', 'true').lower() == 'true'  # เปิด VAD เพื่อตัดช่วงเงียบ (เร็วขึ้น)
+            beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))  # greedy (เร็วสุด)
+            best_of = int(os.getenv('WHISPER_BEST_OF', '1'))
+            # Note: batch_size ไม่ใช่ parameter ของ WhisperModel.transcribe() 
+            # ต้องใช้ BatchedInferencePipeline สำหรับ batch processing
+            word_timestamps = os.getenv('WHISPER_WORD_TIMESTAMPS', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
+            condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
+            
             segments, info = model.transcribe(
                 audio_path,
                 language=language if language != "auto" else None,
-                vad_filter=True,
-                initial_prompt=initial_prompt
+                vad_filter=vad_filter,
+                initial_prompt=initial_prompt,
+                beam_size=beam_size,
+                best_of=best_of,
+                word_timestamps=word_timestamps,
+                condition_on_previous_text=condition_on_previous_text
             )
             
             # Convert segments to list (this is where it might crash if cuDNN is wrong)
@@ -135,20 +169,23 @@ class FasterWhisperProvider(WhisperProvider):
             raise
     
     async def _get_model(self, model_size: str):
-        """Get or load model (singleton pattern)"""
-        cache_key = f"{model_size}_{self.device}_{self.compute_type}"
+        """Get or load model (singleton pattern) - รองรับ multi-GPU"""
+        # อ่าน device ปัจจุบัน (อาจเปลี่ยนตาม WHISPER_DEVICE_ID)
+        current_device = self._get_device()
+        cache_key = f"{model_size}_{current_device}_{self.compute_type}"
         
         if cache_key in self._model_cache:
-            logger.debug(f"[Faster Whisper] Using cached model: {cache_key}")
+            logger.info(f"[Faster Whisper] ✅ Using cached model: {cache_key}")
             return self._model_cache[cache_key]
         
         # Load model
-        logger.info(f"[Faster Whisper] Loading model: {model_size} (device: {self.device}, compute_type: {self.compute_type})")
+        logger.info(f"[Faster Whisper] 🔄 Loading model: {model_size} (device: {current_device}, compute_type: {self.compute_type})")
+        logger.info(f"[Faster Whisper]    Cache key: {cache_key}")
         
         try:
             model = WhisperModel(
                 model_size,
-                device=self.device,
+                device=current_device,
                 compute_type=self.compute_type
             )
             self._model_cache[cache_key] = model
@@ -170,7 +207,8 @@ class FasterWhisperProvider(WhisperProvider):
                 return False
             
             # ตรวจสอบว่า CUDA พร้อมใช้งานหรือไม่ (ถ้าใช้ GPU)
-            if self.device == 'cuda':
+            current_device = self._get_device()
+            if current_device.startswith('cuda'):
                 import torch
                 if not torch.cuda.is_available():
                     logger.warning("[Faster Whisper] CUDA not available")

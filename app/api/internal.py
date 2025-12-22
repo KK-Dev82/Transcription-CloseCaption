@@ -1,59 +1,43 @@
 """
-Internal API Endpoints สำหรับ Inter-service Communication
+Internal API Endpoint สำหรับ Worker
+ใช้สำหรับ dispatcher ส่ง chunk ไป worker
 """
-
-import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Any, Dict
-from datetime import datetime
-
-from ..services.websocket_service import websocket_manager
+from typing import Optional
+import logging
+from app.services.whisper_service import WhisperService
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(prefix="/internal", tags=["internal"])
 
-class WebSocketBroadcastRequest(BaseModel):
-    type: str
-    task_id: str
-    timestamp: str
-    progress: int = None
-    status: str = None
-    stage: str = None
-    file_path: str = None
-    language: str = None
-    results_summary: Dict[str, Any] = None
-    error: str = None
+class InternalTranscribeRequest(BaseModel):
+    """Request สำหรับ internal transcribe endpoint"""
+    audio_path: str
+    model_size: str = "base"
+    language: str = "th"
+    use_thai_processor: bool = False  # ปิดไว้เพราะจะทำ post-process แยก
 
-@router.post("/internal/websocket-broadcast")
-async def broadcast_websocket_message(request: WebSocketBroadcastRequest):
+@router.post("/transcribe")
+async def internal_transcribe(request: InternalTranscribeRequest):
     """
-    Internal endpoint สำหรับ Worker ส่ง notifications มาให้ API server broadcast ผ่าน WebSocket
+    Internal endpoint สำหรับ transcribe chunk
+    ใช้โดย dispatcher ส่ง chunk ไป worker
     """
     try:
-        logger.info(f"🔄 Received WebSocket broadcast request: {request.type} for task {request.task_id}")
-        
-        # Convert to dict for broadcasting
-        message_data = request.dict(exclude_none=True)
-        
-        # Broadcast ไปยังทุก user ที่ subscribe task นี้
-        await websocket_manager.broadcast_task_update(request.task_id, message_data)
+        whisper_service = WhisperService()
+        result = whisper_service.transcribe_file(
+            audio_path=request.audio_path,
+            model_size=request.model_size,
+            language=request.language,
+            use_thai_processor=request.use_thai_processor
+        )
         
         return {
-            "status": "success", 
-            "message": f"Broadcasted {request.type} for task {request.task_id}",
-            "timestamp": datetime.now().isoformat()
+            "success": True,
+            "text": result.get("text", ""),
+            "segments": result.get("segments", [])
         }
-        
     except Exception as e:
-        logger.error(f"❌ Failed to broadcast WebSocket message: {e}")
+        logger.error(f"❌ Error in internal transcribe: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/internal/health")
-async def internal_health_check():
-    """Health check สำหรับ internal services"""
-    return {
-        "status": "healthy",
-        "websocket_stats": websocket_manager.get_stats(),
-        "timestamp": datetime.now().isoformat()
-    }

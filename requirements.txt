@@ -7,15 +7,23 @@ redis[hiredis]==5.0.1
 
 # FFmpeg สำหรับ video processing
 ffmpeg-python==0.2.0
+# ⚠️  หมายเหตุ: ffmpeg-python ต้องการ FFmpeg binary อยู่ด้วย
+#   - ติดตั้ง FFmpeg binary: apt-get install -y ffmpeg
+#   - หรือใช้จาก base image ที่มี FFmpeg อยู่แล้ว
+#   - FFmpeg binary ใช้สำหรับ: audio extraction, chunking, video processing
 
 # Whisper และ dependencies
 openai-whisper==20231117
 faster-whisper==1.2.1
-# ctranslate2 จะถูกติดตั้งอัตโนมัติโดย faster-whisper (>=4.0,<6)  # ⚡ Faster Whisper (CTranslate2) - เร็วกว่า 2-4x
-# torch และ torchaudio ใช้จาก base image (2.1.0+cu118)
-# ไม่ต้องติดตั้งใหม่ เพื่อหลีกเลี่ยง conflict กับ torchvision 0.16.0+cu118
-# torch==2.1.0+cu118  (ใช้จาก base image)
-# torchaudio==2.1.0+cu118  (ใช้จาก base image)
+ctranslate2==4.4.0
+# ⚠️  หมายเหตุ: faster-whisper 1.2.1 ต้องการ ctranslate2>=4.0,<6
+#   - ใช้ ctranslate2==4.4.0 (รองรับ cuDNN 8.x ที่ PyTorch 2.2.0 ใช้)
+#   - สำหรับ GPU mode: ต้องมี cuDNN libraries ครบในระบบ
+#   - สำหรับ CPU mode: ทำงานได้ทันที (ช้ากว่า GPU)
+# torch และ torchaudio ใช้จาก base image (2.2.0+cu121)
+# ไม่ต้องติดตั้งใหม่ เพื่อหลีกเลี่ยง conflict
+# torch==2.2.0+cu121  (ใช้จาก base image)
+# torchaudio==2.2.0+cu121  (ใช้จาก base image)
 
 # Audio processing
 librosa==0.10.1
@@ -47,6 +55,7 @@ tqdm==4.66.1
 # Thai NLP
 pythainlp==4.0.2
 attacut==1.0.6
+tzdata>=2024.1  # Required for PyThaiNLP timezone support (auto-update to latest)
 
 # Dashboard
 jinja2==3.1.2
@@ -60,6 +69,7 @@ black==23.11.0
 flake8==6.1.0
 
 redis==5.0.1
+rq==1.15.1  # Redis Queue for job management
 sqlalchemy==2.0.23
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

@@ -28,14 +28,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# แก้ไข cuDNN version mismatch สำหรับ faster-whisper
-# ใช้ cuDNN 9.1.0 จาก CTranslate2 package แทน cuDNN 8.7.0 จาก PyTorch
-CUDNN_LIB="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs/libcudnn-74a4c495.so.9.1.0"
-if [ -f "$CUDNN_LIB" ]; then
-    export LD_PRELOAD="$CUDNN_LIB"
-    print_success "✅ Using cuDNN 9.1.0 from CTranslate2 package (LD_PRELOAD)"
+# ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN libraries
+# PyTorch 2.2.0 มี cuDNN libraries อยู่ใน nvidia/cudnn/lib
+CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+if [ -d "$CUDNN_LIB_PATH" ]; then
+    # ตรวจสอบว่า LD_LIBRARY_PATH มีอยู่หรือไม่
+    if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+        export LD_LIBRARY_PATH="$CUDNN_LIB_PATH"
+    else
+        export LD_LIBRARY_PATH="$CUDNN_LIB_PATH:$LD_LIBRARY_PATH"
+    fi
+    print_success "✅ Set LD_LIBRARY_PATH for cuDNN libraries"
 else
-    print_warning "⚠️  cuDNN library not found, faster-whisper may have issues"
+    print_warning "⚠️  cuDNN library path not found: $CUDNN_LIB_PATH"
 fi
 echo ""
 
@@ -192,7 +197,11 @@ else
     
     # เพิ่ม cuDNN libraries (persistent)
     if [ -d "$CUDNN_DIR" ]; then
-        export LD_LIBRARY_PATH="${CUDNN_DIR}:${LD_LIBRARY_PATH:-}"
+        if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${CUDNN_DIR}"
+        else
+            export LD_LIBRARY_PATH="${CUDNN_DIR}:${LD_LIBRARY_PATH}"
+        fi
         print_status "✅ Added cuDNN libraries to LD_LIBRARY_PATH: $CUDNN_DIR"
     fi
     nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \

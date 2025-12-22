@@ -6,6 +6,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import logging
+import os
+
+# Load .env.runpod if exists (ต้องทำก่อน import services ที่ใช้ environment variables)
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent / ".env.runpod"
+    if env_file.exists():
+        load_dotenv(env_file)
+        logging.getLogger(__name__).info(f"✅ Loaded environment from {env_file}")
+except ImportError:
+    pass  # python-dotenv not installed, will use system env vars
+except Exception as e:
+    logging.getLogger(__name__).warning(f"⚠️  Failed to load .env.runpod: {e}")
 
 # Create necessary directories
 Path("uploads").mkdir(exist_ok=True)
@@ -60,6 +73,14 @@ try:
     from app.api import transcribe_router
     if transcribe_router:
         app.include_router(transcribe_router, prefix="/api", tags=["transcription"])
+except ImportError:
+    pass
+
+# Include internal router (for worker endpoints)
+try:
+    from app.api import internal_router
+    if internal_router:
+        app.include_router(internal_router, prefix="/api", tags=["internal"])
 except ImportError:
     pass
 

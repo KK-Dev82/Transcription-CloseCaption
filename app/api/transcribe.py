@@ -140,25 +140,76 @@ async def start_transcription(request: TranscriptionRequest):
         # บันทึก task
         transcription_service._save_task(task)
         
-        # เริ่มประมวลผลแบบ async (ไม่ blocking)
-        import asyncio
-        asyncio.create_task(
-            transcription_service._process_transcription(
+        # ใช้ Redis Queue แทน async task (แก้ปัญหา timeout)
+        try:
+            from app.services.redis_queue_service import get_redis_queue_service
+            
+            queue_service = get_redis_queue_service()
+            
+            # Enqueue job เข้า Redis Queue
+            job_id = queue_service.enqueue_transcription(
                 task_id=task_id,
                 file_path=file_path,
                 language=request.language,
                 model_size=request.model_size,
-                chunk_duration=request.chunk_duration or 30,
-                use_chunking=request.use_chunking
+                chunk_duration=request.chunk_duration or 90,  # default 90s
+                priority=False,  # TODO: เพิ่ม priority สำหรับ live streaming
+                worker_gpu=None  # None = round-robin
             )
-        )
-        
-        return {
-            "task_id": task_id,
-            "status": "queued",
-            "message": "Transcription started",
-            "file_path": file_path
-        }
+            
+            logger.info(f"✅ Job {task_id} enqueued to Redis Queue (Job ID: {job_id})")
+            
+            return {
+                "task_id": task_id,
+                "status": "queued",
+                "message": "Transcription job queued successfully",
+                "file_path": file_path,
+                "queue": "redis"
+            }
+        except ImportError:
+            # Fallback: ใช้ async task ถ้า Redis Queue ไม่พร้อม
+            logger.warning("⚠️ Redis Queue not available, falling back to async task")
+            import asyncio
+            asyncio.create_task(
+                transcription_service._process_transcription(
+                    task_id=task_id,
+                    file_path=file_path,
+                    language=request.language,
+                    model_size=request.model_size,
+                    chunk_duration=request.chunk_duration or 90,
+                    use_chunking=request.use_chunking
+                )
+            )
+            
+            return {
+                "task_id": task_id,
+                "status": "queued",
+                "message": "Transcription started (async mode)",
+                "file_path": file_path,
+                "queue": "async"
+            }
+        except Exception as e:
+            logger.error(f"❌ Error enqueueing job: {e}", exc_info=True)
+            # Fallback: ใช้ async task
+            import asyncio
+            asyncio.create_task(
+                transcription_service._process_transcription(
+                    task_id=task_id,
+                    file_path=file_path,
+                    language=request.language,
+                    model_size=request.model_size,
+                    chunk_duration=request.chunk_duration or 90,
+                    use_chunking=request.use_chunking
+                )
+            )
+            
+            return {
+                "task_id": task_id,
+                "status": "queued",
+                "message": f"Transcription started (fallback mode: {str(e)})",
+                "file_path": file_path,
+                "queue": "async"
+            }
         
     except HTTPException:
         raise

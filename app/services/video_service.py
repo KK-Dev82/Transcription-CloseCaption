@@ -168,12 +168,13 @@ class VideoService:
                     ss=start_time,
                     t=chunk_duration
                 )
+                # แปลงเป็น 16kHz mono PCM (เหมาะสำหรับ Whisper)
                 audio = ffmpeg.output(
                     stream,
                     str(chunk_path),
                     acodec='pcm_s16le',
-                    ac=1,
-                    ar='16000'
+                    ac=1,      # mono
+                    ar='16000' # 16kHz
                 )
                 
                 ffmpeg.run(audio, overwrite_output=True, quiet=True)

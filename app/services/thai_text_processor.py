@@ -332,7 +332,7 @@ class ThaiTextProcessor:
         """คำนวณคะแนนความมั่นใจในการแก้ไข"""
         if original == corrected:
             return 1.0
-        
+            
         if not PYTHAINLP_AVAILABLE:
             # Fallback: simple comparison
             return 0.8 if original != corrected else 1.0
