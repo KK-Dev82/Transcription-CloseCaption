@@ -44,22 +44,30 @@ class RedisQueueService:
         # แต่ละ queue จะถูก consume โดย worker ที่ fix GPU ของตัวเอง
         # รองรับ 4 GPUs (gpu0, gpu1, gpu2, gpu3)
         num_gpus = int(os.getenv('NUM_GPUS', '4'))
-        self.queues = {
-            'default': Queue('transcription_default', connection=self.redis_conn),
-        }
+        self.queues = {}
         
-        # สร้าง queue สำหรับแต่ละ GPU
+        # สร้าง queue สำหรับแต่ละ GPU (ไม่ใช้ default queue)
         for i in range(num_gpus):
             gpu_key = f'gpu{i}'
             queue_name = f'transcription_gpu{i}'
             self.queues[gpu_key] = Queue(queue_name, connection=self.redis_conn)
+        
+        # Round-robin counter สำหรับ load balancing
+        self._rr_counter = 0
+        self._num_gpus = num_gpus
         
         logger.info(f"✅ Created {num_gpus} GPU queues: {list(self.queues.keys())}")
         
         # Queue สำหรับ priority tasks (เช่น live streaming)
         self.priority_queue = Queue('transcription_priority', connection=self.redis_conn)
         
-        logger.info("✅ Redis Queue Service initialized")
+        # CPU queue สำหรับ aggregator และ CPU-intensive tasks
+        self.cpu_queue = Queue('transcription_cpu', connection=self.redis_conn)
+        
+        # Preprocess queue แยก (สำหรับ extract + chunking)
+        self.preprocess_queue = Queue('transcription_preprocess', connection=self.redis_conn)
+        
+        logger.info("✅ Redis Queue Service initialized (GPU queues + CPU queue + Preprocess queue)")
     
     def enqueue_transcription(
         self,
@@ -94,9 +102,34 @@ class RedisQueueService:
             queue = self.queues[worker_gpu]
             logger.info(f"🎯 Enqueueing job {task_id} to {worker_gpu} queue")
         else:
-            # Round-robin: ใช้ default queue (จะ dispatch ไปยัง worker ที่ว่าง)
-            queue = self.queues['default']
-            logger.info(f"🔄 Enqueueing job {task_id} to default queue (round-robin)")
+            # Round-robin: เลือก GPU queue ที่มี load น้อยที่สุด
+            # ใช้ least-loaded strategy: ดู queue length + started jobs
+            from rq.registry import StartedJobRegistry
+            
+            best_queue = None
+            best_load = float('inf')
+            
+            for i in range(self._num_gpus):
+                gpu_key = f'gpu{i}'
+                gpu_queue = self.queues[gpu_key]
+                queue_length = len(gpu_queue)
+                started_count = len(StartedJobRegistry(queue=gpu_queue))
+                total_load = queue_length + started_count
+                
+                if total_load < best_load:
+                    best_load = total_load
+                    best_queue = gpu_queue
+            
+            if best_queue is None:
+                # Fallback: round-robin
+                self._rr_counter = (self._rr_counter + 1) % self._num_gpus
+                gpu_key = f'gpu{self._rr_counter}'
+                best_queue = self.queues[gpu_key]
+                logger.info(f"🔄 Enqueueing job {task_id} to {gpu_key} (round-robin fallback)")
+            else:
+                logger.info(f"⚖️  Enqueueing job {task_id} to least-loaded queue (load: {best_load})")
+            
+            queue = best_queue
         
         # สร้าง job data
         job_data = {
@@ -123,6 +156,76 @@ class RedisQueueService:
         )
         
         logger.info(f"✅ Job {task_id} enqueued to {queue.name} (Job ID: {job.id})")
+        return job.id
+    
+    def enqueue_preprocess(
+        self,
+        task_id: str,
+        file_path: str,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 90
+    ) -> str:
+        """
+        Enqueue preprocessing job ไปยัง CPU queue
+        
+        Args:
+            task_id: Task ID
+            file_path: Path to video/audio file
+            language: Language code
+            model_size: Whisper model size
+            chunk_duration: Chunk duration in seconds
+        
+        Returns:
+            Job ID
+        """
+        # Preprocessing ไป CPU queue
+        job = self.preprocess_queue.enqueue(
+            'app.workers.rq_worker.process_preprocess_job',
+            task_id,
+            file_path,
+            language,
+            model_size,
+            chunk_duration,
+            job_id=f"{task_id}_preprocess",
+            job_timeout=1800,  # 30 minutes timeout
+            result_ttl=86400,
+        )
+        logger.info(f"✅ Preprocess job {task_id} enqueued to Preprocess queue (Job ID: {job.id})")
+        return job.id
+    
+    def enqueue_aggregator(
+        self,
+        task_id: str,
+        language: str = "th",
+        model_size: str = "base",
+        chunk_duration: int = 90
+    ) -> str:
+        """
+        Enqueue aggregator job ไปยัง CPU queue
+        
+        Args:
+            task_id: Aggregator task ID (ควรเป็น {main_task_id}_aggregator)
+            language: Language code
+            model_size: Whisper model size
+            chunk_duration: Chunk duration in seconds
+        
+        Returns:
+            Job ID
+        """
+        # Aggregator ไป CPU queue เท่านั้น
+        job = self.cpu_queue.enqueue(
+            'app.workers.rq_worker.process_transcription_job',
+            task_id,
+            "",  # file_path ไม่ใช้ (aggregator จะไม่ใช้)
+            language,
+            model_size,
+            chunk_duration,
+            job_id=task_id,
+            job_timeout=3600,
+            result_ttl=86400,
+        )
+        logger.info(f"✅ Aggregator job {task_id} enqueued to CPU queue (Job ID: {job.id})")
         return job.id
     
     def get_job_status(self, job_id: str) -> Dict:

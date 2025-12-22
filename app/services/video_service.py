@@ -4,9 +4,10 @@ Video Service - จัดการวิดีโอและแยกเสี�
 import logging
 import ffmpeg
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import tempfile
 import os
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +48,28 @@ class VideoService:
             logger.info(f"🎬 Extracting audio from: {video_path}")
             logger.info(f"   Output: {output_path}")
             
-            # ใช้ FFmpeg แยกเสียง
-            stream = ffmpeg.input(str(video_file))
-            audio = ffmpeg.output(
-                stream,
-                str(output_path),
-                acodec='pcm_s16le',  # WAV format
-                ac=1,  # Mono
-                ar='16000'  # 16kHz sample rate (เหมาะสำหรับ Whisper)
+            # ใช้ subprocess ตรงๆ (เร็วและคุม args ชัดเจนกว่า)
+            cmd = [
+                "ffmpeg", "-y",  # -y = overwrite output
+                "-i", str(video_file),
+                "-vn",  # no video
+                "-ac", "1",  # mono
+                "-ar", "16000",  # 16kHz
+                "-c:a", "pcm_s16le",  # WAV format
+                str(output_path)
+            ]
+            
+            p = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
             
-            ffmpeg.run(audio, overwrite_output=True, quiet=True)
+            if p.returncode != 0:
+                error_msg = p.stderr[-2000:] if len(p.stderr) > 2000 else p.stderr
+                logger.error(f"❌ FFmpeg extract_audio failed: {error_msg}")
+                raise RuntimeError(f"FFmpeg extract_audio failed: {error_msg[:500]}")
             
             logger.info(f"✅ Audio extracted: {output_path}")
             return str(output_path)
@@ -129,58 +141,64 @@ class VideoService:
                 "size": 0
             }
     
-    def create_chunks(self, audio_path: str, chunk_duration: int = 30) -> list:
+    def create_chunks(self, audio_path: str, chunk_duration: int = 30, task_id: Optional[str] = None) -> List[str]:
         """
-        แบ่งไฟล์ audio เป็น chunks
+        แบ่งไฟล์ audio เป็น chunks (ใช้ ffmpeg segment แบบ single-pass - เร็วกว่ามาก)
         
         Args:
             audio_path: Path ไปยังไฟล์ audio
             chunk_duration: ความยาวของแต่ละ chunk (วินาที)
+            task_id: Task ID (optional, สำหรับแยกโฟลเดอร์กันชน)
             
         Returns:
-            list: List ของ chunk paths
+            List[str]: List ของ chunk paths
         """
         try:
             audio_file = Path(audio_path)
             if not audio_file.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
-            # ดึงข้อมูล audio เพื่อหาความยาว
-            probe = ffmpeg.probe(str(audio_file))
-            duration = float(probe['format'].get('duration', 0))
+            # แยกโฟลเดอร์ตาม task_id เพื่อกันชนกันระหว่าง tasks
+            if task_id:
+                base_dir = Path("temp") / "chunks" / task_id
+            else:
+                base_dir = Path("temp") / "chunks" / audio_file.stem
+            base_dir.mkdir(parents=True, exist_ok=True)
             
-            # คำนวณจำนวน chunks
-            num_chunks = int(duration / chunk_duration) + (1 if duration % chunk_duration > 0 else 0)
+            # Pattern สำหรับ output files
+            out_pattern = base_dir / f"{audio_file.stem}_chunk_%04d.wav"
             
-            logger.info(f"📦 Creating {num_chunks} chunks from {audio_path} (duration: {duration:.2f}s, chunk_duration: {chunk_duration}s)")
+            logger.info(f"📦 Chunking (single-pass): {audio_path} -> {base_dir} (chunk={chunk_duration}s)")
             
-            chunks = []
-            output_dir = Path("temp") / "chunks"
-            output_dir.mkdir(parents=True, exist_ok=True)
+            # ใช้ ffmpeg segment ในคำสั่งเดียว (เร็วกว่ามาก - ไม่ต้อง spawn process ซ้ำ)
+            cmd = [
+                "ffmpeg", "-y",  # -y = overwrite output
+                "-i", str(audio_file),
+                "-f", "segment",  # segment muxer
+                "-segment_time", str(chunk_duration),
+                "-reset_timestamps", "1",  # reset timestamps ต่อ chunk
+                "-ac", "1",  # mono
+                "-ar", "16000",  # 16kHz
+                "-c:a", "pcm_s16le",  # WAV format
+                str(out_pattern)
+            ]
             
-            for i in range(num_chunks):
-                start_time = i * chunk_duration
-                chunk_path = output_dir / f"{audio_file.stem}_chunk_{i:04d}.wav"
-                
-                # ใช้ FFmpeg ตัด chunk
-                stream = ffmpeg.input(
-                    str(audio_file),
-                    ss=start_time,
-                    t=chunk_duration
-                )
-                # แปลงเป็น 16kHz mono PCM (เหมาะสำหรับ Whisper)
-                audio = ffmpeg.output(
-                    stream,
-                    str(chunk_path),
-                    acodec='pcm_s16le',
-                    ac=1,      # mono
-                    ar='16000' # 16kHz
-                )
-                
-                ffmpeg.run(audio, overwrite_output=True, quiet=True)
-                chunks.append(str(chunk_path))
+            p = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
             
-            logger.info(f"✅ Created {len(chunks)} chunks")
+            if p.returncode != 0:
+                error_msg = p.stderr[-2000:] if len(p.stderr) > 2000 else p.stderr
+                logger.error(f"❌ FFmpeg create_chunks failed: {error_msg}")
+                raise RuntimeError(f"FFmpeg create_chunks failed: {error_msg[:500]}")
+            
+            # รวบรวม chunk files ที่สร้างขึ้น (เรียงตามชื่อ)
+            chunks = sorted([str(p) for p in base_dir.glob(f"{audio_file.stem}_chunk_*.wav")])
+            
+            logger.info(f"✅ Created {len(chunks)} chunks in {base_dir}")
             return chunks
             
         except Exception as e:

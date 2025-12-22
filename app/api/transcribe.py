@@ -58,12 +58,13 @@ async def start_transcription(request: TranscriptionRequest):
         
         import uuid
         from datetime import datetime, timezone
-        from app.services.transcription_service import TranscriptionService
         from app.models.transcription import TranscriptionResponse
         from app.services.file_service import FileService
+        from app.utils.json_storage import JSONStorage
         from pathlib import Path
         
-        transcription_service = TranscriptionService()
+        # ใช้ JSONStorage โดยตรง (ไม่สร้าง TranscriptionService ใหม่ทุก request)
+        json_storage = JSONStorage()
         file_service = FileService()
         
         # กรณีใช้ file_url - ดาวน์โหลดไฟล์ก่อน
@@ -123,7 +124,7 @@ async def start_transcription(request: TranscriptionRequest):
         # สร้าง task_id
         task_id = str(uuid.uuid4())
         
-        # สร้าง task object
+        # สร้าง task object และบันทึกลง storage โดยตรง
         task = TranscriptionResponse(
             task_id=task_id,
             status="queued",
@@ -134,42 +135,54 @@ async def start_transcription(request: TranscriptionRequest):
             callback_url=request.callback_url
         )
         
-        # เพิ่ม task เข้าไปใน service
-        transcription_service.tasks[task_id] = task
+        # บันทึก task ลง storage โดยตรง (ไม่ใช้ in-memory tasks dict)
+        task_dict = {
+            "task_id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "file_path": file_path,
+            "language": request.language,
+            "model_size": request.model_size,
+            "full_text": "",
+            "chunks": [],
+            "created_at": task.created_at.isoformat(),
+        }
+        json_storage.save_transcription(task_id, task_dict)
         
-        # บันทึก task
-        transcription_service._save_task(task)
-        
-        # ใช้ Redis Queue แทน async task (แก้ปัญหา timeout)
+        # ใช้ Fan-out/Fan-in Pattern: enqueue preprocessing job แล้ว return ทันที
+        # Preprocessing (extract + chunking) จะทำงานใน background
         try:
             from app.services.redis_queue_service import get_redis_queue_service
+            import os
             
             queue_service = get_redis_queue_service()
+            chunk_duration = request.chunk_duration or 90
             
-            # Enqueue job เข้า Redis Queue
-            job_id = queue_service.enqueue_transcription(
+            # Enqueue preprocessing job (จะทำ extract + chunking แล้ว enqueue chunk jobs)
+            preprocess_job_id = queue_service.enqueue_preprocess(
                 task_id=task_id,
                 file_path=file_path,
                 language=request.language,
                 model_size=request.model_size,
-                chunk_duration=request.chunk_duration or 90,  # default 90s
-                priority=False,  # TODO: เพิ่ม priority สำหรับ live streaming
-                worker_gpu=None  # None = round-robin
+                chunk_duration=chunk_duration
             )
             
-            logger.info(f"✅ Job {task_id} enqueued to Redis Queue (Job ID: {job_id})")
+            logger.info(f"✅ Preprocess job enqueued: {preprocess_job_id}")
             
             return {
                 "task_id": task_id,
                 "status": "queued",
-                "message": "Transcription job queued successfully",
+                "message": "Transcription job queued successfully (preprocessing in background)",
                 "file_path": file_path,
-                "queue": "redis"
+                "queue": "redis",
+                "chunks": 0  # ยังไม่รู้จำนวน chunks (จะรู้หลัง preprocessing เสร็จ)
             }
         except ImportError:
             # Fallback: ใช้ async task ถ้า Redis Queue ไม่พร้อม
             logger.warning("⚠️ Redis Queue not available, falling back to async task")
+            from app.services.transcription_service import TranscriptionService
             import asyncio
+            transcription_service = TranscriptionService()
             asyncio.create_task(
                 transcription_service._process_transcription(
                     task_id=task_id,
@@ -186,12 +199,15 @@ async def start_transcription(request: TranscriptionRequest):
                 "status": "queued",
                 "message": "Transcription started (async mode)",
                 "file_path": file_path,
-                "queue": "async"
+                "queue": "async",
+                "chunks": 0
             }
         except Exception as e:
             logger.error(f"❌ Error enqueueing job: {e}", exc_info=True)
             # Fallback: ใช้ async task
+            from app.services.transcription_service import TranscriptionService
             import asyncio
+            transcription_service = TranscriptionService()
             asyncio.create_task(
                 transcription_service._process_transcription(
                     task_id=task_id,
@@ -208,7 +224,9 @@ async def start_transcription(request: TranscriptionRequest):
                 "status": "queued",
                 "message": f"Transcription started (fallback mode: {str(e)})",
                 "file_path": file_path,
-                "queue": "async"
+                "queue": "async",
+                "chunks": 0,
+                "error": str(e)
             }
         
     except HTTPException:

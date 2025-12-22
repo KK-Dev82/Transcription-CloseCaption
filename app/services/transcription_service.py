@@ -225,7 +225,7 @@ class TranscriptionService:
             # แบ่งไฟล์เป็น chunks (ใช้ VideoService.create_chunks)
             chunk_start_time = time.time()
             logger.info(f"📦 Creating chunks from {audio_path}...")
-            chunks = video_service.create_chunks(audio_path, chunk_duration)
+            chunks = video_service.create_chunks(audio_path, chunk_duration, task_id=task_id)
             total_chunks = len(chunks)
             chunk_time = time.time() - chunk_start_time
             logger.info(f"✅ Created {total_chunks} chunks in {chunk_time:.2f}s")

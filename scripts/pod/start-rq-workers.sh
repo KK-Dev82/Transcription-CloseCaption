@@ -46,9 +46,12 @@ else
     exit 1
 fi
 
-# หยุด worker เดิม (ถ้ามี)
+# หยุด worker เดิม (ถ้ามี) - kill ครบทุก queue
 print_info "Stopping existing RQ workers..."
 pkill -f "rq worker.*transcription_gpu" 2>/dev/null || true
+pkill -f "rq worker.*transcription_priority" 2>/dev/null || true
+pkill -f "rq worker.*transcription_cpu" 2>/dev/null || true
+pkill -f "rq worker.*transcription_preprocess" 2>/dev/null || true
 sleep 2
 
 # ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN
@@ -66,59 +69,105 @@ else
     print_warning "⚠️  FFmpeg not found in PATH (may cause chunking to fail)"
 fi
 
-# ตรวจสอบจำนวน GPU
-NUM_GPUS=${NUM_GPUS:-4}
-print_info "Detected $NUM_GPUS GPUs"
+# ตรวจสอบจำนวน GPU (ตรวจจริง)
+if command -v nvidia-smi &> /dev/null; then
+    DETECTED_GPUS=$(nvidia-smi -L | wc -l)
+    NUM_GPUS=${NUM_GPUS:-$DETECTED_GPUS}
+    print_info "Detected $DETECTED_GPUS GPUs (using $NUM_GPUS)"
+else
+    NUM_GPUS=${NUM_GPUS:-4}
+    print_warning "nvidia-smi not found, using NUM_GPUS=$NUM_GPUS (default)"
+fi
+
+# Set PYTHONPATH เพื่อให้ import app.* ได้
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
 # เริ่ม RQ Workers สำหรับแต่ละ GPU
+# แต่ละ worker ฟัง priority queue ก่อน แล้วค่อย gpu queue ของตัวเอง
+# เพื่อให้ priority jobs ได้ GPU ทันทีโดยไม่แย่ง GPU0
 WORKER_PIDS=()
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "Starting RQ Worker GPU $i..."
+    print_info "Starting RQ Worker GPU $i (listening to priority + gpu$i)..."
     CUDA_VISIBLE_DEVICES=$i \
         LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
         REDIS_URL="$REDIS_URL" \
+        PYTHONPATH="$PYTHONPATH" \
+        VIDEO_WORKER_TYPE=pika \
         RQ_PRELOAD_MODEL=true \
         rq worker \
         --url "$REDIS_URL" \
+        transcription_priority \
         transcription_gpu$i \
-        transcription_default \
         --name worker-gpu$i \
         --pid /tmp/rq-worker-gpu$i.pid \
         > /tmp/rq-worker-gpu$i.log 2>&1 &
     
     WORKER_PID=$!
     WORKER_PIDS+=($WORKER_PID)
-    print_success "RQ Worker GPU $i started (PID: $WORKER_PID)"
+    print_success "RQ Worker GPU $i started (PID: $WORKER_PID) - listening to priority + gpu$i"
 done
 
-# เริ่ม Priority Worker (ใช้ GPU 0 สำหรับ priority tasks)
-print_info "Starting RQ Priority Worker..."
-CUDA_VISIBLE_DEVICES=0 \
-    LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+# เริ่ม Preprocess Workers (6 workers สำหรับ extract + chunking)
+# ใช้ CPU workers หลายตัวเพื่อรองรับ 25 concurrent requests
+NUM_PREPROCESS_WORKERS=${NUM_PREPROCESS_WORKERS:-6}
+print_info "Starting RQ Preprocess Workers (${NUM_PREPROCESS_WORKERS} workers for extract + chunking)..."
+PREPROCESS_PIDS=()
+for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
     REDIS_URL="$REDIS_URL" \
-    RQ_PRELOAD_MODEL=true \
-    rq worker \
-    --url "$REDIS_URL" \
-    transcription_priority \
-    --name worker-priority \
-    --pid /tmp/rq-worker-priority.pid \
-    > /tmp/rq-worker-priority.log 2>&1 &
+        PYTHONPATH="$PYTHONPATH" \
+        VIDEO_WORKER_TYPE=pika \
+        RQ_PRELOAD_MODEL=false \
+        rq worker \
+        --url "$REDIS_URL" \
+        transcription_preprocess \
+        --name worker-preprocess-$i \
+        --pid /tmp/rq-worker-preprocess-$i.pid \
+        > /tmp/rq-worker-preprocess-$i.log 2>&1 &
+    
+    PREPROCESS_PID=$!
+    PREPROCESS_PIDS+=($PREPROCESS_PID)
+    print_success "RQ Preprocess Worker $i started (PID: $PREPROCESS_PID)"
+done
 
-PRIORITY_PID=$!
-print_success "RQ Priority Worker started (PID: $PRIORITY_PID)"
+# เริ่ม CPU Workers สำหรับ aggregator jobs (2 workers)
+NUM_CPU_WORKERS=${NUM_CPU_WORKERS:-2}
+print_info "Starting RQ CPU Workers (${NUM_CPU_WORKERS} workers for aggregator jobs)..."
+CPU_PIDS=()
+for i in $(seq 0 $((NUM_CPU_WORKERS - 1))); do
+    REDIS_URL="$REDIS_URL" \
+        PYTHONPATH="$PYTHONPATH" \
+        VIDEO_WORKER_TYPE=pika \
+        RQ_PRELOAD_MODEL=false \
+        rq worker \
+        --url "$REDIS_URL" \
+        transcription_cpu \
+        --name worker-cpu-$i \
+        --pid /tmp/rq-worker-cpu-$i.pid \
+        > /tmp/rq-worker-cpu-$i.log 2>&1 &
+    
+    CPU_PID=$!
+    CPU_PIDS+=($CPU_PID)
+    print_success "RQ CPU Worker $i started (PID: $CPU_PID)"
+done
 
 print_success "✅ RQ Workers started successfully!"
 print_info "Workers:"
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "  - GPU $i: transcription_gpu$i, transcription_default"
+    print_info "  - GPU $i: transcription_priority + transcription_gpu$i (priority first)"
 done
-print_info "  - Priority: transcription_priority (GPU 0)"
+print_info "  - Preprocess: ${NUM_PREPROCESS_WORKERS} workers (transcription_preprocess)"
+print_info "  - CPU: ${NUM_CPU_WORKERS} workers (transcription_cpu for aggregator)"
 print_info ""
 print_info "Logs:"
 for i in $(seq 0 $((NUM_GPUS - 1))); do
     print_info "  - GPU $i: tail -f /tmp/rq-worker-gpu$i.log"
 done
-print_info "  - Priority: tail -f /tmp/rq-worker-priority.log"
+for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
+    print_info "  - Preprocess $i: tail -f /tmp/rq-worker-preprocess-$i.log"
+done
+for i in $(seq 0 $((NUM_CPU_WORKERS - 1))); do
+    print_info "  - CPU $i: tail -f /tmp/rq-worker-cpu-$i.log"
+done
 print_info ""
 print_info "Monitor queues:"
 print_info "  rq info --url $REDIS_URL"

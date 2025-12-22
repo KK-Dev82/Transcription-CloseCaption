@@ -39,15 +39,19 @@ if WORKER_TYPE == 'async':
         async_module = importlib.import_module('app.workers.async.video_worker')
         VideoWorker = async_module.VideoWorkerAsync
     except ImportError as e:
+        # แสดง error เฉพาะเมื่อต้องการใช้ async worker จริงๆ
         logger.error(f"❌ Failed to import async worker: {e}")
         logger.warning("⚠️ Falling back to pika worker")
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
         WORKER_TYPE = 'pika'
 else:
-    logger.info("🔧 Using Pika Worker (blocking)")
+    # ไม่แสดง log เมื่อ import module (เพื่อลด noise ใน RQ worker logs)
+    # จะแสดง log เฉพาะเมื่อเรียก main() function
+    # และไม่พยายาม import async worker เลยถ้าไม่ได้ใช้
     try:
         from app.workers.sync.video_worker import VideoWorkerPika as VideoWorker
     except ImportError as e:
+        # แสดง error เฉพาะเมื่อ import ล้มเหลวจริงๆ (ไม่ใช่แค่ไม่ได้ใช้ async)
         logger.error(f"❌ Failed to import pika worker: {e}")
         logger.error("💡 Make sure app/workers/sync/video_worker.py exists")
         sys.exit(1)
@@ -79,6 +83,7 @@ def main():
         except Exception as e:
             logger.error(f"เกิดข้อผิดพลาดใน async worker: {e}", exc_info=True)
     else:
+        logger.info("🔧 Using Pika Worker (blocking)")
         logger.info("🔄 Running pika worker...")
         worker = VideoWorker()
         try:
