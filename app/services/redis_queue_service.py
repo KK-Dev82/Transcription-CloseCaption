@@ -75,7 +75,7 @@ class RedisQueueService:
         file_path: str,
         language: str = "th",
         model_size: str = "base",
-        chunk_duration: int = 90,
+        chunk_duration: int = 150,
         priority: bool = False,
         worker_gpu: Optional[str] = None
     ) -> str:

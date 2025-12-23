@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Import faster-whisper
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
@@ -121,21 +121,39 @@ class FasterWhisperProvider(WhisperProvider):
             vad_filter = os.getenv('WHISPER_VAD_FILTER', 'true').lower() == 'true'  # เปิด VAD เพื่อตัดช่วงเงียบ (เร็วขึ้น)
             beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))  # greedy (เร็วสุด)
             best_of = int(os.getenv('WHISPER_BEST_OF', '1'))
-            # Note: batch_size ไม่ใช่ parameter ของ WhisperModel.transcribe() 
-            # ต้องใช้ BatchedInferencePipeline สำหรับ batch processing
             word_timestamps = os.getenv('WHISPER_WORD_TIMESTAMPS', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
             condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
             
-            segments, info = model.transcribe(
-                audio_path,
-                language=language if language != "auto" else None,
-                vad_filter=vad_filter,
-                initial_prompt=initial_prompt,
-                beam_size=beam_size,
-                best_of=best_of,
-                word_timestamps=word_timestamps,
-                condition_on_previous_text=condition_on_previous_text
-            )
+            # ใช้ BatchedInferencePipeline ถ้าเปิดใช้งาน
+            use_batched = os.getenv('WHISPER_USE_BATCHED', 'false').lower() == 'true'
+            batch_size = int(os.getenv('WHISPER_BATCH_SIZE', '16'))
+            
+            if use_batched:
+                logger.info(f"[Faster Whisper] 🚀 Using BatchedInferencePipeline (batch_size={batch_size})")
+                batched_model = BatchedInferencePipeline(model=model)
+                segments, info = batched_model.transcribe(
+                    audio_path,
+                    language=language if language != "auto" else None,
+                    vad_filter=vad_filter,
+                    initial_prompt=initial_prompt,
+                    beam_size=beam_size,
+                    best_of=best_of,
+                    word_timestamps=word_timestamps,
+                    condition_on_previous_text=condition_on_previous_text,
+                    batch_size=batch_size
+                )
+            else:
+                logger.info(f"[Faster Whisper] Using standard WhisperModel.transcribe()")
+                segments, info = model.transcribe(
+                    audio_path,
+                    language=language if language != "auto" else None,
+                    vad_filter=vad_filter,
+                    initial_prompt=initial_prompt,
+                    beam_size=beam_size,
+                    best_of=best_of,
+                    word_timestamps=word_timestamps,
+                    condition_on_previous_text=condition_on_previous_text
+                )
             
             # Convert segments to list (this is where it might crash if cuDNN is wrong)
             logger.info(f"[Faster Whisper] 🔍 Segments is generator, converting to list...")

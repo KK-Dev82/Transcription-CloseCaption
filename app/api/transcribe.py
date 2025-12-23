@@ -156,7 +156,7 @@ async def start_transcription(request: TranscriptionRequest):
             import os
             
             queue_service = get_redis_queue_service()
-            chunk_duration = request.chunk_duration or 90
+            chunk_duration = request.chunk_duration or 150
             
             # Enqueue preprocessing job (จะทำ extract + chunking แล้ว enqueue chunk jobs)
             preprocess_job_id = queue_service.enqueue_preprocess(
@@ -189,7 +189,7 @@ async def start_transcription(request: TranscriptionRequest):
                     file_path=file_path,
                     language=request.language,
                     model_size=request.model_size,
-                    chunk_duration=request.chunk_duration or 90,
+                    chunk_duration=request.chunk_duration or 150,
                     use_chunking=request.use_chunking
                 )
             )
@@ -214,7 +214,7 @@ async def start_transcription(request: TranscriptionRequest):
                     file_path=file_path,
                     language=request.language,
                     model_size=request.model_size,
-                    chunk_duration=request.chunk_duration or 90,
+                    chunk_duration=request.chunk_duration or 150,
                     use_chunking=request.use_chunking
                 )
             )

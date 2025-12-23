@@ -32,6 +32,17 @@ print_success() {
     echo -e "${GREEN}✅ $1${NC}"
 }
 
+# โหลด environment variables จาก .env.runpod ก่อน
+print_info "Loading environment variables from .env.runpod..."
+if [ -f "$PROJECT_ROOT/.env.runpod" ]; then
+    set -a
+    source "$PROJECT_ROOT/.env.runpod"
+    set +a
+    print_success "✅ Environment variables loaded from .env.runpod"
+else
+    print_warning "⚠️  .env.runpod not found, using environment variables from shell"
+fi
+
 # ตรวจสอบ Redis connection
 print_info "Checking Redis connection..."
 if [ -z "${REDIS_URL:-}" ]; then
@@ -54,11 +65,42 @@ pkill -f "rq worker.*transcription_cpu" 2>/dev/null || true
 pkill -f "rq worker.*transcription_preprocess" 2>/dev/null || true
 sleep 2
 
-# ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN
+# ตั้งค่า LD_LIBRARY_PATH สำหรับ CUDA, cuDNN และ CTranslate2
+# ⚠️ สำคัญ: ต้องมี cuDNN libraries ก่อน CUDA เพื่อให้ CTranslate2 พบ cuDNN ได้
+# Order: cuDNN → CUDA → CTranslate2
 CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+CUDA_LIB_PATH="/usr/local/cuda-12.1/lib64"
+CTRANSLATE2_LIB_PATH="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+
+# สร้าง LD_LIBRARY_PATH ใหม่ (cuDNN ก่อน, แล้ว CUDA, แล้ว CTranslate2)
+NEW_LD_LIBRARY_PATH=""
 if [ -d "$CUDNN_LIB_PATH" ]; then
-    export LD_LIBRARY_PATH="$CUDNN_LIB_PATH:${LD_LIBRARY_PATH:-}"
-    print_success "✅ Set LD_LIBRARY_PATH for cuDNN libraries"
+    NEW_LD_LIBRARY_PATH="$CUDNN_LIB_PATH"
+    print_success "✅ Added cuDNN libraries to LD_LIBRARY_PATH"
+fi
+if [ -d "$CUDA_LIB_PATH" ]; then
+    if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
+        NEW_LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:$CUDA_LIB_PATH"
+    else
+        NEW_LD_LIBRARY_PATH="$CUDA_LIB_PATH"
+    fi
+    print_success "✅ Added CUDA libraries to LD_LIBRARY_PATH"
+fi
+if [ -d "$CTRANSLATE2_LIB_PATH" ]; then
+    if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
+        NEW_LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:$CTRANSLATE2_LIB_PATH"
+    else
+        NEW_LD_LIBRARY_PATH="$CTRANSLATE2_LIB_PATH"
+    fi
+    print_success "✅ Added CTranslate2 libraries to LD_LIBRARY_PATH"
+fi
+
+# รวมกับ LD_LIBRARY_PATH เดิม (ถ้ามี)
+if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
+    export LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+    print_info "Final LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+else
+    print_warning "⚠️  No CUDA/cuDNN libraries found in standard paths"
 fi
 
 # ตั้งค่า PATH สำหรับ FFmpeg
@@ -88,10 +130,21 @@ export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 WORKER_PIDS=()
 for i in $(seq 0 $((NUM_GPUS - 1))); do
     print_info "Starting RQ Worker GPU $i (listening to priority + gpu$i)..."
+    # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
+    # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
+    # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
+    # - WHISPER_DEVICE: ต้องเป็น 'cuda'
+    # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
     CUDA_VISIBLE_DEVICES=$i \
         LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
         REDIS_URL="$REDIS_URL" \
         PYTHONPATH="$PYTHONPATH" \
+        WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
+        WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
+        WHISPER_MODEL="${WHISPER_MODEL:-base}" \
+        WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
+        WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
+        CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
         VIDEO_WORKER_TYPE=pika \
         RQ_PRELOAD_MODEL=true \
         rq worker \

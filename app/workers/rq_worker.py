@@ -69,7 +69,7 @@ def process_transcription_job(
     file_path: str,
     language: str,
     model_size: str,
-    chunk_duration: int = 90
+    chunk_duration: int = 150
 ) -> Dict:
     """
     RQ Worker function - ใช้ persistent TranscriptionService
@@ -194,7 +194,7 @@ def process_transcription_job(
                 if chunk_data_str:
                     chunk_metadata = json.loads(chunk_data_str)
                     total_chunks = chunk_metadata.get("total_chunks", 0)
-                    chunk_duration = chunk_metadata.get("chunk_duration", 90)
+                    chunk_duration = chunk_metadata.get("chunk_duration", 150)
                 else:
                     raise ValueError(f"Chunk data not found for {main_task_id}")
             else:
@@ -204,9 +204,9 @@ def process_transcription_job(
                 chunk_data_str = conn.get(chunk_data_key)
                 if chunk_data_str:
                     chunk_metadata = json.loads(chunk_data_str)
-                    chunk_duration = chunk_metadata.get("chunk_duration", 90)
+                    chunk_duration = chunk_metadata.get("chunk_duration", 150)
                 else:
-                    chunk_duration = 90
+                    chunk_duration = 150
             
             logger.info(f"📊 Waiting for {total_chunks} chunks to complete (using atomic counter)...")
             
@@ -388,7 +388,7 @@ def process_preprocess_job(
     file_path: str,
     language: str,
     model_size: str,
-    chunk_duration: int = 90
+    chunk_duration: int = 150
 ) -> Dict:
     """
     RQ Worker function สำหรับ preprocessing (extract audio + chunking)
@@ -451,7 +451,24 @@ def process_preprocess_job(
         
         # 3. Enqueue chunk jobs ไปยัง GPU queues (Fan-out)
         logger.info(f"📝 Enqueueing {total_chunks} chunks to GPU queues...")
-        num_gpus = int(os.getenv('NUM_GPUS', '4'))
+        # Auto-detect number of GPUs from nvidia-smi
+        num_gpus = int(os.getenv('NUM_GPUS', '0'))
+        if num_gpus == 0:
+            # Auto-detect from nvidia-smi
+            import subprocess
+            try:
+                result = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    num_gpus = len(result.stdout.strip().split('\n'))
+                    logger.info(f"🔍 Auto-detected {num_gpus} GPUs from nvidia-smi")
+                else:
+                    num_gpus = 2  # Fallback
+                    logger.warning(f"⚠️  nvidia-smi failed, using default {num_gpus} GPUs")
+            except Exception as e:
+                num_gpus = 2  # Fallback
+                logger.warning(f"⚠️  Failed to detect GPUs: {e}, using default {num_gpus} GPUs")
+        else:
+            logger.info(f"📊 Using {num_gpus} GPUs from NUM_GPUS environment variable")
         chunk_data = []
         
         for i, chunk_path in enumerate(chunks):
