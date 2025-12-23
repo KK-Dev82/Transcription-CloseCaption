@@ -1,166 +1,216 @@
 """
-Monitoring API สำหรับตรวจสอบสถานะ Whisper Providers
+Monitoring API Endpoint
+สำหรับตรวจสอบ Redis memory, key count, queue depth, GPU/CPU utilization
 """
-
-import os
-import logging
 from fastapi import APIRouter, HTTPException
-from datetime import datetime
-from typing import Dict, Any
+from pydantic import BaseModel
+from typing import Dict, List, Optional
+import logging
+import os
+from pathlib import Path
+from redis import Redis
+from rq import Queue
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
 
-from ..services.whisper_providers import WhisperProviderFactory, ProviderType
+# Load .env.runpod if exists
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent.parent / ".env.runpod"
+    if env_file.exists():
+        load_dotenv(env_file)
+except ImportError:
+    pass
+except Exception:
+    pass
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
+router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 
 
-@router.get("/providers/status")
-async def get_providers_status() -> Dict[str, Any]:
-    """
-    📊 ตรวจสอบสถานะของทุก Whisper providers
-    
-    Returns:
-        Dict: สถานะของแต่ละ provider
-    """
+class RedisStats(BaseModel):
+    """Redis statistics"""
+    memory_mb: float
+    memory_human: str
+    keys_count: int
+    keys_without_ttl: int
+    keys_with_ttl: int
+    max_memory_mb: Optional[float] = None
+    memory_usage_percent: Optional[float] = None
+
+
+class QueueStats(BaseModel):
+    """Queue statistics"""
+    queue_name: str
+    queued: int
+    started: int
+    finished: int
+    failed: int
+
+
+class SystemStats(BaseModel):
+    """System statistics"""
+    cpu_percent: Optional[float] = None
+    memory_percent: Optional[float] = None
+    memory_used_gb: Optional[float] = None
+    memory_total_gb: Optional[float] = None
+    gpu_utilization: Optional[List[Dict]] = None
+
+
+class MonitoringResponse(BaseModel):
+    """Monitoring response"""
+    redis: RedisStats
+    queues: List[QueueStats]
+    system: SystemStats
+
+
+def get_redis_connection():
+    """Get Redis connection"""
+    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+    return Redis.from_url(redis_url, decode_responses=False)
+
+
+@router.get("/redis", response_model=RedisStats)
+async def get_redis_stats():
+    """Get Redis statistics"""
     try:
-        active_provider = os.getenv('WHISPER_PROVIDER', 'builtin')
-        status = WhisperProviderFactory.get_all_providers_status()
+        conn = get_redis_connection()
+        info = conn.info('memory')
         
-        return {
-            "active_provider": active_provider,
-            "fallback_enabled": os.getenv('WHISPER_FALLBACK_ENABLED', 'true').lower() == 'true',
-            "providers": status,
-            "timestamp": datetime.now().isoformat()
-        }
+        used_memory = info.get('used_memory', 0)
+        used_memory_mb = used_memory / (1024**2)
+        used_memory_human = info.get('used_memory_human', f"{used_memory_mb:.2f}M")
+        max_memory = info.get('maxmemory', 0)
+        max_memory_mb = max_memory / (1024**2) if max_memory > 0 else None
+        memory_usage_percent = (used_memory_mb / max_memory_mb * 100) if max_memory_mb else None
         
+        db_size = conn.dbsize()
+        
+        # ตรวจสอบ keys ที่ไม่มี TTL
+        all_keys = list(conn.scan_iter(count=2000))
+        keys_without_ttl = sum(1 for k in all_keys if conn.ttl(k) == -1)
+        keys_with_ttl = len(all_keys) - keys_without_ttl
+        
+        return RedisStats(
+            memory_mb=used_memory_mb,
+            memory_human=used_memory_human,
+            keys_count=db_size,
+            keys_without_ttl=keys_without_ttl,
+            keys_with_ttl=keys_with_ttl,
+            max_memory_mb=max_memory_mb,
+            memory_usage_percent=memory_usage_percent
+        )
     except Exception as e:
-        logger.error(f"Error getting providers status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting Redis stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting Redis stats: {str(e)}")
 
 
-@router.get("/providers/active")
-async def get_active_provider() -> Dict[str, Any]:
-    """
-    🎯 ดูข้อมูล provider ที่ใช้งานอยู่
-    
-    Returns:
-        Dict: ข้อมูลของ active provider
-    """
+@router.get("/queues", response_model=List[QueueStats])
+async def get_queue_stats():
+    """Get queue statistics"""
     try:
-        provider = WhisperProviderFactory.get_with_fallback()
+        conn = get_redis_connection()
+        num_gpus = int(os.getenv('NUM_GPUS', '2'))
+        queues_to_check = ['transcription_priority', 'transcription_preprocess', 'transcription_cpu']
+        for i in range(num_gpus):
+            queues_to_check.append(f'transcription_gpu{i}')
         
-        return {
-            "provider": provider.provider_name,
-            "healthy": provider.health_check(),
-            "info": provider.get_provider_info(),
-            "timestamp": datetime.now().isoformat()
-        }
+        queue_stats = []
+        for queue_name in queues_to_check:
+            try:
+                queue = Queue(queue_name, connection=conn)
+                queued_count = len(queue)
+                
+                started_registry = StartedJobRegistry(queue_name, connection=conn)
+                finished_registry = FinishedJobRegistry(queue_name, connection=conn)
+                failed_registry = FailedJobRegistry(queue_name, connection=conn)
+                
+                started_count = len(started_registry)
+                finished_count = len(finished_registry)
+                failed_count = len(failed_registry)
+                
+                queue_stats.append(QueueStats(
+                    queue_name=queue_name,
+                    queued=queued_count,
+                    started=started_count,
+                    finished=finished_count,
+                    failed=failed_count
+                ))
+            except Exception as e:
+                logger.warning(f"Error getting stats for queue {queue_name}: {e}")
         
+        return queue_stats
     except Exception as e:
-        logger.error(f"Error getting active provider: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting queue stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting queue stats: {str(e)}")
 
 
-@router.get("/providers/{provider_name}")
-async def get_provider_info(provider_name: str) -> Dict[str, Any]:
-    """
-    📋 ดูข้อมูลของ provider เฉพาะ
-    
-    Args:
-        provider_name: ชื่อ provider (builtin, groq)
-        
-    Returns:
-        Dict: ข้อมูลของ provider
-    """
+@router.get("/system", response_model=SystemStats)
+async def get_system_stats():
+    """Get system statistics (CPU, RAM, GPU)"""
     try:
-        # Validate provider name
-        valid_providers = [pt.value for pt in ProviderType]
-        if provider_name.lower() not in valid_providers:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid provider: {provider_name}. Valid: {valid_providers}"
+        import psutil
+        
+        # CPU
+        cpu_percent = psutil.cpu_percent(interval=1)
+        
+        # Memory
+        mem = psutil.virtual_memory()
+        memory_percent = mem.percent
+        memory_used_gb = mem.used / (1024**3)
+        memory_total_gb = mem.total / (1024**3)
+        
+        # GPU
+        gpu_utilization = None
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=index,name,utilization.gpu,memory.used,memory.total', 
+                 '--format=csv,noheader,nounits'],
+                capture_output=True,
+                text=True,
+                timeout=5
             )
+            if result.returncode == 0:
+                gpu_utilization = []
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        parts = [p.strip() for p in line.split(', ')]
+                        if len(parts) >= 5:
+                            gpu_utilization.append({
+                                'index': int(parts[0]),
+                                'name': parts[1],
+                                'utilization_gpu_percent': float(parts[2]),
+                                'memory_used_mb': float(parts[3]),
+                                'memory_total_mb': float(parts[4])
+                            })
+        except Exception as e:
+            logger.debug(f"Error getting GPU stats: {e}")
         
-        provider = WhisperProviderFactory.get_provider(provider_name.lower())
-        is_healthy = provider.health_check()
-        
-        return {
-            "provider": provider.provider_name,
-            "healthy": is_healthy,
-            "info": provider.get_provider_info(),
-            "is_active": os.getenv('WHISPER_PROVIDER', 'builtin').lower() == provider_name.lower(),
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except HTTPException:
-        raise
+        return SystemStats(
+            cpu_percent=cpu_percent,
+            memory_percent=memory_percent,
+            memory_used_gb=memory_used_gb,
+            memory_total_gb=memory_total_gb,
+            gpu_utilization=gpu_utilization
+        )
     except Exception as e:
-        logger.error(f"Error getting provider info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting system stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting system stats: {str(e)}")
 
 
-@router.post("/providers/switch/{provider_name}")
-async def switch_provider(provider_name: str) -> Dict[str, Any]:
-    """
-    🔄 สลับไปใช้ provider อื่น (runtime only, ไม่ persistent)
-    
-    Args:
-        provider_name: ชื่อ provider ที่ต้องการสลับไป
-        
-    Returns:
-        Dict: ผลลัพธ์การสลับ
-        
-    Note:
-        การสลับนี้ใช้ได้ชั่วคราว จะถูก reset เมื่อ restart service
-        ควรใช้ environment variable WHISPER_PROVIDER สำหรับ permanent change
-    """
+@router.get("/", response_model=MonitoringResponse)
+async def get_monitoring_stats():
+    """Get all monitoring statistics"""
     try:
-        # Validate provider name
-        valid_providers = [pt.value for pt in ProviderType]
-        if provider_name.lower() not in valid_providers:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Invalid provider: {provider_name}. Valid: {valid_providers}"
-            )
+        redis_stats = await get_redis_stats()
+        queue_stats = await get_queue_stats()
+        system_stats = await get_system_stats()
         
-        # Try to switch
-        new_provider = WhisperProviderFactory.switch_provider(provider_name.lower())
-        
-        return {
-            "success": True,
-            "previous_provider": os.getenv('WHISPER_PROVIDER', 'builtin'),
-            "new_provider": new_provider.provider_name,
-            "healthy": new_provider.health_check(),
-            "warning": "This change is temporary and will reset on service restart. "
-                      "Set WHISPER_PROVIDER environment variable for permanent change.",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except HTTPException:
-        raise
+        return MonitoringResponse(
+            redis=redis_stats,
+            queues=queue_stats,
+            system=system_stats
+        )
     except Exception as e:
-        logger.error(f"Error switching provider: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/config")
-async def get_config() -> Dict[str, Any]:
-    """
-    ⚙️ ดู configuration ปัจจุบัน
-    
-    Returns:
-        Dict: Configuration values (ไม่รวม secrets)
-    """
-    return {
-        "whisper_provider": os.getenv('WHISPER_PROVIDER', 'builtin'),
-        "whisper_model": os.getenv('WHISPER_MODEL', 'base'),
-        "whisper_api_url": os.getenv('WHISPER_API_URL', 'http://whisper:8002'),
-        "whisper_timeout": int(os.getenv('WHISPER_TIMEOUT', '600')),
-        "groq_model": os.getenv('GROQ_MODEL', 'whisper-large-v3-turbo'),
-        "groq_timeout": int(os.getenv('GROQ_TIMEOUT', '300')),
-        "groq_api_key_configured": bool(os.getenv('GROQ_API_KEY')),
-        "fallback_enabled": os.getenv('WHISPER_FALLBACK_ENABLED', 'true').lower() == 'true',
-        "timestamp": datetime.now().isoformat()
-    }
-
-
+        logger.error(f"Error getting monitoring stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting monitoring stats: {str(e)}")

@@ -146,6 +146,27 @@ class SQLiteStorage:
             )
         """)
         
+        # Segments table - สำหรับเก็บ segments แบบ streaming (ลด RAM usage)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                text TEXT NOT NULL,
+                confidence REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES transcriptions(task_id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Index สำหรับ query segments ตาม task_id และ start_time (สำหรับ caption seek)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_segments_task_id_start 
+            ON segments(task_id, start_time)
+        """)
+        
         # Migrate existing table schema (add new columns if they don't exist)
         # ต้องทำก่อนสร้าง indexes เพื่อไม่ให้เกิด error
         try:
@@ -329,7 +350,77 @@ class SQLiteStorage:
         
         conn.commit()
         logger.info(f"บันทึก transcription: {task_id}")
+        
+        # ส่ง WebSocket notification สำหรับ realtime updates (ถ้ามี)
+        # ใช้ threading เพื่อไม่ให้ block การบันทึก
+        try:
+            # ตรวจสอบว่าเป็น task ใหม่หรืออัปเดต
+            is_new_task = existing_data is None or not existing_data
+            
+            # สร้าง task_data สำหรับ WebSocket notification
+            task_data = {
+                "task_id": task_id,
+                "status": transcription_data.get("status", "pending"),
+                "progress": transcription_data.get("progress", 0),
+                "file_name": transcription_data.get("file_name"),
+                "file_path": transcription_data.get("file_path"),
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "completed_at": completed_at,
+                "language": transcription_data.get("language"),
+                "total_duration": transcription_data.get("total_duration"),
+                "current_stage": transcription_data.get("current_stage"),
+                "current_stage_description": transcription_data.get("current_stage_description"),
+            }
+            
+            # ส่ง notification แบบ async ใน background thread
+            import threading
+            thread = threading.Thread(
+                target=self._notify_websocket_sync,
+                args=(task_id, task_data, is_new_task),
+                daemon=True
+            )
+            thread.start()
+        except Exception as e:
+            # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว
+            logger.debug(f"Failed to send WebSocket notification for {task_id}: {e}")
+        
         return task_id
+    
+    def _notify_websocket_sync(self, task_id: str, task_data: dict, is_new_task: bool):
+        """Helper method สำหรับส่ง WebSocket notification (sync wrapper)"""
+        try:
+            import asyncio
+            
+            # สร้าง event loop ใหม่สำหรับ thread นี้
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # รัน async function
+            loop.run_until_complete(self._notify_websocket(task_id, task_data, is_new_task))
+        except Exception as e:
+            logger.debug(f"WebSocket notification error: {e}")
+    
+    async def _notify_websocket(self, task_id: str, task_data: dict, is_new_task: bool):
+        """Helper method สำหรับส่ง WebSocket notification (async)"""
+        try:
+            from ..services.websocket_service import websocket_manager
+            
+            if is_new_task:
+                event_type = "task.created"
+            elif task_data.get("status") == "completed":
+                event_type = "task.completed"
+            elif task_data.get("status") == "failed":
+                event_type = "task.failed"
+            else:
+                event_type = "task.updated"
+            
+            await websocket_manager.notify_task_list_update(task_id, task_data, event_type)
+        except Exception as e:
+            logger.debug(f"WebSocket notification error: {e}")
     
     def load_transcription(self, task_id: str, skip_migration: bool = False) -> Optional[Dict]:
         """

@@ -126,6 +126,8 @@ class FasterWhisperProvider(WhisperProvider):
             
             # ใช้ BatchedInferencePipeline ถ้าเปิดใช้งาน
             use_batched = os.getenv('WHISPER_USE_BATCHED', 'false').lower() == 'true'
+            # FIX: ลด batch_size default จาก 16 → 16 (ไม่เปลี่ยน) แต่แนะนำให้ set เป็น 16 ใน env
+            # เพื่อลด peak RAM โดยเฉพาะเมื่อมีหลาย jobs พร้อมกัน
             batch_size = int(os.getenv('WHISPER_BATCH_SIZE', '16'))
             
             if use_batched:
@@ -197,8 +199,11 @@ class FasterWhisperProvider(WhisperProvider):
             return self._model_cache[cache_key]
         
         # Load model
+        # FIX: เพิ่ม log เพื่อตรวจสอบ device จริง
         logger.info(f"[Faster Whisper] 🔄 Loading model: {model_size} (device: {current_device}, compute_type: {self.compute_type})")
         logger.info(f"[Faster Whisper]    Cache key: {cache_key}")
+        logger.info(f"[Faster Whisper]    ENV WHISPER_DEVICE={os.getenv('WHISPER_DEVICE', 'not set')}")
+        logger.info(f"[Faster Whisper]    ENV CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES', 'not set')}")
         
         try:
             model = WhisperModel(
@@ -207,7 +212,17 @@ class FasterWhisperProvider(WhisperProvider):
                 compute_type=self.compute_type
             )
             self._model_cache[cache_key] = model
-            logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
+            
+            # FIX: ตรวจสอบ device จริงที่ model ใช้
+            # faster-whisper (CTranslate2) model มี device attribute
+            if hasattr(model, 'model') and hasattr(model.model, 'device'):
+                actual_device = model.model.device
+                logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
+                logger.info(f"[Faster Whisper]    ACTUAL model.device={actual_device} (ตรวจสอบว่าใช้ GPU จริงหรือไม่)")
+            else:
+                logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
+                logger.warning(f"[Faster Whisper]    ⚠️  Cannot detect actual device from model (may fallback to CPU)")
+            
             return model
         except Exception as e:
             logger.error(f"[Faster Whisper] ❌ Error loading model: {e}", exc_info=True)

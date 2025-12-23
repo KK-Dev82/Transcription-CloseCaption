@@ -29,11 +29,71 @@ Path("static").mkdir(exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
+# Lifespan context manager (defined before app creation)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown"""
+    # Startup
+    logger.info("🚀 Starting application startup...")
+    
+    # Initialize WebSocket service in background (don't wait)
+    async def init_websocket():
+        try:
+            from app.services.websocket_service import initialize_websocket_service
+            import asyncio
+            await asyncio.wait_for(initialize_websocket_service(), timeout=1.0)
+            logger.info("✅ WebSocket service initialized")
+        except Exception as e:
+            logger.warning(f"⚠️  WebSocket service initialization failed: {e} (continuing anyway)")
+    
+    # Start WebSocket init in background (don't wait)
+    import asyncio
+    asyncio.create_task(init_websocket())
+    
+    # Start periodic cleanup (must be in async context with running event loop)
+    try:
+        from app.services.cleanup_service import cleanup_service
+        
+        # Start periodic cleanup task (requires running event loop)
+        # Create task directly since we're in async startup context
+        async def start_cleanup_task():
+            try:
+                cleanup_service.start_periodic_cleanup()
+                logger.info("✅ Periodic cleanup started")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+        
+        # Start in background
+        asyncio.create_task(start_cleanup_task())
+        
+        # Skip startup cleanup completely (may hang) - will be done by periodic cleanup instead
+        logger.info("ℹ️  Skipping startup cleanup (will be done by periodic cleanup)")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+    
+    logger.info("✅ Application startup complete")
+    
+    # Yield control to uvicorn
+    yield
+    
+    # Shutdown
+    logger.info("🛑 Starting application shutdown...")
+    try:
+        from app.services.cleanup_service import cleanup_service
+        cleanup_service.stop_periodic_cleanup()
+        logger.info("🛑 Periodic cleanup stopped")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to stop periodic cleanup: {e}")
+    logger.info("✅ Application shutdown complete")
+
+# Create FastAPI app with lifespan
 app = FastAPI(
     title="Transcription Service API",
     description="API for video/audio transcription and close captioning",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -94,6 +154,14 @@ try:
 except ImportError as e:
     logger.warning(f"Tasks router not available: {e}")
 
+# Include monitoring router
+try:
+    from app.api import monitoring
+    app.include_router(monitoring.router, prefix="/api", tags=["monitoring"])
+    logger.info("✅ Monitoring router included")
+except ImportError as e:
+    logger.warning(f"Monitoring router not available: {e}")
+
 # Include other routers
 try:
     from app.api import webhook, progress, history
@@ -109,6 +177,14 @@ try:
     app.include_router(queue.router, prefix="/api", tags=["queue"])
 except ImportError as e:
     logger.warning(f"Queue router not available: {e}")
+
+# Include logs router
+try:
+    from app.api import logs
+    app.include_router(logs.router, tags=["logs"])
+    logger.info("✅ Logs router included")
+except ImportError as e:
+    logger.warning(f"Logs router not available: {e}")
 
 # RTMP streaming router moved to dashboard
 # No longer included in main API
@@ -134,4 +210,5 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs"
     }
+
 

@@ -31,13 +31,34 @@ class RedisQueueService:
     """Redis Queue Service สำหรับจัดการ transcription jobs"""
     
     def __init__(self):
-        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+        # FIX: บังคับให้ต้องมี REDIS_URL ไม่งั้น error (ป้องกัน enqueue ไป localhost)
+        redis_url = os.getenv('REDIS_URL')
+        if not redis_url:
+            error_msg = "REDIS_URL is not set. Cannot connect to Redis. Please set REDIS_URL environment variable."
+            logger.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+        
+        # Log REDIS_URL เพื่อ debug (แต่ซ่อน password)
+        redis_url_log = redis_url
+        if '@' in redis_url:
+            # Mask password in log
+            parts = redis_url.split('@')
+            if len(parts) == 2:
+                auth_part = parts[0]
+                if ':' in auth_part:
+                    user_pass = auth_part.split('://', 1)[1] if '://' in auth_part else auth_part
+                    if ':' in user_pass:
+                        user, _ = user_pass.split(':', 1)
+                        redis_url_log = redis_url.replace(f':{user_pass.split(":")[1]}', ':****')
+        
+        logger.info(f"🔍 RedisQueueService.__init__() - REDIS_URL={redis_url_log}")
+        
         try:
             self.redis_conn = Redis.from_url(redis_url, decode_responses=False)  # RQ ต้องการ bytes
             self.redis_conn.ping()
-            logger.info(f"✅ Connected to Redis: {redis_url}")
+            logger.info(f"✅ Connected to Redis: {redis_url_log}")
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Redis: {e}")
+            logger.error(f"❌ Failed to connect to Redis ({redis_url_log}): {e}")
             raise
         
         # สร้าง queues สำหรับแต่ละ GPU worker
@@ -46,26 +67,47 @@ class RedisQueueService:
         num_gpus = int(os.getenv('NUM_GPUS', '4'))
         self.queues = {}
         
+        # ตั้งค่า default_result_ttl (12 hours = 43200 seconds)
+        # สำหรับ use-case 50 งาน/วัน ไม่ต้องเก็บนาน 24h
+        # เพื่อให้ job results ถูก cleanup อัตโนมัติหลังจาก 12 ชั่วโมง
+        default_result_ttl = int(os.getenv('RQ_DEFAULT_RESULT_TTL', '43200'))  # 12 hours
+        
         # สร้าง queue สำหรับแต่ละ GPU (ไม่ใช้ default queue)
         for i in range(num_gpus):
             gpu_key = f'gpu{i}'
             queue_name = f'transcription_gpu{i}'
-            self.queues[gpu_key] = Queue(queue_name, connection=self.redis_conn)
+            self.queues[gpu_key] = Queue(
+                queue_name, 
+                connection=self.redis_conn,
+                default_result_ttl=default_result_ttl
+            )
         
         # Round-robin counter สำหรับ load balancing
         self._rr_counter = 0
         self._num_gpus = num_gpus
         
-        logger.info(f"✅ Created {num_gpus} GPU queues: {list(self.queues.keys())}")
+        logger.info(f"✅ Created {num_gpus} GPU queues: {list(self.queues.keys())} (default_result_ttl={default_result_ttl}s)")
         
         # Queue สำหรับ priority tasks (เช่น live streaming)
-        self.priority_queue = Queue('transcription_priority', connection=self.redis_conn)
+        self.priority_queue = Queue(
+            'transcription_priority', 
+            connection=self.redis_conn,
+            default_result_ttl=default_result_ttl
+        )
         
         # CPU queue สำหรับ aggregator และ CPU-intensive tasks
-        self.cpu_queue = Queue('transcription_cpu', connection=self.redis_conn)
+        self.cpu_queue = Queue(
+            'transcription_cpu', 
+            connection=self.redis_conn,
+            default_result_ttl=default_result_ttl
+        )
         
         # Preprocess queue แยก (สำหรับ extract + chunking)
-        self.preprocess_queue = Queue('transcription_preprocess', connection=self.redis_conn)
+        self.preprocess_queue = Queue(
+            'transcription_preprocess', 
+            connection=self.redis_conn,
+            default_result_ttl=default_result_ttl
+        )
         
         logger.info("✅ Redis Queue Service initialized (GPU queues + CPU queue + Preprocess queue)")
     
@@ -152,7 +194,7 @@ class RedisQueueService:
             chunk_duration,
             job_id=task_id,  # ใช้ task_id เป็น job_id เพื่อให้ track ได้ง่าย
             job_timeout=3600,  # 1 hour timeout
-            result_ttl=86400,  # Keep result for 24 hours
+            result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
         
         logger.info(f"✅ Job {task_id} enqueued to {queue.name} (Job ID: {job.id})")
@@ -189,7 +231,7 @@ class RedisQueueService:
             chunk_duration,
             job_id=f"{task_id}_preprocess",
             job_timeout=1800,  # 30 minutes timeout
-            result_ttl=86400,
+            result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
         logger.info(f"✅ Preprocess job {task_id} enqueued to Preprocess queue (Job ID: {job.id})")
         return job.id
@@ -223,7 +265,7 @@ class RedisQueueService:
             chunk_duration,
             job_id=task_id,
             job_timeout=3600,
-            result_ttl=86400,
+            result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
         logger.info(f"✅ Aggregator job {task_id} enqueued to CPU queue (Job ID: {job.id})")
         return job.id
@@ -284,6 +326,132 @@ class RedisQueueService:
         except Exception as e:
             logger.error(f"❌ Error cancelling job: {e}")
             return False
+    
+    def cleanup_finished_jobs(self, max_age_hours: int = 24) -> Dict:
+        """
+        Cleanup finished jobs ที่เก่ากว่า max_age_hours
+        
+        Args:
+            max_age_hours: อายุสูงสุดของ finished jobs (default: 24 hours)
+        
+        Returns:
+            Dict with cleanup statistics
+        """
+        from datetime import datetime, timedelta
+        from rq.registry import FinishedJobRegistry
+        
+        stats = {
+            'cleaned': 0,
+            'errors': 0,
+            'queues': {}
+        }
+        
+        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        
+        # Cleanup all queues
+        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue]
+        
+        for queue in all_queues:
+            queue_name = queue.name
+            try:
+                finished_registry = FinishedJobRegistry(queue=queue, connection=self.redis_conn)
+                job_ids = finished_registry.get_job_ids()
+                
+                cleaned_count = 0
+                for job_id in job_ids:
+                    try:
+                        job = Job.fetch(job_id, connection=self.redis_conn)
+                        # ตรวจสอบอายุของ job
+                        if job.ended_at and job.ended_at < cutoff_time:
+                            finished_registry.remove(job_id, ttl=-1)  # Remove from registry
+                            job.delete()  # Delete job data
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"Error cleaning job {job_id}: {e}")
+                        stats['errors'] += 1
+                
+                stats['queues'][queue_name] = cleaned_count
+                stats['cleaned'] += cleaned_count
+                logger.info(f"✅ Cleaned {cleaned_count} finished jobs from {queue_name}")
+            except Exception as e:
+                logger.error(f"❌ Error cleaning finished jobs from {queue_name}: {e}")
+                stats['errors'] += 1
+        
+        logger.info(f"✅ Cleanup finished: {stats['cleaned']} jobs cleaned, {stats['errors']} errors")
+        return stats
+    
+    def cleanup_failed_jobs(self, max_age_hours: int = 24) -> Dict:
+        """
+        Cleanup failed jobs ที่เก่ากว่า max_age_hours
+        
+        Args:
+            max_age_hours: อายุสูงสุดของ failed jobs (default: 24 hours)
+        
+        Returns:
+            Dict with cleanup statistics
+        """
+        from datetime import datetime, timedelta
+        from rq.registry import FailedJobRegistry
+        
+        stats = {
+            'cleaned': 0,
+            'errors': 0,
+            'queues': {}
+        }
+        
+        cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+        
+        # Cleanup all queues
+        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue]
+        
+        for queue in all_queues:
+            queue_name = queue.name
+            try:
+                failed_registry = FailedJobRegistry(queue=queue, connection=self.redis_conn)
+                job_ids = failed_registry.get_job_ids()
+                
+                cleaned_count = 0
+                for job_id in job_ids:
+                    try:
+                        job = Job.fetch(job_id, connection=self.redis_conn)
+                        # ตรวจสอบอายุของ job
+                        if job.ended_at and job.ended_at < cutoff_time:
+                            failed_registry.remove(job_id, ttl=-1)  # Remove from registry
+                            job.delete()  # Delete job data
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"Error cleaning job {job_id}: {e}")
+                        stats['errors'] += 1
+                
+                stats['queues'][queue_name] = cleaned_count
+                stats['cleaned'] += cleaned_count
+                logger.info(f"✅ Cleaned {cleaned_count} failed jobs from {queue_name}")
+            except Exception as e:
+                logger.error(f"❌ Error cleaning failed jobs from {queue_name}: {e}")
+                stats['errors'] += 1
+        
+        logger.info(f"✅ Cleanup failed: {stats['cleaned']} jobs cleaned, {stats['errors']} errors")
+        return stats
+    
+    def cleanup_all_jobs(self, max_age_hours: int = 24) -> Dict:
+        """
+        Cleanup ทั้ง finished และ failed jobs
+        
+        Args:
+            max_age_hours: อายุสูงสุดของ jobs (default: 24 hours)
+        
+        Returns:
+            Dict with cleanup statistics
+        """
+        finished_stats = self.cleanup_finished_jobs(max_age_hours=max_age_hours)
+        failed_stats = self.cleanup_failed_jobs(max_age_hours=max_age_hours)
+        
+        return {
+            'finished': finished_stats,
+            'failed': failed_stats,
+            'total_cleaned': finished_stats['cleaned'] + failed_stats['cleaned'],
+            'total_errors': finished_stats['errors'] + failed_stats['errors']
+        }
 
 # Worker function ถูกย้ายไปที่ app.workers.rq_worker.process_transcription_job
 # เพื่อใช้ persistent TranscriptionService (ไม่ init ใหม่ทุก job)

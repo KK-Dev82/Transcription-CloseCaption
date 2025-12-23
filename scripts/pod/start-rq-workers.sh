@@ -99,8 +99,37 @@ fi
 if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
     export LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
     print_info "Final LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+    
+    # ตรวจสอบว่า cuDNN libraries พบจริงหรือไม่
+    if [ -d "$CUDNN_LIB_PATH" ]; then
+        cudnn_libs=$(find "$CUDNN_LIB_PATH" -name "libcudnn*.so*" 2>/dev/null | wc -l)
+        if [ "$cudnn_libs" -gt 0 ]; then
+            print_success "✅ Found $cudnn_libs cuDNN libraries"
+        else
+            print_warning "⚠️  cuDNN path exists but no libraries found"
+        fi
+    fi
 else
     print_warning "⚠️  No CUDA/cuDNN libraries found in standard paths"
+    print_warning "⚠️  GPU workers may fallback to CPU mode (high RAM usage!)"
+    # ตั้งค่า LD_LIBRARY_PATH เป็น empty string เพื่อป้องกันปัญหา
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+fi
+
+# FIX: ตรวจสอบและยืนยันว่า LD_LIBRARY_PATH ถูกตั้งค่าอย่างถูกต้อง
+# เพื่อป้องกันปัญหา "LD_LIBRARY_PATH ไม่ถูกส่งต่อให้ worker"
+if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+    print_error "❌ LD_LIBRARY_PATH is empty! GPU workers will not work correctly."
+    print_error "   Please check CUDA/cuDNN installation."
+    exit 1
+fi
+
+# FIX: ตรวจสอบว่า cuDNN library สามารถ load ได้จริงหรือไม่
+print_info "Verifying cuDNN library can be loaded..."
+if python3 -c "import ctypes; ctypes.CDLL('libcudnn_ops_infer.so.8')" 2>/dev/null; then
+    print_success "✅ cuDNN library verification passed"
+else
+    print_warning "⚠️  cuDNN library verification failed (may still work if libraries are in system paths)"
 fi
 
 # ตั้งค่า PATH สำหรับ FFmpeg
@@ -135,7 +164,11 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
     # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
     # - WHISPER_DEVICE: ต้องเป็น 'cuda'
     # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
-    CUDA_VISIBLE_DEVICES=$i \
+    # ⚠️ สำคัญ: ต้องส่งต่อ LD_LIBRARY_PATH ให้ worker process
+    # ถ้าไม่ส่งต่อ CTranslate2 จะไม่พบ cuDNN → fallback เป็น CPU → ใช้ RAM มาก
+    # FIX: ใช้ env command เพื่อให้แน่ใจว่า environment variables ถูกส่งต่ออย่างถูกต้อง
+    # และใช้ explicit LD_LIBRARY_PATH แทน ${LD_LIBRARY_PATH:-} เพื่อป้องกัน empty value
+    env CUDA_VISIBLE_DEVICES=$i \
         LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
         REDIS_URL="$REDIS_URL" \
         PYTHONPATH="$PYTHONPATH" \
@@ -147,6 +180,7 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
         CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
         VIDEO_WORKER_TYPE=pika \
         RQ_PRELOAD_MODEL=true \
+        RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
         rq worker \
         --url "$REDIS_URL" \
         transcription_priority \

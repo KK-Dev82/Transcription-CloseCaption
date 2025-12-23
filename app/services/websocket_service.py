@@ -37,11 +37,27 @@ class WebSocketManager:
             # ใช้ environment variable สำหรับ Redis URL
             import os
             redis_url = os.getenv("REDIS_URL", "redis://transcription-redis-staging:6379")
-            self.redis_client = redis.from_url(redis_url)
-            await self.redis_client.ping()
+            
+            # ถ้าไม่มี REDIS_URL หรือเป็น default ที่ไม่มีอยู่จริง ให้ skip
+            if not redis_url or "transcription-redis-staging" in redis_url:
+                logger.info("Skipping Redis connection for WebSocket (no valid REDIS_URL)")
+                self.redis_client = None
+                return
+            
+            # เพิ่ม timeout และ socket_connect_timeout เพื่อไม่ให้ hang
+            self.redis_client = redis.from_url(
+                redis_url,
+                socket_connect_timeout=1.0,  # 1 second timeout
+                socket_timeout=1.0
+            )
+            # ใช้ timeout สำหรับ ping
+            await asyncio.wait_for(self.redis_client.ping(), timeout=1.0)
             logger.info(f"เชื่อมต่อ Redis สำหรับ WebSocket scaling สำเร็จ: {redis_url}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Redis connection timeout (continuing without Redis pub/sub)")
+            self.redis_client = None
         except Exception as e:
-            logger.warning(f"ไม่สามารถเชื่อมต่อ Redis: {e}")
+            logger.warning(f"ไม่สามารถเชื่อมต่อ Redis: {e} (continuing without Redis pub/sub)")
             self.redis_client = None
 
     async def connect_user(self, websocket: WebSocket, user_id: str):
@@ -233,6 +249,41 @@ class WebSocketManager:
             "status": "failed",
             "error": error
         })
+    
+    async def notify_task_list_update(self, task_id: str, task_data: dict, event_type: str = "task.updated"):
+        """
+        แจ้งเตือนการอัปเดตรายการทั้งหมด (สำหรับ clients ที่ subscribe "all")
+        
+        Args:
+            task_id: Task ID
+            task_data: ข้อมูล task ที่อัปเดต
+            event_type: ประเภท event (task.created, task.updated, task.completed, task.failed)
+        """
+        # ส่งไปยัง clients ที่ subscribe task specific
+        await self.broadcast_task_update(task_id, {
+            "type": event_type,
+            "task_id": task_id,
+            "task_data": task_data,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # ส่งไปยัง clients ที่ subscribe "all" (realtime history)
+        if "all" in self.task_users:
+            message = {
+                "type": event_type,
+                "task_id": task_id,
+                "task_data": task_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            users_to_notify = list(self.task_users["all"])
+            successful_sends = 0
+            
+            for user_id in users_to_notify:
+                if await self.send_to_user(user_id, message):
+                    successful_sends += 1
+            
+            logger.debug(f"ส่ง list update {event_type} ({task_id}) ไปยัง {successful_sends}/{len(users_to_notify)} history clients")
 
     def get_stats(self) -> dict:
         """สถิติการใช้งาน WebSocket"""

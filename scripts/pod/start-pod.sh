@@ -195,8 +195,15 @@ else
         print_status "✅ Set LD_LIBRARY_PATH for CTranslate2 libraries: $CTRANSLATE2_LIBS"
     fi
     
-    # เพิ่ม cuDNN libraries (persistent)
-    if [ -d "$CUDNN_DIR" ]; then
+    # เพิ่ม cuDNN libraries จาก PyTorch (ถ้า CUDNN_DIR ไม่มี)
+    if [ ! -d "$CUDNN_DIR" ] && [ -d "$CUDNN_LIB_PATH" ]; then
+        if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${CUDNN_LIB_PATH}"
+        else
+            export LD_LIBRARY_PATH="${CUDNN_LIB_PATH}:${LD_LIBRARY_PATH}"
+        fi
+        print_status "✅ Added cuDNN libraries from PyTorch to LD_LIBRARY_PATH: $CUDNN_LIB_PATH"
+    elif [ -d "$CUDNN_DIR" ]; then
         if [ -z "${LD_LIBRARY_PATH:-}" ]; then
             export LD_LIBRARY_PATH="${CUDNN_DIR}"
         else

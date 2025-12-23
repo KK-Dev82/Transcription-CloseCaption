@@ -3,20 +3,38 @@ History API สำหรับดูประวัติการ transcription
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+import json
+import asyncio
 
 from ..utils.json_storage import JSONStorage
 from ..utils.sqlite_storage import SQLiteStorage
+from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/history", tags=["History"])
 
 # Use SQLite instead of JSON storage
-json_storage = JSONStorage()
-sqlite_storage = SQLiteStorage()
+# Lazy initialization เพื่อไม่ให้ hang ตอน import
+json_storage = None
+sqlite_storage = None
+
+def get_json_storage():
+    """Get JSONStorage instance (lazy init)"""
+    global json_storage
+    if json_storage is None:
+        json_storage = JSONStorage()
+    return json_storage
+
+def get_sqlite_storage():
+    """Get SQLiteStorage instance (lazy init)"""
+    global sqlite_storage
+    if sqlite_storage is None:
+        sqlite_storage = SQLiteStorage()
+    return sqlite_storage
 
 class HistoryFilter(BaseModel):
     status: Optional[str] = None  # completed, failed, processing
@@ -35,10 +53,11 @@ async def get_transcription_history(
     📚 ดูประวัติการ transcription ทั้งหมด
     """
     try:
-        # ดึงข้อมูลทั้งหมด (JSON first, then SQLite fallback)
-        all_transcriptions = json_storage.list_all_transcriptions()
+        # ดึงข้อมูลทั้งหมดจาก SQLite เป็นหลัก (เพราะข้อมูลเก็บไว้ที่นี่)
+        all_transcriptions = get_sqlite_storage().list_all_transcriptions()
+        # Fallback ไป JSON ถ้า SQLite ว่างเปล่า
         if not all_transcriptions:
-            all_transcriptions = sqlite_storage.list_all_transcriptions()
+            all_transcriptions = get_json_storage().list_all_transcriptions()
         
         # กรองตามเงื่อนไข
         filtered_transcriptions = all_transcriptions
@@ -119,7 +138,10 @@ async def get_transcription_details(task_id: str):
     📋 ดูรายละเอียดของ transcription
     """
     try:
-        transcription = json_storage.get_transcription(task_id)
+        # ลอง SQLite ก่อน แล้ว fallback ไป JSON
+        transcription = get_sqlite_storage().load_transcription(task_id)
+        if not transcription:
+            transcription = get_json_storage().load_transcription(task_id)
         
         if not transcription:
             raise HTTPException(status_code=404, detail=f"Transcription {task_id} not found")
@@ -181,7 +203,7 @@ async def get_history_stats():
     📊 สถิติการ transcription
     """
     try:
-        all_transcriptions = json_storage.list_all_transcriptions()
+        all_transcriptions = get_json_storage().list_all_transcriptions()
         
         # นับตาม status
         status_counts = {}
@@ -246,11 +268,11 @@ async def delete_transcription_history(task_id: str):
     """
     try:
         # Try JSON first (since data is there), then SQLite as fallback
-        success = json_storage.delete_transcription(task_id)
+        success = get_json_storage().delete_transcription(task_id)
         
         if not success:
             # Fallback to SQLite storage
-            success = sqlite_storage.delete_transcription(task_id)
+            success = get_sqlite_storage().delete_transcription(task_id)
         
         if not success:
             raise HTTPException(status_code=404, detail=f"Transcription {task_id} not found")
@@ -280,3 +302,121 @@ async def delete_transcription_history(task_id: str):
     except Exception as e:
         logger.error(f"Error deleting transcription {task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.websocket("/ws/realtime")
+async def websocket_realtime_history(websocket: WebSocket):
+    """
+    🔴 WebSocket endpoint สำหรับ realtime updates ของรายการ transcription ทั้งหมด
+    
+    Usage:
+    - ws://localhost:8001/api/history/ws/realtime
+    
+    Messages sent:
+    - task.created: เมื่อมี task ใหม่
+    - task.updated: เมื่อ task อัปเดต (status, progress, etc.)
+    - task.deleted: เมื่อ task ถูกลบ
+    - task.completed: เมื่อ task เสร็จสมบูรณ์
+    - task.failed: เมื่อ task ล้มเหลว
+    
+    Client can send:
+    - {"type": "ping"}: สำหรับ health check
+    - {"type": "subscribe", "filters": {"status": "processing"}}: Subscribe เฉพาะ tasks ที่ตรงกับ filters
+    """
+    await websocket.accept()
+    user_id = f"history_realtime_{id(websocket)}"
+    
+    try:
+        # เชื่อมต่อ user
+        await websocket_manager.connect_user(websocket, user_id)
+        
+        # Subscribe สำหรับ realtime updates ของรายการทั้งหมด
+        # ใช้ special task_id "all" สำหรับ broadcast รายการทั้งหมด
+        await websocket_manager.subscribe_task(user_id, "all")
+        
+        # ส่ง welcome message พร้อมข้อมูลเริ่มต้น
+        initial_data = {
+            "type": "connection",
+            "status": "connected",
+            "message": "เชื่อมต่อ WebSocket สำหรับ realtime updates สำเร็จ",
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": "/api/history/ws/realtime"
+        }
+        await websocket.send_text(json.dumps(initial_data, ensure_ascii=False))
+        
+        # Heartbeat task
+        async def heartbeat():
+            """ส่ง ping ทุก 30 วินาที"""
+            while True:
+                try:
+                    await asyncio.sleep(30)
+                    await websocket.send_text(json.dumps({
+                        "type": "ping",
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                except Exception:
+                    break
+        
+        heartbeat_task = asyncio.create_task(heartbeat())
+        
+        try:
+            while True:
+                try:
+                    # รอ message หรือ timeout ใน 60 วินาที
+                    data = await asyncio.wait_for(
+                        websocket.receive_text(), 
+                        timeout=60.0
+                    )
+                    message = json.loads(data)
+                    
+                    # Handle client messages
+                    if message.get("type") == "ping":
+                        await websocket.send_text(json.dumps({
+                            "type": "pong",
+                            "timestamp": datetime.now().isoformat()
+                        }))
+                    elif message.get("type") == "get_latest":
+                        # ส่งรายการล่าสุด
+                        limit = message.get("limit", 20)
+                        all_transcriptions = get_sqlite_storage().list_all_transcriptions()
+                        if not all_transcriptions:
+                            all_transcriptions = get_json_storage().list_all_transcriptions()
+                        
+                        # เรียงตาม updated_at
+                        all_transcriptions.sort(
+                            key=lambda x: x.get("updated_at") or x.get("created_at") or "",
+                            reverse=True
+                        )
+                        
+                        latest = all_transcriptions[:limit]
+                        await websocket.send_text(json.dumps({
+                            "type": "latest_list",
+                            "data": latest,
+                            "count": len(latest),
+                            "timestamp": datetime.now().isoformat()
+                        }, ensure_ascii=False))
+                    
+                except asyncio.TimeoutError:
+                    # ไม่มี message ใน 60 วินาที - ส่ง keepalive
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "message": "Connection active",
+                        "timestamp": datetime.now().isoformat()
+                    }))
+                    continue
+                    
+                except json.JSONDecodeError:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Invalid JSON format"
+                    }))
+                except WebSocketDisconnect:
+                    break
+        finally:
+            heartbeat_task.cancel()
+            
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for history realtime: {user_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for history realtime {user_id}: {e}")
+    finally:
+        await websocket_manager.disconnect_user(websocket, user_id)

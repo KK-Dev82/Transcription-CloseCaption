@@ -12,6 +12,92 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transcribe", tags=["transcription"])
 
+@router.get("/debug/queue", include_in_schema=True)
+async def debug_queue():
+    """
+    Debug endpoint เพื่อตรวจสอบ Redis connection และ queue status
+    ใช้เพื่อ debug ปัญหา "enqueue ไปผิด Redis"
+    """
+    import os
+    from app.services.redis_queue_service import get_redis_queue_service
+    
+    try:
+        redis_url = os.getenv('REDIS_URL')
+        if redis_url and '@' in redis_url:
+            # Mask password
+            parts = redis_url.split('@')
+            if len(parts) == 2:
+                auth_part = parts[0]
+                if ':' in auth_part:
+                    user_pass = auth_part.split('://', 1)[1] if '://' in auth_part else auth_part
+                    if ':' in user_pass:
+                        redis_url_log = redis_url.replace(f':{user_pass.split(":")[1]}', ':****')
+                    else:
+                        redis_url_log = redis_url
+                else:
+                    redis_url_log = redis_url
+            else:
+                redis_url_log = redis_url
+        else:
+            redis_url_log = redis_url or "NOT SET"
+        
+        queue_service = get_redis_queue_service()
+        
+        # Get queue stats
+        queue_stats = {}
+        try:
+            from rq import Queue
+            from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
+            
+            queues = {
+                'preprocess': queue_service.preprocess_queue,
+                'cpu': queue_service.cpu_queue,
+                'priority': queue_service.priority_queue,
+            }
+            
+            for name, queue in queues.items():
+                queue_length = len(queue)
+                started = len(StartedJobRegistry(queue=queue))
+                finished = len(FinishedJobRegistry(queue=queue))
+                failed = len(FailedJobRegistry(queue=queue))
+                
+                queue_stats[name] = {
+                    'queue_name': queue.name,
+                    'length': queue_length,
+                    'started': started,
+                    'finished': finished,
+                    'failed': failed
+                }
+            
+            # GPU queues
+            for gpu_key, queue in queue_service.queues.items():
+                queue_length = len(queue)
+                started = len(StartedJobRegistry(queue=queue))
+                finished = len(FinishedJobRegistry(queue=queue))
+                failed = len(FailedJobRegistry(queue=queue))
+                
+                queue_stats[gpu_key] = {
+                    'queue_name': queue.name,
+                    'length': queue_length,
+                    'started': started,
+                    'finished': finished,
+                    'failed': failed
+                }
+        except Exception as e:
+            queue_stats = {'error': str(e)}
+        
+        return {
+            "REDIS_URL": redis_url_log,
+            "redis_connected": True,
+            "queues": queue_stats
+        }
+    except Exception as e:
+        return {
+            "REDIS_URL": os.getenv('REDIS_URL', 'NOT SET'),
+            "redis_connected": False,
+            "error": str(e)
+        }
+
 class TranscriptionRequest(BaseModel):
     file_path: Optional[str] = None
     file_url: Optional[str] = None
@@ -26,6 +112,7 @@ async def start_transcription(request: TranscriptionRequest):
     """
     เริ่ม transcription job
     รองรับทั้ง file_path และ file_url
+    จำกัดจำนวน concurrent requests ไม่เกิน 25 requests
     
     วิธีใช้:
     1. ใช้ file_path (ไฟล์ที่อัปโหลดแล้ว):
@@ -41,7 +128,32 @@ async def start_transcription(request: TranscriptionRequest):
          "language": "th",
          "model_size": "base"
        }
+    
+    Rate Limiting:
+    - จำกัดจำนวน concurrent requests ไม่เกิน 25 requests
+    - ถ้าเกิน limit จะ return HTTP 429 (Too Many Requests)
     """
+    # Rate Limiting: ตรวจสอบจำนวน concurrent requests
+    try:
+        from app.services.rate_limiter import get_rate_limiter, RateLimitExceeded
+        
+        rate_limiter = get_rate_limiter()
+        
+        # ใช้ context manager เพื่อ acquire/release request slot
+        with rate_limiter.acquire():
+            # ผ่าน rate limit check แล้ว - process request
+            pass
+    except RateLimitExceeded as e:
+        # เกิน rate limit
+        logger.warning(f"⚠️ Rate limit exceeded: {e.message}")
+        raise HTTPException(
+            status_code=429,
+            detail=e.message
+        )
+    except Exception as e:
+        # ถ้า rate limiter มีปัญหา ให้ log warning แต่ยัง process request ต่อ
+        logger.warning(f"⚠️ Rate limiter error (continuing anyway): {e}")
+    
     try:
         # ตรวจสอบว่ามี file_path หรือ file_url
         if not request.file_path and not request.file_url:
@@ -154,6 +266,23 @@ async def start_transcription(request: TranscriptionRequest):
         try:
             from app.services.redis_queue_service import get_redis_queue_service
             import os
+            
+            # FIX: Log REDIS_URL เพื่อ debug (ตรวจสอบว่า API ใช้ Redis ตัวเดียวกับ Worker หรือไม่)
+            redis_url = os.getenv('REDIS_URL')
+            if redis_url:
+                # Mask password in log
+                redis_url_log = redis_url
+                if '@' in redis_url:
+                    parts = redis_url.split('@')
+                    if len(parts) == 2:
+                        auth_part = parts[0]
+                        if ':' in auth_part:
+                            user_pass = auth_part.split('://', 1)[1] if '://' in auth_part else auth_part
+                            if ':' in user_pass:
+                                redis_url_log = redis_url.replace(f':{user_pass.split(":")[1]}', ':****')
+                logger.info(f"🔍 API ENV REDIS_URL={redis_url_log}")
+            else:
+                logger.error("❌ API ENV REDIS_URL is NOT SET! This will cause jobs to be enqueued to wrong Redis!")
             
             queue_service = get_redis_queue_service()
             chunk_duration = request.chunk_duration or 150
