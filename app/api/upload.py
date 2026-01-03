@@ -232,7 +232,11 @@ async def list_uploaded_files():
 
 @router.get("/{file_id}/info")
 async def get_file_info(file_id: str):
-    """ดึงข้อมูลไฟล์"""
+    """
+    ดึงข้อมูลไฟล์
+    
+    รวม: /api/video/info/{file_path} (video.py)
+    """
     # ในที่นี้เราจะใช้ file_path แทน file_id เพื่อความง่าย
     # ในระบบจริงควรมี database เก็บ mapping ระหว่าง file_id และ file_path
     
@@ -254,7 +258,17 @@ async def get_file_info(file_id: str):
         file_path = str(matching_files[0])
         file_info = file_service.get_file_info(file_path)
         
-        return {
+        # Get video info if it's a video file
+        video_info = None
+        if file_service.is_video_file(file_path):
+            try:
+                from ..services.video_service import VideoService
+                video_service = VideoService()
+                video_info = video_service.get_video_info(file_path)
+            except Exception as e:
+                logger.warning(f"ไม่สามารถดึงข้อมูลวิดีโอ: {e}")
+        
+        response = {
             "file_id": file_id,
             "file_path": file_path,
             "file_size": file_info["file_size"],
@@ -264,6 +278,71 @@ async def get_file_info(file_id: str):
             "is_audio": file_service.is_audio_file(file_path)
         }
         
+        # Add video info if available
+        if video_info:
+            response["video_info"] = video_info
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลไฟล์: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงข้อมูลไฟล์: {str(e)}"
+        )
+
+
+@router.get("/info/{file_path:path}")
+async def get_file_info_by_path(file_path: str):
+    """
+    ดึงข้อมูลไฟล์โดยใช้ path โดยตรง
+    
+    รวม: /api/video/info/{file_path} (video.py)
+    
+    Example: GET /api/upload/info/uploads/video.mp4
+    """
+    try:
+        from pathlib import Path
+        
+        # ตรวจสอบว่าไฟล์มีอยู่จริง
+        if not Path(file_path).exists():
+            raise HTTPException(
+                status_code=404,
+                detail="ไม่พบไฟล์"
+            )
+        
+        file_info = file_service.get_file_info(file_path)
+        
+        # Get video info if it's a video file
+        video_info = None
+        if file_service.is_video_file(file_path):
+            try:
+                from ..services.video_service import VideoService
+                video_service = VideoService()
+                video_info = video_service.get_video_info(file_path)
+            except Exception as e:
+                logger.warning(f"ไม่สามารถดึงข้อมูลวิดีโอ: {e}")
+        
+        response = {
+            "file_path": file_path,
+            "filename": Path(file_path).name,
+            "file_size": file_info["file_size"],
+            "file_type": file_info["file_type"],
+            "duration": file_info.get("duration"),
+            "is_video": file_service.is_video_file(file_path),
+            "is_audio": file_service.is_audio_file(file_path)
+        }
+        
+        # Add video info if available
+        if video_info:
+            response["video_info"] = video_info
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลไฟล์: {e}")
         raise HTTPException(

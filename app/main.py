@@ -112,6 +112,14 @@ app.include_router(upload_router, prefix="/api", tags=["upload"])
 app.include_router(caption_router, prefix="/api", tags=["caption"])
 app.include_router(websocket_router, tags=["websocket"])
 
+# Include v2 unified APIs (Consolidated endpoints)
+try:
+    from app.api.v2 import unified_tasks_router
+    app.include_router(unified_tasks_router, tags=["v2-unified"])
+    logger.info("✅ Unified APIs v2 included")
+except ImportError as e:
+    logger.warning(f"Unified APIs v2 not available: {e}")
+
 # Include optional routers
 try:
     from app.api import transcription_router
