@@ -96,6 +96,31 @@ echo ""
 # Note: tzdata removed - using UTC timezone (datetime.now(timezone.utc))
 # Frontend/Dashboard handles timezone conversion to UTC+7
 
+# Check and install FFmpeg if needed
+print_status "Checking FFmpeg..."
+if command -v ffmpeg &> /dev/null; then
+    print_success "✅ FFmpeg is installed"
+    ffmpeg -version | head -1
+else
+    print_warning "⚠️  FFmpeg not found, attempting to install..."
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq
+        if apt-get install -y ffmpeg 2>&1 | grep -q "Unable to locate package"; then
+            print_warning "⚠️  FFmpeg package not found in default repositories"
+            print_status "💡 Trying to enable universe repository..."
+            apt-get install -y software-properties-common 2>/dev/null || true
+            add-apt-repository -y universe 2>/dev/null || true
+            apt-get update -qq
+            apt-get install -y ffmpeg 2>/dev/null && print_success "✅ FFmpeg installed" || print_error "❌ Failed to install FFmpeg"
+        else
+            print_success "✅ FFmpeg installed"
+        fi
+    else
+        print_error "❌ apt-get not available, please install FFmpeg manually"
+    fi
+fi
+echo ""
+
 # Install Python dependencies if needed
 print_status "Checking Python dependencies..."
 MISSING_DEPS=()
@@ -155,10 +180,17 @@ if pgrep -f "python.*whisper_api" > /dev/null; then
 else
     cd whisper-service
     if [ -f "whisper_api.py" ]; then
+        # Setup cuDNN environment for Whisper API
+        # Set LD_LIBRARY_PATH explicitly for cuDNN libraries
+        CUDNN_LD_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+        export LD_LIBRARY_PATH="${CUDNN_LD_PATH}:${LD_LIBRARY_PATH:-}"
+        print_status "✅ Set LD_LIBRARY_PATH for cuDNN support"
+        
         export WHISPER_MODEL_PATH="$PROJECT_ROOT/models"
         export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
         export WHISPER_CUBLAS=1
-        nohup python3 whisper_api.py > /tmp/whisper.log 2>&1 & disown
+        # Pass LD_LIBRARY_PATH to ensure cuDNN libraries are found
+        nohup env LD_LIBRARY_PATH="${CUDNN_LD_PATH}:${LD_LIBRARY_PATH:-}" python3 whisper_api.py > /tmp/whisper.log 2>&1 & disown
         sleep 3
         if curl -f http://localhost:8002/health > /dev/null 2>&1; then
             print_success "✅ Whisper API started"

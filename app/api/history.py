@@ -50,7 +50,13 @@ async def get_transcription_history(
     days_ago: Optional[int] = Query(None, ge=1, le=365, description="Show results from last N days")
 ):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต (ยกเว้น WebSocket endpoint)
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/?limit={limit}&offset={offset}&status={status}&days_ago={days_ago}`
+    
     📚 ดูประวัติการ transcription ทั้งหมด
+    
+    **หมายเหตุ**: WebSocket endpoint (`WS /api/history/ws/realtime`) ยังใช้งานได้
     """
     try:
         # ดึงข้อมูลทั้งหมดจาก SQLite เป็นหลัก (เพราะข้อมูลเก็บไว้ที่นี่)
@@ -135,6 +141,10 @@ async def get_transcription_history(
 @router.get("/transcriptions/{task_id}")
 async def get_transcription_details(task_id: str):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/{task_id}?format=full`
+    
     📋 ดูรายละเอียดของ transcription
     """
     try:
@@ -200,6 +210,10 @@ async def get_transcription_details(task_id: str):
 @router.get("/stats")
 async def get_history_stats():
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/stats/summary`
+    
     📊 สถิติการ transcription
     """
     try:

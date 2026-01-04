@@ -386,6 +386,10 @@ def process_transcription_job(
             
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
+            # FIX: สร้าง json_storage ก่อนใช้งาน
+            from app.utils.json_storage import JSONStorage
+            json_storage = JSONStorage()
+            
             conn = get_redis_connection(decode_responses=True)
             
             # ดึง main task_id (เอา _aggregator ออก)
@@ -536,9 +540,38 @@ def process_transcription_job(
                             if not isinstance(seg, dict):
                                 continue
                             
-                            # Adjust timestamps
-                            start_time = (seg.get("start", 0) or 0) + start_offset
-                            end_time = (seg.get("end", 0) or 0) + start_offset
+                            # Adjust timestamps - convert to float if string format (e.g., "00:02:30,016")
+                            start_val = seg.get("start", 0) or 0
+                            end_val = seg.get("end", 0) or 0
+                            
+                            # Convert string timestamps to float if needed
+                            if isinstance(start_val, str):
+                                # Parse format like "00:02:30,016" or "00:02:30.016"
+                                try:
+                                    parts = start_val.replace(',', '.').split(':')
+                                    if len(parts) == 3:
+                                        start_val = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                                    else:
+                                        start_val = float(start_val)
+                                except:
+                                    start_val = 0.0
+                            else:
+                                start_val = float(start_val) if start_val else 0.0
+                            
+                            if isinstance(end_val, str):
+                                try:
+                                    parts = end_val.replace(',', '.').split(':')
+                                    if len(parts) == 3:
+                                        end_val = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                                    else:
+                                        end_val = float(end_val)
+                                except:
+                                    end_val = 0.0
+                            else:
+                                end_val = float(end_val) if end_val else 0.0
+                            
+                            start_time = start_val + start_offset
+                            end_time = end_val + start_offset
                             seg_text = (seg.get("text") or "").strip()
                             confidence = seg.get("confidence")
                             

@@ -63,6 +63,10 @@ async def get_tasks_by_date(
     offset: int = Query(0, ge=0)
 ):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/?date={date}&status={status}&limit={limit}&offset={offset}`
+    
     ดึง tasks ตามวันที่
     """
     try:
@@ -165,6 +169,10 @@ async def get_tasks_summary(
     date: Optional[str] = Query(None, description="วันที่ในรูปแบบ YYYY-MM-DD (ถ้าไม่ระบุจะใช้วันนี้)")
 ):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/stats/summary?date={date}`
+    
     ดึง summary ของ tasks ตามวันที่
     """
     try:
@@ -214,6 +222,10 @@ async def get_tasks_summary(
 @router.get("/available-dates")
 async def get_available_dates():
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/stats/available-dates`
+    
     ดึงรายการวันที่ที่มี tasks
     """
     try:
@@ -243,6 +255,10 @@ async def get_available_dates():
 @router.get("/{task_id}")
 async def get_task_by_id(task_id: str):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/{task_id}?format=full`
+    
     ดึงข้อมูล task ตาม task_id
     """
     try:

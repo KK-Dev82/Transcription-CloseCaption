@@ -258,6 +258,7 @@ async def start_transcription(request: TranscriptionRequest):
             "full_text": "",
             "chunks": [],
             "created_at": task.created_at.isoformat(),
+            "callback_url": request.callback_url,  # บันทึก callback_url เพื่อใช้ส่ง callback เมื่อเสร็จ
         }
         json_storage.save_transcription(task_id, task_dict)
         

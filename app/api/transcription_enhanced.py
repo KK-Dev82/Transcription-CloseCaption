@@ -25,30 +25,82 @@ class EnhancedTranscriptionRequest(BaseModel):
 
 @router.post("/start")
 async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
-    """เริ่ม transcription แบบ enhanced (เร็ว + แม่นยำ)"""
+    """เริ่ม transcription แบบ enhanced (เร็ว + แม่นยำ)
+    
+    หมายเหตุ: Endpoint นี้ใช้ logic เดียวกับ /api/transcribe/ 
+    แต่เพิ่ม Thai processing ในภายหลัง
+    """
     try:
-        # ใช้ base model เพื่อความเร็ว
-        task_id = await transcription_service.start_transcription(
-            file_path=request.file_path,
+        # ใช้ logic เดียวกับ /api/transcribe/ โดยตรง
+        from ..api.transcribe import TranscriptionRequest
+        from ..utils.json_storage import JSONStorage
+        from ..services.redis_queue_service import get_redis_queue_service
+        import uuid
+        from datetime import datetime, timezone
+        from pathlib import Path
+        
+        # ตรวจสอบไฟล์
+        file_path = request.file_path
+        if not Path(file_path).exists():
+            raise HTTPException(status_code=404, detail=f"ไม่พบไฟล์: {file_path}")
+        
+        # สร้าง task_id
+        task_id = str(uuid.uuid4())
+        
+        # สร้าง task และบันทึกลง storage
+        json_storage = JSONStorage()
+        task_dict = {
+            "task_id": task_id,
+            "status": "queued",
+            "progress": 0,
+            "file_path": file_path,
+            "language": request.language,
+            "model_size": request.model_size,
+            "chunk_duration": request.chunk_duration,
+            "full_text": "",
+            "chunks": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "enable_thai_processing": request.enable_thai_processing,
+        }
+        json_storage.save_transcription(task_id, task_dict)
+        
+        # Enqueue preprocessing job
+        queue_service = get_redis_queue_service()
+        preprocess_job_id = queue_service.enqueue_preprocess(
+            task_id=task_id,
+            file_path=file_path,
             language=request.language,
             model_size=request.model_size,
             chunk_duration=request.chunk_duration
         )
         
+        logger.info(f"✅ Enhanced transcription job enqueued: {preprocess_job_id}")
+        
         return {
             "task_id": task_id,
+            "status": "queued",
             "message": "เริ่ม Enhanced Transcription สำเร็จ (base model + Thai processing)",
             "strategy": "fast_model_with_post_processing",
-            "estimated_time": "3-5 นาทีสำหรับวิดีโอ 10 นาที"
+            "estimated_time": "3-5 นาทีสำหรับวิดีโอ 10 นาที",
+            "queue": "redis",
+            "enable_thai_processing": request.enable_thai_processing
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Enhanced transcription error: {e}")
+        logger.error(f"Enhanced transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/status/{task_id}")
 async def get_enhanced_status(task_id: str):
-    """ดูสถานะและใช้ Thai processing ถ้าเสร็จแล้ว"""
+    """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/{task_id}?format=full&include_thai_processing=true`
+    
+    ดูสถานะและใช้ Thai processing ถ้าเสร็จแล้ว
+    """
     try:
         # ใช้ polling function แทนการเรียก HTTP
         from ..api.polling import poll_task_status

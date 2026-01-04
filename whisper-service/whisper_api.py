@@ -1,18 +1,41 @@
 #!/usr/bin/env python3
 """
-Whisper API Service สำหรับรันใน whisper container
+Whisper API Service - ใช้ faster-whisper แทน whisper.cpp
 """
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import subprocess
 import asyncio
-import tempfile
 import os
 import logging
 from pathlib import Path
-import json
 from typing import Optional
+import time
+
+# Setup cuDNN library path BEFORE importing faster_whisper
+# This ensures cuDNN libraries are found when CTranslate2 loads
+cudnn_paths = [
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib",
+    "/usr/local/lib/python3.10/dist-packages/ctranslate2.libs",
+]
+
+current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
+new_ld_path = ':'.join(cudnn_paths)
+if current_ld_path:
+    os.environ['LD_LIBRARY_PATH'] = f"{new_ld_path}:{current_ld_path}"
+else:
+    os.environ['LD_LIBRARY_PATH'] = new_ld_path
+
+# Pre-load cuDNN library to ensure it's available
+try:
+    import ctypes
+    cudnn_ops_infer = "/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8"
+    if os.path.exists(cudnn_ops_infer):
+        ctypes.CDLL(cudnn_ops_infer, mode=ctypes.RTLD_GLOBAL)
+        logging.info(f"✅ Pre-loaded cuDNN library: {cudnn_ops_infer}")
+except Exception as e:
+    logging.warning(f"⚠️  Could not pre-load cuDNN library: {e}")
 
 # ตั้งค่า logging
 logging.basicConfig(level=logging.INFO)
@@ -20,10 +43,20 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Whisper Transcription API")
 
+# Import faster-whisper
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+    logger.info("✅ faster-whisper available")
+except ImportError:
+    FASTER_WHISPER_AVAILABLE = False
+    logger.error("❌ faster-whisper not available - please install: pip install faster-whisper")
+
 class TranscriptionRequest(BaseModel):
     audio_path: str
     language: str = "th"
-    model_path: str = "/app/models/ggml-base.bin"
+    model_size: str = "base"  # ใช้ model_size แทน model_path
+    model_path: Optional[str] = None  # เก็บไว้เพื่อ backward compatibility
 
 class TranscriptionResponse(BaseModel):
     text: str
@@ -32,203 +65,243 @@ class TranscriptionResponse(BaseModel):
     success: bool
     error: Optional[str] = None
 
+# Model cache (singleton)
+_model_cache = {}
+
+def _get_model(model_size: str = "base", device: str = "cuda", compute_type: str = "float16"):
+    """Get or load Whisper model (cached) with error handling"""
+    cache_key = f"{model_size}_{device}_{compute_type}"
+    
+    if cache_key not in _model_cache:
+        logger.info(f"Loading model: {model_size} (device: {device}, compute_type: {compute_type})")
+        try:
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            _model_cache[cache_key] = model
+            logger.info(f"✅ Model loaded: {model_size}")
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"❌ Failed to load model {model_size} on {device}: {error_msg}")
+            
+            # Check for cuDNN errors
+            if "cudnn" in error_msg.lower() or "libcudnn" in error_msg.lower():
+                logger.warning(f"⚠️  cuDNN error detected: {error_msg}")
+                logger.warning(f"⚠️  Falling back to CPU for model {model_size}")
+                try:
+                    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                    cache_key_cpu = f"{model_size}_cpu_int8"
+                    _model_cache[cache_key_cpu] = model
+                    logger.info(f"✅ Model loaded on CPU (fallback): {model_size}")
+                    return model
+                except Exception as e2:
+                    logger.error(f"❌ Failed to load model on CPU: {e2}")
+                    raise Exception(f"Model loading failed on both GPU and CPU: GPU error: {error_msg}, CPU error: {e2}")
+            
+            # Fallback to CPU for other errors
+            if device != "cpu":
+                logger.warning(f"⚠️  Falling back to CPU for model {model_size}")
+                try:
+                    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                    cache_key_cpu = f"{model_size}_cpu_int8"
+                    _model_cache[cache_key_cpu] = model
+                    logger.info(f"✅ Model loaded on CPU (fallback): {model_size}")
+                    return model
+                except Exception as e2:
+                    logger.error(f"❌ Failed to load model on CPU: {e2}")
+                    raise Exception(f"Model loading failed: {error_msg}")
+            else:
+                raise
+    else:
+        logger.debug(f"Using cached model: {model_size}")
+    
+    return _model_cache[cache_key]
+
 @app.get("/health")
 async def health_check():
     """ตรวจสอบสถานะ service"""
-    return {"status": "healthy", "service": "whisper-transcription"}
+    if not FASTER_WHISPER_AVAILABLE:
+        return {"status": "unhealthy", "service": "whisper-transcription", "error": "faster-whisper not available"}
+    return {"status": "healthy", "service": "whisper-transcription", "provider": "faster-whisper"}
 
 @app.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio(request: TranscriptionRequest):
-    """แปลงเสียงเป็นข้อความ"""
+    """แปลงเสียงเป็นข้อความ - ใช้ faster-whisper"""
+    
+    if not FASTER_WHISPER_AVAILABLE:
+        return TranscriptionResponse(
+            text="",
+            segments=[],
+            language=request.language,
+            success=False,
+            error="faster-whisper not available. Please install: pip install faster-whisper"
+        )
     
     try:
         # ตรวจสอบไฟล์ audio
-        if not os.path.exists(request.audio_path):
-            raise HTTPException(status_code=404, detail=f"Audio file not found: {request.audio_path}")
+        audio_path = request.audio_path
         
-        # ตรวจสอบ model
-        if not os.path.exists(request.model_path):
-            raise HTTPException(status_code=404, detail=f"Model file not found: {request.model_path}")
+        # Convert Docker path to local path if needed
+        # builtin provider ส่ง path เป็น /app/temp/... แต่ไฟล์จริงอยู่ที่ /workspace/transcription-service/temp/...
+        if audio_path.startswith("/app/"):
+            # Convert /app/... to workspace path
+            audio_path = audio_path.replace("/app/", "/workspace/transcription-service/")
+            logger.info(f"Converted path: {request.audio_path} -> {audio_path}")
         
-        logger.info(f"เริ่มการแปลงเสียง: {request.audio_path}")
+        # Try multiple path variations
+        possible_paths = [
+            audio_path,
+            request.audio_path,
+            f"/workspace/transcription-service/{request.audio_path}" if not request.audio_path.startswith("/") else request.audio_path,
+            request.audio_path.replace("/app/", "/workspace/transcription-service/") if "/app/" in request.audio_path else None
+        ]
         
-        # ตรวจสอบประเภทไฟล์และแปลงเป็น WAV ถ้าจำเป็น
-        audio_file_path = request.audio_path
-        file_extension = Path(request.audio_path).suffix.lower()
+        audio_path_found = None
+        for path in possible_paths:
+            if path and os.path.exists(path):
+                audio_path_found = path
+                break
         
-        # ถ้าเป็นไฟล์ที่ไม่รองรับโดยตรง ให้แปลงเป็น WAV
-        if file_extension in ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4a', '.aac']:
-            logger.info(f"แปลงไฟล์ {file_extension} เป็น WAV")
-            
-            # สร้าง temporary file สำหรับ WAV
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_wav:
-                wav_file_path = tmp_wav.name
-            
-            # ใช้ FFmpeg แปลงไฟล์
-            ffmpeg_cmd = [
-                'ffmpeg', '-i', request.audio_path,
-                '-ar', '16000',  # sample rate 16kHz
-                '-ac', '1',      # mono
-                '-y',            # overwrite output file
-                wav_file_path
-            ]
-            
-            logger.info(f"รันคำสั่ง FFmpeg: {' '.join(ffmpeg_cmd)}")
-            
-            ffmpeg_result = subprocess.run(
-                ffmpeg_cmd,
-                capture_output=True,
-                text=True,
-                timeout=60  # timeout 1 นาที
+        if not audio_path_found:
+            logger.error(f"Audio file not found. Tried: {possible_paths}")
+            return TranscriptionResponse(
+                text="",
+                segments=[],
+                language=request.language,
+                success=False,
+                error=f"Audio file not found: {request.audio_path}"
             )
+        
+        audio_path = audio_path_found
+        logger.info(f"✅ Using audio path: {audio_path}")
+        
+        logger.info(f"🎯 เริ่มการแปลงเสียง: {audio_path}")
+        
+        # ใช้ model_size แทน model_path
+        model_size = request.model_size or "base"
+        
+        # Get device and compute type
+        # Try CUDA first, but fallback to CPU if cuDNN issues
+        device = os.getenv('WHISPER_DEVICE', 'cuda')
+        compute_type = os.getenv('WHISPER_COMPUTE_TYPE', 'float16' if device == 'cuda' else 'float32')
+        
+        # Load model (cached) with automatic CPU fallback
+        model = None
+        try:
+            model = _get_model(model_size, device, compute_type)
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"⚠️  Failed to load model on {device}: {error_msg}")
             
-            if ffmpeg_result.returncode != 0:
-                logger.error(f"FFmpeg conversion failed: {ffmpeg_result.stderr}")
+            # Auto-fallback to CPU if CUDA fails
+            if device == 'cuda' and ('cudnn' in error_msg.lower() or 'libcudnn' in error_msg.lower()):
+                logger.warning(f"⚠️  cuDNN error detected, falling back to CPU")
+                try:
+                    model = _get_model(model_size, 'cpu', 'int8')
+                    logger.info(f"✅ Successfully loaded model on CPU (fallback)")
+                except Exception as e2:
+                    logger.error(f"❌ Failed to load model on CPU: {e2}")
+                    return TranscriptionResponse(
+                        text="",
+                        segments=[],
+                        language=request.language,
+                        success=False,
+                        error=f"Failed to load model {model_size} on both CUDA and CPU: {str(e2)}"
+                    )
+            else:
                 return TranscriptionResponse(
                     text="",
                     segments=[],
                     language=request.language,
                     success=False,
-                    error=f"FFmpeg conversion failed: {ffmpeg_result.stderr}"
+                    error=f"Failed to load model {model_size}: {str(e)}"
                 )
-            
-            audio_file_path = wav_file_path
-            logger.info(f"แปลงไฟล์สำเร็จ: {wav_file_path}")
         
-        # สร้าง temporary file สำหรับ output
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            output_file = tmp_file.name
-        
-        # รันคำสั่ง whisper-cli
-        cmd = [
-            "/app/whisper.cpp/build/bin/whisper-cli",
-            "-m", request.model_path,
-            "-f", request.audio_path,
-            "-l", request.language,
-            "-oj",  # output JSON format
-            "-of", output_file.replace('.json', '')  # output file path (without extension)
-        ]
-        
-        logger.info(f"รันคำสั่ง: {' '.join(cmd)}")
-        
-        # รันคำสั่ง - ใช้ asyncio subprocess เพื่อไม่ block event loop
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+        # Transcribe (run in thread pool to avoid blocking)
+        start_time = time.time()
         
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=600  # timeout 10 นาที (เพิ่มจาก 5 นาที)
+            # Run transcription in thread pool (faster-whisper is synchronous)
+            # Wrap in try-except to handle transcription errors gracefully
+            def transcribe_wrapper():
+                try:
+                    return model.transcribe(
+                        audio_path,
+                        language=request.language if request.language != "auto" else None,
+                        beam_size=1,  # Greedy (fastest)
+                        vad_filter=True  # Voice activity detection (faster)
+                    )
+                except Exception as e:
+                    logger.error(f"❌ Transcription error: {e}", exc_info=True)
+                    raise
+            
+            loop = asyncio.get_event_loop()
+            segments_generator, info = await loop.run_in_executor(
+                None,
+                transcribe_wrapper
             )
-            result_code = process.returncode
-            result_stdout = stdout.decode('utf-8') if stdout else ''
-            result_stderr = stderr.decode('utf-8') if stderr else ''
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            # สร้าง result object ที่มี returncode != 0 เพื่อให้ error handling ทำงาน
-            result = type('obj', (object,), {
-                'returncode': -1,
-                'stdout': '',
-                'stderr': 'Transcription timeout after 600 seconds'
-            })()
-        else:
-            result = type('obj', (object,), {
-                'returncode': result_code,
-                'stdout': result_stdout,
-                'stderr': result_stderr
-            })()
-        
-        if result.returncode != 0:
-            logger.error(f"เกิดข้อผิดพลาดในการแปลงเสียง: {result.stderr}")
-            return TranscriptionResponse(
-                text="",
-                segments=[],
-                language=request.language,
-                success=False,
-                error=f"Whisper command failed: {result.stderr}"
-            )
-        
-        # อ่านผลลัพธ์ JSON
-        try:
-            with open(output_file, 'r', encoding='utf-8') as f:
-                whisper_result = json.load(f)
             
-            # แยกข้อความและ segments จาก format ของ whisper-cli
-            transcription = whisper_result.get('transcription', [])
+            # Convert generator to list
+            segments_list = list(segments_generator)
             
-            # รวมข้อความทั้งหมด
-            text = ' '.join([segment.get('text', '').strip() for segment in transcription])
+            processing_time = time.time() - start_time
             
-            # แปลง segments ให้ตรงกับ format ที่ API ต้องการ
-            segments = []
-            for segment in transcription:
-                timestamps = segment.get('timestamps', {})
-                segments.append({
-                    'start': timestamps.get('from', '00:00:00,000'),
-                    'end': timestamps.get('to', '00:00:00,000'),
-                    'text': segment.get('text', '').strip()
+            # Extract text and segments
+            text = ' '.join([segment.text.strip() for segment in segments_list])
+            
+            # Format segments
+            formatted_segments = []
+            for segment in segments_list:
+                formatted_segments.append({
+                    'start': f"{int(segment.start // 3600):02d}:{int((segment.start % 3600) // 60):02d}:{int(segment.start % 60):02d},{int((segment.start % 1) * 1000):03d}",
+                    'end': f"{int(segment.end // 3600):02d}:{int((segment.end % 3600) // 60):02d}:{int(segment.end % 60):02d},{int((segment.end % 1) * 1000):03d}",
+                    'text': segment.text.strip()
                 })
             
-            # ลบ temporary file
-            os.unlink(output_file)
+            detected_language = info.language if hasattr(info, 'language') else request.language
             
-            logger.info(f"แปลงเสียงสำเร็จ: {len(text)} ตัวอักษร, {len(segments)} segments")
+            logger.info(f"✅ แปลงเสียงสำเร็จ: {len(text)} ตัวอักษร, {len(formatted_segments)} segments, ใช้เวลา {processing_time:.2f}s")
             
             return TranscriptionResponse(
                 text=text,
-                segments=segments,
-                language=request.language,
+                segments=formatted_segments,
+                language=detected_language,
                 success=True
             )
             
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            logger.error(f"เกิดข้อผิดพลาดในการอ่านผลลัพธ์: {e}")
+        except Exception as e:
+            logger.error(f"❌ Transcription error: {e}", exc_info=True)
             return TranscriptionResponse(
                 text="",
                 segments=[],
                 language=request.language,
                 success=False,
-                error=f"Failed to read output: {str(e)}"
+                error=f"Transcription failed: {str(e)}"
             )
             
-    except subprocess.TimeoutExpired:
-        logger.error("การแปลงเสียงใช้เวลานานเกินไป")
-        return TranscriptionResponse(
-            text="",
-            segments=[],
-            language=request.language,
-            success=False,
-            error="Transcription timeout"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดที่ไม่คาดคิด: {e}")
+        logger.error(f"❌ เกิดข้อผิดพลาดที่ไม่คาดคิด: {e}", exc_info=True)
         return TranscriptionResponse(
             text="",
             segments=[],
             language=request.language,
             success=False,
-            error=str(e)
+            error=f"Unexpected error: {str(e)}"
         )
 
 @app.get("/models")
 async def list_models():
-    """แสดงรายการ models ที่มี"""
-    models_dir = Path("/app/models")
-    models = []
-    
-    if models_dir.exists():
-        for model_file in models_dir.glob("*.bin"):
-            models.append({
-                "name": model_file.name,
-                "size": model_file.stat().st_size,
-                "path": str(model_file)
-            })
-    
-    return {"models": models}
+    """แสดงรายการ models ที่รองรับ"""
+    models = [
+        {"name": "tiny", "size": "39M"},
+        {"name": "base", "size": "74M"},
+        {"name": "small", "size": "244M"},
+        {"name": "medium", "size": "769M"},
+        {"name": "large", "size": "1550M"},
+        {"name": "large-v2", "size": "1550M"},
+        {"name": "large-v3", "size": "1550M"},
+    ]
+    return {"models": models, "provider": "faster-whisper"}
 
 class DownloadModelRequest(BaseModel):
     model_size: str = "base"
@@ -240,52 +313,13 @@ class DownloadModelResponse(BaseModel):
 
 @app.post("/download-model", response_model=DownloadModelResponse)
 async def download_model(request: DownloadModelRequest):
-    """ดาวน์โหลด Whisper model"""
+    """ดาวน์โหลด Whisper model (faster-whisper จะดาวน์โหลดอัตโนมัติ)"""
     
     try:
-        logger.info(f"เริ่มดาวน์โหลด model: {request.model_size}")
-        
-        # รันคำสั่งดาวน์โหลด
-        cmd = [
-            "/bin/bash", "-c",
-            f"cd /app/whisper.cpp && ./models/download-ggml-model.sh {request.model_size}"
-        ]
-        
-        logger.info(f"รันคำสั่ง: {' '.join(cmd)}")
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
-        # ตรวจสอบว่าไฟล์ถูกสร้างขึ้นหรือไม่
-        model_name = f"ggml-{request.model_size}.bin"
-        model_path = Path(f"/app/models/{model_name}")
-        
-        if model_path.exists():
-            logger.info(f"ดาวน์โหลด model สำเร็จ: {model_path}")
-            return DownloadModelResponse(
-                success=True,
-                message=f"ดาวน์โหลด model {request.model_size} สำเร็จ"
-            )
-        else:
-            # ตรวจสอบใน whisper.cpp/models directory
-            whisper_model_path = Path(f"/app/whisper.cpp/models/{model_name}")
-            if whisper_model_path.exists():
-                # ย้ายไฟล์ไปยัง models directory
-                import shutil
-                shutil.move(str(whisper_model_path), str(model_path))
-                logger.info(f"ย้าย model ไปยัง: {model_path}")
-                return DownloadModelResponse(
-                    success=True,
-                    message=f"ดาวน์โหลดและย้าย model {request.model_size} สำเร็จ"
-                )
-            else:
-                raise Exception(f"ไม่พบไฟล์ model หลังดาวน์โหลด: {model_name}")
-                
-    except subprocess.CalledProcessError as e:
-        logger.error(f"เกิดข้อผิดพลาดในการดาวน์โหลด model: {e}")
-        logger.error(f"stderr: {e.stderr}")
+        logger.info(f"Model {request.model_size} will be downloaded automatically by faster-whisper on first use")
         return DownloadModelResponse(
-            success=False,
-            error=f"เกิดข้อผิดพลาดในการดาวน์โหลด model: {e.stderr}"
+            success=True,
+            message=f"Model {request.model_size} will be downloaded automatically by faster-whisper on first use"
         )
     except Exception as e:
         logger.error(f"เกิดข้อผิดพลาด: {e}")
@@ -296,9 +330,37 @@ async def download_model(request: DownloadModelRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # ใช้ workers=3 เพื่อรองรับ concurrent requests (เพิ่มจาก 2)
-    # แต่ละ worker จะใช้ memory และ CPU ประมาณ 0.8G และ 0.5 CPU
-    # Total: 2.5G RAM, 1.4 CPU (ตรงกับ docker-compose.staging.yml)
-    # ⚡ เพิ่ม workers เพื่อให้รับงาน transcription หลายงานพร้อมกันได้
-    # ⚠️ ต้องใช้ import string "whisper_api:app" เพื่อให้ workers ทำงานได้
-    uvicorn.run("whisper_api:app", host="0.0.0.0", port=8002, workers=3) 
+    import signal
+    import sys
+    
+    # Setup signal handlers for graceful shutdown
+    def signal_handler(sig, frame):
+        logger.info("🛑 Received shutdown signal, cleaning up...")
+        # Clear model cache to free memory
+        _model_cache.clear()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Setup exception handler to log crashes
+    def exception_handler(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        
+        logger.critical("❌ Uncaught exception:", exc_info=(exc_type, exc_value, exc_traceback))
+        # Clear model cache
+        _model_cache.clear()
+    
+    sys.excepthook = exception_handler
+    
+    # ใช้ workers=1 เพื่อหลีกเลี่ยงปัญหา model loading ในหลาย processes
+    # faster-whisper models จะถูก cache ใน memory
+    try:
+        logger.info("🚀 Starting Whisper API service on port 8002...")
+        uvicorn.run("whisper_api:app", host="0.0.0.0", port=8002, workers=1, log_level="info")
+    except Exception as e:
+        logger.critical(f"❌ Whisper API service crashed: {e}", exc_info=True)
+        _model_cache.clear()
+        sys.exit(1)

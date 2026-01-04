@@ -18,7 +18,13 @@ json_storage = JSONStorage()
 
 @router.get("/transcription/{task_id}")
 async def get_transcription_progress(task_id: str):
-    """ดู progress ของ transcription task แบบ real-time"""
+    """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/{task_id}?format=progress`
+    
+    ดู progress ของ transcription task แบบ real-time
+    """
     try:
         # ดึงข้อมูลจาก storage โดยตรง
         task_dict = json_storage.get_transcription(task_id)
@@ -109,7 +115,13 @@ async def get_transcription_progress(task_id: str):
 
 @router.get("/all-active")
 async def get_all_active_tasks():
-    """ดูรายการ tasks ที่กำลังทำงานอยู่"""
+    """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/?status=processing`
+    
+    ดูรายการ tasks ที่กำลังทำงานอยู่
+    """
     try:
         # ดึงข้อมูลจาก storage โดยตรง
         all_tasks = json_storage.list_all_transcriptions()
@@ -140,7 +152,13 @@ async def get_all_active_tasks():
 
 @router.get("/stats")
 async def get_progress_stats():
-    """สถิติการประมวลผล"""
+    """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/stats/summary`
+    
+    สถิติการประมวลผล
+    """
     try:
         # ดึงข้อมูลจาก storage โดยตรง
         all_tasks = json_storage.list_all_transcriptions()

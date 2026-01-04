@@ -2,6 +2,80 @@
 
 Scripts สำหรับการจัดการ Models และ Utilities อื่นๆ
 
+**⚠️ สำคัญ:** ไฟล์นี้เป็นข้อมูลเสริมสำหรับ utility scripts เท่านั้น  
+สำหรับการ setup หลัง Restart Pod Container ให้ดูที่ [README.md](../../README.md#-quick-start-หลังจาก-restart-pod-container) แทน
+
+---
+
+## 🚀 Quick Reference: Setup หลัง Restart Pod Container
+
+### ⚠️ สำคัญ: ไฟล์นี้เป็นข้อมูลเสริมสำหรับ utility scripts เท่านั้น  
+สำหรับการ setup หลัง Restart Pod Container ให้ดูที่ [README.md](../../README.md#-quick-start-หลังจาก-restart-pod-container) แทน
+
+### ขั้นตอนหลัก (สรุป):
+
+1. **ติดตั้ง System Dependencies:**
+   ```bash
+   apt-get update
+   apt-get install -y ffmpeg
+   ```
+
+2. **ติดตั้ง Python Dependencies:**
+   ```bash
+   cd /workspace/transcription-service
+   pip install -r requirements.txt
+   ```
+
+3. **Start Services:**
+   ```bash
+   bash scripts/pod/start-pod.sh
+   ```
+   - Start Whisper API (port 8002)
+   - Start Main API (port 8010)
+
+4. **Start RQ Workers:**
+   ```bash
+   bash scripts/pod/restart-rq-workers.sh
+   ```
+   - Preprocess workers (6)
+   - GPU workers (2 per GPU)
+   - CPU workers (2)
+
+### ตรวจสอบ Status:
+```bash
+# Health check
+curl http://localhost:8010/health
+curl http://localhost:8002/health
+
+# Check workers
+ps aux | grep "rq worker" | wc -l  # Should be 10+ workers
+
+# Check queue status (ต้องมี REDIS_URL ใน environment)
+python3 -c "
+from redis import Redis
+from rq import Queue
+import os
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+conn = Redis.from_url(redis_url, decode_responses=False)
+for qname in ['transcription_preprocess', 'transcription_gpu0', 'transcription_gpu1', 'transcription_cpu']:
+    q = Queue(qname, connection=conn)
+    print(f'{qname}: {len(q)} queued')
+"
+```
+
+### Port Usage:
+- **8010**: Main API (FastAPI) - Public endpoint
+- **8002**: Whisper API (Faster-Whisper service) - Internal
+- **Redis**: External (RedisLabs) - กำหนดใน `.env.runpod`
+
+### หมายเหตุ:
+- **cuDNN & CTranslate2**: จัดการอัตโนมัติผ่าน `LD_LIBRARY_PATH` ใน scripts
+- **Models**: ต้องดาวน์โหลดก่อนใช้งาน (ดู `download-models.sh` ด้านล่าง)
+- **Environment**: โหลดจาก `.env.runpod` อัตโนมัติ
+- **Container**: ไม่ต้องใช้ `sudo` (รันเป็น root อยู่แล้ว)
+
+---
+
 ## 📋 Scripts
 
 ### `download-models.sh` ⭐

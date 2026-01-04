@@ -21,6 +21,10 @@ transcription_service = TranscriptionService()
 @router.get("/task/{task_id}")
 async def poll_task_status(task_id: str):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/{task_id}?format=minimal`
+    
     🔄 Polling API สำหรับเช็คสถานะของ task
     
     ใช้แทน WebSocket เมื่อ real-time connection ไม่ทำงาน
@@ -102,6 +106,10 @@ async def poll_task_status(task_id: str):
 @router.get("/tasks/active")
 async def poll_active_tasks():
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/?status=processing`
+    
     📋 ดึงรายการ tasks ที่กำลังทำงานอยู่
     """
     try:
@@ -131,6 +139,10 @@ async def poll_active_tasks():
 @router.get("/tasks/recent")
 async def poll_recent_tasks(limit: int = Query(10, ge=1, le=50)):
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /api/v2/tasks/?limit={limit}&sort=desc`
+    
     📚 ดึงรายการ tasks ล่าสุด (ทั้งเสร็จและกำลังทำ)
     """
     try:
@@ -172,6 +184,10 @@ async def poll_recent_tasks(limit: int = Query(10, ge=1, le=50)):
 @router.get("/health")
 async def polling_health():
     """
+    ⚠️ **DEPRECATED**: Endpoint นี้จะถูก deprecate ในอนาคต
+    
+    **แนะนำให้ใช้**: `GET /health`
+    
     🏥 Health check สำหรับ Polling API
     """
     return {

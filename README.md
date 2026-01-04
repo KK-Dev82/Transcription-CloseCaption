@@ -1,663 +1,557 @@
-# 🎤 Transcription & Close Caption Service
+# 🎙️ Transcription Service
 
-ระบบแปลงเสียงเป็นข้อความ (Transcription) และสร้าง Close Caption สำหรับวิดีโอ โดยใช้ AI Whisper Model พร้อมการปรับปรุงความแม่นยำภาษาไทย
-
-## 📋 สารบัญ
-
-- [เกี่ยวกับระบบ](#เกี่ยวกับระบบ)
-- [Features](#features)
-- [System Requirements](#system-requirements)
-- [การติดตั้ง](#การติดตั้ง)
-- [การใช้งาน](#การใช้งาน)
-- [API Documentation](#api-documentation)
-- [การแก้ไขปัญหา](#การแก้ไขปัญหา)
+บริการ Transcription สำหรับวิดีโอ/เสียง โดยใช้ Whisper และ faster-whisper พร้อม Multi-GPU Support
 
 ---
 
-## 🎯 เกี่ยวกับระบบ
+## 📦 Prerequisites (สิ่งที่ต้องมีก่อนเริ่ม)
 
-ระบบนี้เป็น **Microservice** สำหรับแปลงเสียงเป็นข้อความและสร้าง Close Caption สำหรับวิดีโอ โดยใช้:
+### System Requirements
 
-- **Whisper AI Model** - OpenAI Whisper สำหรับแปลงเสียงเป็นข้อความ
-- **FastAPI** - Python Web Framework สำหรับ REST API
-- **Docker & Docker Compose** - Containerization
-- **RabbitMQ** - Message Queue สำหรับ background processing
-- **Redis** - Caching และ session management
-- **WebSocket** - Real-time updates
+1. **FFmpeg** (จำเป็นสำหรับ video/audio processing)
+   ```bash
+   # Ubuntu/Debian (ใน container - ไม่ต้องใช้ sudo)
+   apt-get update
+   apt-get install -y ffmpeg
+   
+   # ตรวจสอบว่าติดตั้งสำเร็จ
+   ffmpeg -version
+   ```
+   
+   **หมายเหตุ**: ใน container environment มักจะรันเป็น root อยู่แล้ว ไม่ต้องใช้ `sudo`
 
-### สถาปัตยกรรม
+2. **Python 3.10+**
+   ```bash
+   python3 --version
+   ```
 
-```
-┌─────────────┐
-│   Client    │
-│  (Frontend) │
-└──────┬──────┘
-       │ HTTP/WebSocket
-       ▼
-┌─────────────────┐
-│  API Service    │  ← FastAPI (Port 8001)
-│  (Main Service) │
-└──────┬──────────┘
-       │
-       ├──► RabbitMQ ──► Video Workers (Background Processing)
-       │
-       ├──► Redis (Caching)
-       │
-       └──► Whisper Service ──► Whisper AI Model
-            (Port 8002)
-```
+3. **CUDA 12.1+ และ cuDNN** (สำหรับ GPU acceleration)
+   - ใช้ base image: `runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04`
+   - cuDNN 8.9.7 ติดตั้งแล้ว (compatible กับ CUDA 12.1)
+   - `libcudnn_ops_infer.so.8` อยู่ใน `/usr/lib/x86_64-linux-gnu/`
+   - Scripts จะตั้งค่า `LD_LIBRARY_PATH` อัตโนมัติ
 
----
+4. **Redis** (สำหรับ job queue)
+   - ใช้ Redis Cloud หรือ local Redis
 
-## ✨ Features
+### Python Dependencies
 
-- ✅ **Real-time Transcription** - แปลงเสียงเป็นข้อความแบบ real-time
-- ✅ **Thai Language Optimization** - ปรับปรุงความแม่นยำภาษาไทยด้วย NLP
-- ✅ **Progress Tracking** - ติดตาม progress แบบ real-time ผ่าน WebSocket
-- ✅ **Multiple Formats** - รองรับไฟล์วิดีโอและเสียงหลากหลาย (MP4, MP3, WAV, etc.)
-- ✅ **Chunk Processing** - แบ่งไฟล์ใหญ่เป็นส่วนย่อยเพื่อประมวลผล
-- ✅ **Caption Generation** - สร้าง SRT subtitles อัตโนมัติ
-- ✅ **Live Streaming** - รองรับ live transcription
-- ✅ **Scalable** - รองรับ concurrent users และ background workers
+ติดตั้งผ่าน `pip install -r requirements.txt` (ดูรายละเอียดใน requirements.txt)
 
 ---
 
-## 💻 System Requirements
+## 🚀 Quick Start (หลังจาก Restart Pod Container)
 
-### Server Requirements
+เมื่อ restart pod container ใหม่ ต้องทำตามขั้นตอนนี้:
 
-- **OS:** Linux (Ubuntu 20.04+ หรือ Debian 11+)
-- **CPU:** 2+ cores (แนะนำ 4+ cores)
-- **RAM:** 4GB+ (แนะนำ 8GB+)
-- **Storage:** 20GB+ free space
-- **Network:** Internet connection สำหรับดาวน์โหลด images และ models
+### 1. ติดตั้ง System Dependencies
 
-### Software Requirements
-
-- **Docker:** 20.10+
-- **Docker Compose:** 2.0+
-- **Git:** สำหรับ clone repository
-
-### External Services (Optional)
-
-- **RabbitMQ:** สำหรับ message queue (สามารถรันใน container)
-- **Redis:** สำหรับ caching (สามารถรันใน container)
-
----
-
-## 🚀 การติดตั้ง
-
-### ⭐ สำหรับ RunPod (แนะนำ - เสถียรที่สุด)
-
-**📖 ดูคู่มือการติดตั้งแบบละเอียด:** [INSTALLATION.md](./docs/INSTALLATION.md)
-
-**Quick Start:**
 ```bash
-# 1. Clone repository
-cd /workspace
-git clone <repository-url> transcription-service
-cd transcription-service
+# อัปเดต package list (ใน container - ไม่ต้องใช้ sudo)
+apt-get update
 
-# 2. Setup Pod (ครั้งแรก)
-bash scripts/pod/setup-pod.sh
+# ติดตั้ง FFmpeg (จำเป็นสำหรับ video/audio processing)
+apt-get install -y ffmpeg
 
-# 3. Start Services
+# ตรวจสอบว่า FFmpeg ติดตั้งสำเร็จ
+ffmpeg -version
+```
+
+**หมายเหตุ**: 
+- ใน container environment มักจะรันเป็น root อยู่แล้ว ไม่ต้องใช้ `sudo`
+- ถ้า `apt-get install -y ffmpeg` ไม่พบ package:
+  ```bash
+  # ลองติดตั้งจาก universe repository
+  apt-get install -y software-properties-common
+  add-apt-repository universe
+  apt-get update
+  apt-get install -y ffmpeg
+  ```
+
+### 2. ติดตั้ง Python Dependencies
+
+```bash
+cd /workspace/transcription-service
+pip install -r requirements.txt
+```
+
+**หมายเหตุ**: 
+- Scripts จะจัดการ cuDNN และ CTranslate2 libraries อัตโนมัติผ่าน `LD_LIBRARY_PATH`
+- cuDNN 8.9.7 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
+- `whisper_api.py` จะตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
+
+### 3. Start Services
+
+```bash
 bash scripts/pod/start-pod.sh
-
-# 4. Check Status
-bash scripts/pod/check-pod.sh
 ```
 
-### สำหรับ Local/Docker (Development)
+Script นี้จะ:
+- ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ cuDNN และ CTranslate2
+- ✅ ตรวจสอบ GPU
+- ✅ สร้าง directories ที่จำเป็น
+- ✅ โหลด environment variables จาก `.env.runpod`
+- ✅ Start Whisper API (port 8002) พร้อม cuDNN support
+- ✅ Start Main API (port 8010)
+
+### 4. Start RQ Workers
+
+```bash
+bash scripts/pod/restart-rq-workers.sh
+```
+
+Script นี้จะ:
+- ✅ หยุด workers เดิม (ถ้ามี)
+- ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ CUDA, cuDNN และ CTranslate2
+- ✅ Start workers สำหรับทุก queue:
+  - `transcription_preprocess` (6 workers)
+  - `transcription_gpu0`, `transcription_gpu1` (2 workers)
+  - `transcription_cpu` (2 workers)
 
 ---
 
-## 🚀 การติดตั้งแบบเดิม (Local/Docker)
+## 📋 เกี่ยวกับ cuDNN และ CTranslate2
 
-### Step 1: เตรียม Server Linux
+### การจัดการอัตโนมัติ
 
-#### 1.1 อัปเดตระบบ
+Scripts และ code จัดการ cuDNN และ CTranslate2 ให้อัตโนมัติ:
 
-```bash
-# อัปเดต package list
-sudo apt update && sudo apt upgrade -y
+1. **cuDNN Libraries**: 
+   - System cuDNN: `/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8` (cuDNN 8.9.7)
+   - PyTorch cuDNN: `/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib`
+   - ติดตั้งแล้วผ่าน `apt-get install libcudnn8` (cuDNN 8.9.7 สำหรับ CUDA 12.2)
+   - Compatible กับ CUDA 12.1 และ CTranslate2 4.4.0
 
-# ติดตั้ง dependencies พื้นฐาน
-sudo apt install -y \
-    curl \
-    wget \
-    git \
-    ca-certificates \
-    gnupg \
-    lsb-release
-```
+2. **CTranslate2 Libraries**: อยู่ใน `/usr/local/lib/python3.10/dist-packages/ctranslate2.libs`
+   - ติดตั้งผ่าน `pip install ctranslate2==4.4.0` (ใน requirements.txt)
+   - รองรับ cuDNN 8.x
 
-#### 1.2 ติดตั้ง Docker
+3. **Auto Configuration**:
+   - `whisper_api.py` ตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
+   - `start-pod.sh` ตั้งค่า `LD_LIBRARY_PATH` สำหรับ Whisper API
+   - `start-rq-workers.sh` ตั้งค่า `LD_LIBRARY_PATH` สำหรับ workers (order: cuDNN → CUDA → CTranslate2)
 
-```bash
-# เพิ่ม Docker's official GPG key
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+4. **Error Handling**:
+   - ถ้า cuDNN error → auto-fallback เป็น CPU (แต่ไม่แนะนำ - ใช้ GPU เป็นหลัก)
+   - Warning "Could not load library" อาจแสดง แต่ไม่กระทบการทำงาน
 
-# ตั้งค่า repository
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# ติดตั้ง Docker Engine
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# ตรวจสอบการติดตั้ง
-sudo docker --version
-sudo docker compose version
-```
-
-#### 1.3 ตั้งค่า Docker (ไม่ต้องใช้ sudo)
+### ตรวจสอบว่าใช้งานได้
 
 ```bash
-# เพิ่ม user เข้า docker group
-sudo usermod -aG docker $USER
+# ตรวจสอบ Worker Health
+bash scripts/pod/check-worker-health.sh
 
-# Logout และ login ใหม่ หรือใช้คำสั่งนี้
-newgrp docker
-
-# ทดสอบว่าใช้งานได้
-docker ps
-```
-
-### Step 2: Clone Repository
-
-```bash
-# ไปที่ directory ที่ต้องการ
-cd /opt  # หรือ directory อื่นที่ต้องการ
-
-# Clone repository
-git clone <repository-url> transcription-close-caption-service
-cd transcription-close-caption-service
-
-# ตรวจสอบว่า clone สำเร็จ
-ls -la
-```
-
-### Step 3: เตรียม Directories และ Permissions
-
-```bash
-# สร้าง directories ที่จำเป็น
-mkdir -p uploads storage temp models test-files
-
-# ตั้งค่า permissions
-chmod 755 uploads storage temp models test-files
-chmod 755 scripts/*.sh 2>/dev/null || true
-
-# ตรวจสอบ
-ls -la
-```
-
-### Step 4: ดาวน์โหลด Whisper Model
-
-#### วิธีที่ 1: ใช้ Script (แนะนำ)
-
-```bash
-# ให้สิทธิ์ execute
-chmod +x scripts/download-models.sh
-
-# ดาวน์โหลด model
-./scripts/download-models.sh
-
-# ตรวจสอบ
-ls -lh models/ggml-base.bin
-# ควรเห็น: ggml-base.bin (ประมาณ 148MB)
-```
-
-#### วิธีที่ 2: ดาวน์โหลดด้วย wget
-
-```bash
-# สร้าง directory
-mkdir -p models
-
-# ดาวน์โหลด model
-wget -O models/ggml-base.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-
-# ตรวจสอบขนาด (ควรเป็น ~148MB)
-ls -lh models/ggml-base.bin
-```
-
-#### วิธีที่ 3: ดาวน์โหลดด้วย curl
-
-```bash
-# สร้าง directory
-mkdir -p models
-
-# ดาวน์โหลด model
-curl -L -o models/ggml-base.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-
-# ตรวจสอบขนาด
-ls -lh models/ggml-base.bin
-```
-
-**รายละเอียด Model:**
-- **URL:** `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin`
-- **Directory:** `models/`
-- **Filename:** `ggml-base.bin`
-- **Size:** ~148MB (148,000,000 bytes)
-
-**ตรวจสอบ Model:**
-
-```bash
-# ตรวจสอบว่าไฟล์มีอยู่
-ls -lh models/ggml-base.bin
-# ควรเห็น: -rw-r--r-- 1 user user 148M ... ggml-base.bin
-
-# ตรวจสอบประเภทไฟล์ (ควรเป็น binary)
-file models/ggml-base.bin
-# ควรเห็น: models/ggml-base.bin: data
-
-# ตรวจสอบขนาด (ควรมากกว่า 100MB)
-stat -c%s models/ggml-base.bin
-# ควรเห็น: 148000000
-```
-
-### Step 5: ตั้งค่า Environment Variables
-
-```bash
-# คัดลอกไฟล์ environment (ถ้ามี)
-cp env.staging .env 2>/dev/null || true
-
-# หรือสร้างไฟล์ .env ใหม่
-cat > .env << EOF
-# Environment
-ENVIRONMENT=production
-
-# Storage
-STORAGE_TYPE=json
-JSON_STORAGE_DIR=/app/storage
-
-# RabbitMQ (ปรับตาม environment ของคุณ)
-RABBITMQ_HOST=localhost
-RABBITMQ_PORT=5672
-RABBITMQ_USER=guest
-RABBITMQ_PASSWORD=guest
-
-# Redis
-REDIS_URL=redis://redis:6379
-
-# Whisper Service
-WHISPER_API_URL=http://whisper:8002
-EOF
-```
-
-### Step 6: ตั้งค่า Docker Compose
-
-```bash
-# ตรวจสอบไฟล์ docker-compose ที่ต้องการใช้
-ls -la docker-compose*.yml
-
-# สำหรับ Production ใช้ docker-compose.digitalocean.yml หรือ docker-compose.production.yml
-# สำหรับ Local Development ใช้ docker-compose.local.yml
-
-# ตรวจสอบ configuration
-docker compose -f docker-compose.digitalocean.yml config
-```
-
-**แก้ไข docker-compose.yml ตามความต้องการ:**
-
-- **RabbitMQ:** ปรับ `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`
-- **Redis:** ปรับ `REDIS_URL` ถ้าใช้ external Redis
-- **Ports:** ปรับ ports ตามต้องการ (default: 8001, 8002)
-
-### Step 7: Pull Docker Images
-
-```bash
-# Login to Azure Container Registry (ถ้าใช้ private registry)
-# az acr login --name <registry-name>
-
-# Pull images
-docker compose -f docker-compose.digitalocean.yml pull
-
-# หรือ build images เอง (ถ้าไม่ใช้ pre-built images)
-# docker compose -f docker-compose.digitalocean.yml build
-```
-
-### Step 8: เริ่ม Services
-
-```bash
-# เริ่ม services
-docker compose -f docker-compose.digitalocean.yml up -d
-
-# ตรวจสอบ status
-docker compose -f docker-compose.digitalocean.yml ps
-
-# ดู logs
-docker compose -f docker-compose.digitalocean.yml logs -f
-```
-
-### Step 9: ตรวจสอบการติดตั้ง
-
-```bash
-# ตรวจสอบ health check
-curl http://localhost:8001/health
-# ควรเห็น: {"status":"healthy",...}
-
-curl http://localhost:8002/health
-# ควรเห็น: {"status":"healthy","service":"whisper-transcription"}
-
-# ตรวจสอบว่า Whisper เห็น model
-curl http://localhost:8002/models
-# ควรเห็น JSON ที่มี model ในรายการ
-
-# ตรวจสอบ containers
-docker ps
-# ควรเห็น containers ทั้งหมด running
+# ตรวจสอบ GPU Usage
+bash scripts/pod/check-gpu-usage.sh
 ```
 
 ---
 
-## 📖 การใช้งาน
+## 🌐 Ports และ Services
 
-### 1. API Endpoints
+### Main API (Port 8010)
 
-#### Health Check
+**Public URL**: `https://0b3x44foetagtu-8010.proxy.runpod.net/`
+
+**Endpoints หลัก**:
+
+### Core Transcription
+- `GET /health` - Health check
+- `GET /docs` - API Documentation (Swagger UI)
+- `POST /api/transcribe/` - เริ่ม transcription job
+- `POST /api/transcribe-enhanced/start` - Enhanced transcription (base model + Thai processing)
+- `GET /api/transcribe/debug/queue` - Debug Redis queue status
+
+### Tasks & Status (V2 Unified API - แนะนำ)
+- `GET /api/v2/tasks/{task_id}` - ดูรายละเอียด task (unified endpoint)
+- `GET /api/v2/tasks/` - รายการ tasks พร้อม filter (status, date, limit, offset)
+- `GET /api/v2/tasks/stats/summary` - สถิติสรุป
+- `GET /api/v2/tasks/stats/available-dates` - รายการวันที่ที่มี tasks
+
+### Tasks & Status (Legacy)
+- `GET /api/tasks/{task_id}` - ตรวจสอบสถานะ task
+- `GET /api/tasks/by-date` - Tasks ตามวันที่
+- `GET /api/tasks/summary` - สรุป tasks ตามวันที่
+- `GET /api/tasks/available-dates` - รายการวันที่ที่มี tasks
+- `GET /api/progress/transcription/{task_id}` - Progress ของ task
+- `GET /api/progress/all-active` - รายการ tasks ที่กำลังทำงาน
+- `GET /api/progress/stats` - สถิติ progress
+
+### History
+- `GET /api/history/transcriptions` - รายการ transcriptions (filter by status, days_ago)
+- `GET /api/history/transcriptions/{task_id}` - รายละเอียด transcription
+- `GET /api/history/stats` - สถิติการ transcription
+- `DELETE /api/history/transcriptions/{task_id}` - ลบ transcription
+- `WS /api/history/ws/realtime` - WebSocket สำหรับ realtime updates
+
+### Webhook & Callback
+- `POST /api/webhook/subscribe` - Subscribe webhook
+- `GET /api/webhook/subscriptions` - รายการ subscriptions
+- `GET /api/webhook/subscribe/{subscription_id}` - ดู subscription
+- `DELETE /api/webhook/subscribe/{subscription_id}` - ยกเลิก subscription
+- `POST /api/webhook/test` - ทดสอบ webhook
+- `GET /api/webhook/stats` - สถิติ webhook
+
+### Monitoring & System
+- `GET /api/monitoring/` - Monitoring stats (รวม)
+- `GET /api/monitoring/redis` - Redis stats
+- `GET /api/monitoring/queues` - Queue stats
+- `GET /api/monitoring/system` - System stats
+- `GET /api/queue/info` - Queue information
+- `GET /api/queue/status` - Queue status
+- `GET /api/queue/stats` - Queue statistics
+
+### Enhanced Transcription
+- `GET /api/transcribe-enhanced/status/{task_id}` - สถานะ enhanced transcription
+- `POST /api/transcribe-enhanced/apply-thai-processing/{task_id}` - ใช้ Thai processing
+- `GET /api/transcribe-enhanced/compare/{task_id}` - เปรียบเทียบก่อน/หลัง Thai processing
+
+### Whisper API (Port 8002)
+
+**Internal Service** (ใช้โดย workers):
+- `GET /health` - Health check
+- `POST /transcribe` - Transcription endpoint
+
+---
+
+## 📡 API Usage
+
+### API Versions
+
+- **V2 Unified API** (`/api/v2/tasks/*`): ✅ **แนะนำ** - รวม endpoints ที่ซ้ำซ้อนไว้ที่เดียว
+  - รองรับ format: `full`, `progress`, `minimal`
+  - Filtering ที่ดีกว่า (status, date, pagination)
+  - Response format ที่สม่ำเสมอ
+- **Legacy API**: ⚠️ **DEPRECATED** - ยังใช้งานได้ แต่จะถูก deprecate ในอนาคต
+  - `GET /api/tasks/{task_id}` → ใช้ `GET /api/v2/tasks/{task_id}` แทน
+  - `GET /api/progress/transcription/{task_id}` → ใช้ `GET /api/v2/tasks/{task_id}?format=progress` แทน
+  - `GET /api/polling/task/{task_id}` → ใช้ `GET /api/v2/tasks/{task_id}?format=minimal` แทน
+  - `GET /api/history/transcriptions` → ใช้ `GET /api/v2/tasks/` แทน
+
+### 1. เริ่ม Transcription
 
 ```bash
-# API Service
-curl http://localhost:8001/health
-
-# Whisper Service
-curl http://localhost:8002/health
-```
-
-#### Upload และ Transcription
-
-```bash
-# 1. Upload ไฟล์วิดีโอ
-curl -X POST http://localhost:8001/upload/ \
-  -F "file=@/path/to/video.mp4"
-
-# Response: {"file_id": "...", "filename": "...", ...}
-
-# 2. เริ่ม Transcription
-curl -X POST http://localhost:8001/transcribe-enhanced/start \
+curl -X POST "https://0b3x44foetagtu-8010.proxy.runpod.net/api/transcribe/" \
   -H "Content-Type: application/json" \
   -d '{
-    "file_id": "<file_id>",
-    "model_size": "base"
+    "file_path": "https://example.com/video.mp4",
+    "language": "th",
+    "model_size": "base",
+    "chunk_duration": 30,
+    "callback_url": "https://your-server.com/webhook"
   }'
-
-# Response: {"task_id": "...", "status": "processing", ...}
-
-# 3. ตรวจสอบ Progress
-curl http://localhost:8001/progress/<task_id>
-
-# 4. ดึงผลลัพธ์
-curl http://localhost:8001/history/transcriptions/<task_id>
 ```
 
-### 2. WebSocket (Real-time Updates)
-
-```javascript
-// เชื่อมต่อ WebSocket
-const ws = new WebSocket('ws://localhost:8001/ws/transcription');
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  console.log('Progress:', data.progress);
-  console.log('Status:', data.status);
-  console.log('Text:', data.text);
-};
-
-// ส่ง task_id เพื่อ subscribe
-ws.send(JSON.stringify({
-  task_id: '<task_id>'
-}));
-```
-
-### 3. Frontend Integration
-
-```javascript
-// ตัวอย่างการใช้งานใน Frontend
-async function transcribeVideo(file) {
-  // 1. Upload file
-  const formData = new FormData();
-  formData.append('file', file);
-  
-  const uploadResponse = await fetch('http://localhost:8001/upload/', {
-    method: 'POST',
-    body: formData
-  });
-  const uploadData = await uploadResponse.json();
-  
-  // 2. Start transcription
-  const transcribeResponse = await fetch('http://localhost:8001/transcribe-enhanced/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      file_id: uploadData.file_id,
-      model_size: 'base'
-    })
-  });
-  const transcribeData = await transcribeResponse.json();
-  
-  // 3. Connect WebSocket for real-time updates
-  const ws = new WebSocket(`ws://localhost:8001/ws/transcription`);
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    updateUI(data);
-  };
-  ws.send(JSON.stringify({ task_id: transcribeData.task_id }));
-  
-  return transcribeData.task_id;
+**Response**:
+```json
+{
+  "task_id": "abc123...",
+  "status": "queued",
+  "message": "Transcription job queued"
 }
 ```
 
-### 4. Test Files
+### 2. ตรวจสอบสถานะ
 
+**✅ แนะนำ: ใช้ V2 Unified API** (Legacy endpoints ถูก deprecate แล้ว)
+
+**Full Format** (ข้อมูลครบถ้วน):
 ```bash
-# เปิด test page ใน browser
-http://localhost:8001/test-files/
-
-# หรือใช้ test files ที่มีอยู่
-# - test-staging.html
-# - test-local.html
-# - test-frontend.html
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/{task_id}?format=full&include_chunks=true"
 ```
 
----
-
-## 📚 API Documentation
-
-### Main Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/upload/` | Upload video/audio file |
-| `POST` | `/transcribe-enhanced/start` | Start transcription |
-| `GET` | `/progress/{task_id}` | Get transcription progress |
-| `GET` | `/history/transcriptions/{task_id}` | Get transcription result |
-| `WS` | `/ws/transcription` | WebSocket for real-time updates |
-
-### Whisper Service Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/models` | List available models |
-| `POST` | `/transcribe` | Transcribe audio file |
-| `POST` | `/download-model` | Download Whisper model |
-
-### ตัวอย่าง Request/Response
-
-**Upload File:**
+**Progress Format** (สำหรับติดตาม progress):
 ```bash
-POST /upload/
-Content-Type: multipart/form-data
-
-Response:
-{
-  "file_id": "uuid-here",
-  "filename": "video.mp4",
-  "size": 12345678,
-  "content_type": "video/mp4"
-}
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/{task_id}?format=progress"
 ```
 
-**Start Transcription:**
+**Minimal Format** (สำหรับ polling - เร็วที่สุด):
 ```bash
-POST /transcribe-enhanced/start
-Content-Type: application/json
-
-Request:
-{
-  "file_id": "uuid-here",
-  "model_size": "base"
-}
-
-Response:
-{
-  "task_id": "task-uuid",
-  "status": "processing",
-  "progress": 0
-}
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/{task_id}?format=minimal"
 ```
 
-**Get Progress:**
-```bash
-GET /progress/{task_id}
-
-Response:
+**Response (Progress Format)**:
+```json
 {
-  "task_id": "task-uuid",
-  "status": "processing",
+  "task_id": "abc123...",
+  "status": "in_progress",
   "progress": 45,
-  "current_segment": 5,
-  "total_segments": 10
+  "current_stage": "transcribing",
+  "current_stage_description": "Transcribing audio chunks",
+  "stage_progress": 3,
+  "elapsed_seconds": 120,
+  "elapsed_formatted": "2:00",
+  "estimated_remaining_seconds": 150,
+  "estimated_remaining_formatted": "2:30"
+}
+```
+
+**หรือใช้ Legacy API**
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/tasks/{task_id}"
+```
+
+### 3. ดึงผลลัพธ์
+
+**แนะนำ: ใช้ V2 Unified API**
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/{task_id}"
+```
+
+**หรือใช้ History API**
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions/{task_id}"
+```
+
+### 4. รายการ Tasks (Filter by Status)
+
+**แนะนำ: ใช้ V2 Unified API**
+```bash
+# ทั้งหมด
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/"
+
+# Filter by status
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/?status=completed"
+
+# Filter by date
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/?date=2024-12-24"
+
+# Pagination
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/?limit=20&offset=0"
+```
+
+**หรือใช้ History API (Legacy)**
+```bash
+# ทั้งหมด
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions"
+
+# In-progress
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions?status=processing"
+
+# Completed
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions?status=completed"
+
+# Failed
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions?status=failed"
+
+# Last 7 days
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/transcriptions?days_ago=7"
+```
+
+### 5. สถิติรวม
+
+**แนะนำ: ใช้ V2 Unified API**
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/stats/summary"
+```
+
+**หรือใช้ History API (Legacy)**
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/history/stats"
+```
+
+### 6. รายการวันที่ที่มี Tasks
+
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/v2/tasks/stats/available-dates"
+```
+
+---
+
+## 🔔 Webhook และ Callback
+
+### Webhook Subscription
+
+```bash
+curl -X POST "https://0b3x44foetagtu-8010.proxy.runpod.net/api/webhook/subscribe" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-server.com/webhook",
+    "events": ["transcription.progress", "transcription.completed", "transcription.failed"]
+  }'
+```
+
+### Callback URL (ใน Request)
+
+เมื่อส่ง request transcription สามารถระบุ `callback_url`:
+
+```json
+{
+  "file_path": "https://example.com/video.mp4",
+  "callback_url": "https://your-server.com/callback"
+}
+```
+
+Service จะส่ง POST request ไปที่ `callback_url` เมื่อ:
+- ✅ Transcription เสร็จสิ้น
+- ❌ Transcription ล้มเหลว
+
+**Callback Payload**:
+```json
+{
+  "task_id": "abc123...",
+  "status": "completed",
+  "progress": 100,
+  "full_text": "...",
+  "segments": [...]
 }
 ```
 
 ---
 
-## 🔧 การแก้ไขปัญหา
+## 🛠️ Maintenance Scripts
 
-### 1. Permission Issues
+### ตรวจสอบ Worker Health
 
 ```bash
-# ตั้งค่า permissions ใหม่
-chmod -R 755 uploads storage temp models
-chmod 644 models/ggml-base.bin
-
-# ตรวจสอบ permissions
-ls -la uploads/ storage/ temp/ models/
+bash scripts/pod/check-worker-health.sh
 ```
 
-### 2. Model Not Found
+### Restart Workers
 
 ```bash
-# ตรวจสอบว่า model มีอยู่
-ls -lh models/ggml-base.bin
-
-# ถ้าไม่มี ให้ดาวน์โหลดใหม่
-./scripts/download-models.sh
-
-# ตรวจสอบว่า Whisper service เห็น model
-curl http://localhost:8002/models
+bash scripts/pod/restart-rq-workers.sh
 ```
 
-### 3. Container ไม่ Healthy
+### ตรวจสอบ GPU Usage
 
 ```bash
-# ตรวจสอบ logs
-docker compose -f docker-compose.digitalocean.yml logs api
-docker compose -f docker-compose.digitalocean.yml logs whisper
-
-# ตรวจสอบ health check
-docker ps
-# ดู status ของ containers
-
-# Restart containers
-docker compose -f docker-compose.digitalocean.yml restart
+bash scripts/pod/check-gpu-usage.sh
 ```
 
-### 4. Port Already in Use
+### ดู Logs
 
 ```bash
-# ตรวจสอบว่า port ถูกใช้อยู่
-sudo netstat -tulpn | grep 8001
-sudo netstat -tulpn | grep 8002
+# Main API
+tail -f /tmp/main-api.log
 
-# แก้ไข ports ใน docker-compose.yml
-# เปลี่ยน "8001:8001" เป็น "8003:8001" (ตัวอย่าง)
-```
+# Whisper API
+tail -f /tmp/whisper.log
 
-### 5. RabbitMQ Connection Failed
-
-```bash
-# ตรวจสอบ RabbitMQ
-docker compose -f docker-compose.digitalocean.yml ps rabbitmq
-
-# ตรวจสอบ environment variables
-docker compose -f docker-compose.digitalocean.yml config | grep RABBITMQ
-
-# Restart RabbitMQ
-docker compose -f docker-compose.digitalocean.yml restart rabbitmq
-```
-
-### 6. Out of Memory
-
-```bash
-# ตรวจสอบ memory usage
-docker stats
-
-# ลดจำนวน workers ใน docker-compose.yml
-# หรือเพิ่ม memory limit
+# Workers
+tail -f /tmp/rq-worker-*.log
 ```
 
 ---
 
-## 📝 หมายเหตุ
+## 📊 Monitoring
 
-### File Permissions
+### Dashboard
 
-- **Directories:** `755` (drwxr-xr-x) - `uploads/`, `temp/`, `storage/`, `models/`
-- **Files:** `644` (rw-r--r--) - ไฟล์ทั่วไป
-- **Docker Volumes:** `777` (drwxrwxrwx) - สำหรับ Docker volume mount
+เข้าถึงผ่าน: `https://0b3x44foetagtu-8010.proxy.runpod.net/dashboard/`
 
-### Performance
+### API Monitoring
 
-- **ไฟล์ 4 วินาที:** ใช้เวลาประมาณ 1-2 นาที (อัตราส่วน ~20x)
-- **Model size:** ggml-base.bin = 148MB
-- **Memory usage:** ประมาณ 1-2GB RAM สำหรับ Whisper service
-
-### Network & Ports
-
-- **API:** Port 8001 (HTTP/WebSocket)
-- **Whisper:** Port 8002 (HTTP)
-- **Redis:** Port 6379
-- **RabbitMQ:** Port 5672 (AMQP), 15672 (Management UI)
-
-### Cleanup
-
-- ไฟล์ใน `temp/` จะถูกลบอัตโนมัติหลัง 24 ชั่วโมง
-- ระบบรองรับ WebSocket และ Polling fallback
+```bash
+curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
+```
 
 ---
 
-## 📞 Support
+## 🔧 Troubleshooting
 
-สำหรับปัญหาหรือคำถามเพิ่มเติม:
-- ตรวจสอบ logs: `docker compose logs -f`
-- ตรวจสอบ health: `curl http://localhost:8001/health`
-- ดู test files: `http://localhost:8001/test-files/`
+### Workers ไม่ทำงาน
+
+1. ตรวจสอบ Worker Health:
+   ```bash
+   bash scripts/pod/check-worker-health.sh
+   ```
+
+2. Restart Workers:
+   ```bash
+   bash scripts/pod/restart-rq-workers.sh
+   ```
+
+### cuDNN/CTranslate2 Issues
+
+1. ตรวจสอบ cuDNN installation:
+   ```bash
+   # ตรวจสอบว่า cuDNN ติดตั้งแล้ว
+   ls -la /usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8
+   
+   # ถ้าไม่มี ให้ติดตั้ง
+   apt-get update
+   apt-get install -y libcudnn8
+   ```
+
+2. ตรวจสอบ `LD_LIBRARY_PATH`:
+   ```bash
+   echo $LD_LIBRARY_PATH
+   # ควรมี: /usr/lib/x86_64-linux-gnu, /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib
+   ```
+
+3. ตรวจสอบ Libraries:
+   ```bash
+   ls -la /usr/lib/x86_64-linux-gnu/libcudnn*.so.8
+   ls -la /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/
+   ls -la /usr/local/lib/python3.10/dist-packages/ctranslate2.libs/
+   ```
+
+4. Restart Services:
+   ```bash
+   bash scripts/pod/start-pod.sh
+   bash scripts/pod/restart-rq-workers.sh
+   ```
+
+5. ตรวจสอบ Whisper API logs:
+   ```bash
+   tail -f /tmp/whisper.log | grep -E "cuDNN|Model loaded|ops_infer"
+   ```
+
+### API ไม่ตอบสนอง
+
+1. ตรวจสอบ Process:
+   ```bash
+   ps aux | grep uvicorn
+   ```
+
+2. ตรวจสอบ Logs:
+   ```bash
+   tail -50 /tmp/main-api.log
+   ```
+
+3. Restart API:
+   ```bash
+   pkill -f "uvicorn.*app.main"
+   bash scripts/pod/start-pod.sh
+   ```
 
 ---
 
-## 📄 License
+## 📝 Environment Variables
 
-[ระบุ License ตามที่ต้องการ]
+ไฟล์ `.env.runpod` ประกอบด้วย:
+
+```bash
+REDIS_URL=redis://default:...@redis-12598.c252.ap-southeast-1-1.ec2.cloud.redislabs.com:12598
+WHISPER_PROVIDER=faster-whisper
+WHISPER_MODEL=base
+WHISPER_DEVICE=cuda
+CUDA_VISIBLE_DEVICES=0
+CUDNN_DISABLE=0
+```
 
 ---
 
-**Last Updated:** 2024
+## 📚 Documentation
+
+- [API Documentation](https://0b3x44foetagtu-8010.proxy.runpod.net/docs) - Swagger UI
+- [Realtime API Guide](docs/REALTIME_API_GUIDE.md)
+- [Faster Whisper Setup](docs/FASTER_WHISPER_SETUP.md)
+
+---
+
+## ✅ Checklist หลัง Restart Pod
+
+- [ ] ติดตั้ง FFmpeg: `apt-get update && apt-get install -y ffmpeg` (ใน container ไม่ต้องใช้ sudo)
+- [ ] ตรวจสอบ FFmpeg: `ffmpeg -version`
+- [ ] `pip install -r requirements.txt`
+- [ ] `bash scripts/pod/start-pod.sh`
+- [ ] `bash scripts/pod/restart-rq-workers.sh`
+- [ ] ตรวจสอบ Worker Health: `bash scripts/pod/check-worker-health.sh`
+- [ ] ทดสอบ API: `curl https://0b3x44foetagtu-8010.proxy.runpod.net/health`
+
+---
+
+**Last Updated**: 2026-01-03
 

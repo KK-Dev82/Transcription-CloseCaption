@@ -118,56 +118,98 @@ class BuiltinProvider(WhisperProvider):
             "model_path": model_path
         }
         
-        try:
-            logger.info(f"[Builtin] 📡 Sending request to {self.whisper_api_url}/transcribe")
-            
-            response = requests.post(
-                f"{self.whisper_api_url}/transcribe",
-                json=request_data,
-                timeout=self.timeout
-            )
-            
-            processing_time = time.time() - start_time
-            
-            if response.status_code == 200:
-                result = response.json()
+        # Retry mechanism for connection errors
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[Builtin] 📡 Sending request to {self.whisper_api_url}/transcribe (attempt {attempt + 1}/{max_retries})")
                 
-                if result.get("success"):
-                    # Normalize segments
-                    segments = result.get("segments", [])
-                    normalized_segments = self.normalize_segments(segments)
-                    
-                    logger.info(f"[Builtin] ✅ Transcription complete!")
-                    logger.info(f"[Builtin] 📊 Text length: {len(result.get('text', ''))} chars")
-                    logger.info(f"[Builtin] 📊 Segments: {len(normalized_segments)}")
-                    logger.info(f"[Builtin] ⏱️ Processing time: {processing_time:.2f}s")
-                    
-                    return TranscriptionResult(
-                        text=result.get('text', ''),
-                        segments=normalized_segments,
-                        language=result.get('language', language),
-                        provider='builtin',
-                        model=model,
-                        duration=None,  # whisper.cpp doesn't return this
-                        processing_time=processing_time
+                # Check if service is available before making request
+                try:
+                    health_response = requests.get(
+                        f"{self.whisper_api_url}/health",
+                        timeout=5
                     )
-                else:
-                    error = result.get('error', 'Unknown error')
-                    logger.error(f"[Builtin] ❌ Whisper API error: {error}")
-                    raise Exception(f"Whisper API error: {error}")
-            else:
-                logger.error(f"[Builtin] ❌ HTTP error: {response.status_code}")
-                raise Exception(f"Whisper API HTTP error: {response.status_code}")
+                    if health_response.status_code != 200:
+                        logger.warning(f"[Builtin] ⚠️  Whisper API health check failed: {health_response.status_code}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"[Builtin] ⏳ Retrying in {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            continue
+                except requests.RequestException as health_e:
+                    logger.warning(f"[Builtin] ⚠️  Whisper API health check failed: {health_e}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"[Builtin] ⏳ Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        continue
                 
-        except requests.Timeout:
-            logger.error(f"[Builtin] ⏰ Timeout after {self.timeout}s")
-            raise Exception(f"Whisper API timeout after {self.timeout}s")
-        except requests.ConnectionError as e:
-            logger.error(f"[Builtin] 🔌 Connection error: {e}")
-            raise Exception(f"Cannot connect to Whisper service: {e}")
-        except Exception as e:
-            logger.error(f"[Builtin] ❌ Transcription error: {e}")
-            raise
+                response = requests.post(
+                    f"{self.whisper_api_url}/transcribe",
+                    json=request_data,
+                    timeout=self.timeout
+                )
+                
+                processing_time = time.time() - start_time
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    if result.get("success"):
+                        # Normalize segments
+                        segments = result.get("segments", [])
+                        normalized_segments = self.normalize_segments(segments)
+                        
+                        logger.info(f"[Builtin] ✅ Transcription complete!")
+                        logger.info(f"[Builtin] 📊 Text length: {len(result.get('text', ''))} chars")
+                        logger.info(f"[Builtin] 📊 Segments: {len(normalized_segments)}")
+                        logger.info(f"[Builtin] ⏱️ Processing time: {processing_time:.2f}s")
+                        
+                        return TranscriptionResult(
+                            text=result.get('text', ''),
+                            segments=normalized_segments,
+                            language=result.get('language', language),
+                            provider='builtin',
+                            model=model,
+                            duration=None,  # whisper.cpp doesn't return this
+                            processing_time=processing_time
+                        )
+                    else:
+                        error = result.get('error', 'Unknown error')
+                        logger.error(f"[Builtin] ❌ Whisper API error: {error}")
+                        # Don't retry on API errors (not connection issues)
+                        raise Exception(f"Whisper API error: {error}")
+                else:
+                    logger.error(f"[Builtin] ❌ HTTP error: {response.status_code}")
+                    if attempt < max_retries - 1 and response.status_code >= 500:
+                        # Retry on server errors
+                        logger.info(f"[Builtin] ⏳ Retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        continue
+                    raise Exception(f"Whisper API HTTP error: {response.status_code}")
+                    
+            except requests.Timeout:
+                logger.error(f"[Builtin] ⏰ Timeout after {self.timeout}s (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    logger.info(f"[Builtin] ⏳ Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                raise Exception(f"Whisper API timeout after {self.timeout}s")
+            except requests.ConnectionError as e:
+                logger.error(f"[Builtin] 🔌 Connection error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"[Builtin] ⏳ Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                raise Exception(f"Cannot connect to Whisper service after {max_retries} attempts: {e}")
+            except Exception as e:
+                # Don't retry on other exceptions
+                logger.error(f"[Builtin] ❌ Transcription error: {e}")
+                raise
+        
+        # Should not reach here, but just in case
+        raise Exception(f"Failed to transcribe after {max_retries} attempts")
     
     def _convert_path_for_docker(self, audio_path: str) -> str:
         """
