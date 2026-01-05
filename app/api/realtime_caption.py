@@ -328,13 +328,44 @@ async def get_realtime_caption_logs(
         # Filter logs ที่เกี่ยวข้องกับ realtime caption
         filtered_lines = []
         for line in all_lines:
-            # ตรวจสอบว่าเป็น log ของ realtime caption หรือไม่
-            is_realtime_caption = (
-                'realtime' in line.lower() and 'caption' in line.lower()
-            ) or 'caption/realtime' in line.lower() or '🎬' in line or 'Close Caption' in line
-            
-            if not is_realtime_caption:
-                continue
+            # ถ้ามี search query ให้ค้นหาใน logs ทั้งหมดก่อน
+            if search:
+                if search.lower() not in line.lower():
+                    continue
+                # ถ้าเจอ search query แล้ว ตรวจสอบว่าเกี่ยวข้องกับ realtime caption หรือไม่
+                # รองรับทั้ง realtime caption API และ transcription requests ที่มี display_mode: realtime_chunks
+                is_realtime_related = (
+                    ('realtime' in line.lower() and 'caption' in line.lower()) or
+                    'caption/realtime' in line.lower() or
+                    '🎬' in line or
+                    'Close Caption' in line or
+                    'display_mode' in line.lower() and 'realtime_chunks' in line.lower() or
+                    '/api/transcribe/' in line and 'realtime' in line.lower() or
+                    'realtime_chunks' in line.lower()
+                )
+                if not is_realtime_related:
+                    # ถ้าไม่ใช่ realtime related แต่มี search query ให้ผ่าน (อาจเป็น task_id หรือ session_id)
+                    # แต่ต้องมี keyword ที่เกี่ยวข้อง
+                    has_relevant_keyword = (
+                        'transcribe' in line.lower() or
+                        'caption' in line.lower() or
+                        'chunk' in line.lower() or
+                        'task_id' in line.lower() or
+                        'session_id' in line.lower()
+                    )
+                    if not has_relevant_keyword:
+                        continue
+            else:
+                # ถ้าไม่มี search query ให้ filter เฉพาะ realtime caption logs
+                is_realtime_caption = (
+                    ('realtime' in line.lower() and 'caption' in line.lower()) or
+                    'caption/realtime' in line.lower() or
+                    '🎬' in line or
+                    'Close Caption' in line or
+                    'display_mode' in line.lower() and 'realtime_chunks' in line.lower()
+                )
+                if not is_realtime_caption:
+                    continue
             
             # Filter ตาม session_id
             if session_id and session_id not in line:
@@ -342,10 +373,6 @@ async def get_realtime_caption_logs(
             
             # Filter ตาม user_id
             if user_id and user_id not in line:
-                continue
-            
-            # Filter ตาม search query
-            if search and search.lower() not in line.lower():
                 continue
             
             filtered_lines.append(line)
@@ -362,6 +389,26 @@ async def get_realtime_caption_logs(
         # Get file stats
         stat = API_LOG_PATH.stat()
         
+        # Debug: ตรวจสอบว่ามี logs ที่เกี่ยวข้องหรือไม่
+        debug_info = {
+            "total_log_lines": len(all_lines),
+            "filtered_realtime_caption_lines": len(filtered_lines),
+            "returned_lines": len(log_lines),
+            "has_search_query": search is not None,
+            "has_session_id_filter": session_id is not None,
+            "has_user_id_filter": user_id is not None
+        }
+        
+        # ถ้าไม่มีผลลัพธ์ ให้แนะนำวิธีค้นหา
+        suggestions = []
+        if len(filtered_lines) == 0:
+            if search:
+                suggestions.append(f"ไม่พบ logs ที่มี '{search}' - ลองตรวจสอบว่า session_id/task_id ถูกต้องหรือไม่")
+                suggestions.append("ลองค้นหาโดยไม่ระบุ search query เพื่อดู logs ทั้งหมด")
+            else:
+                suggestions.append("ไม่พบ logs ของ realtime caption - อาจยังไม่มี activity")
+                suggestions.append("ลองตรวจสอบว่า realtime caption service ทำงานหรือไม่")
+        
         return {
             "logs": [line.rstrip() for line in log_lines],
             "log_path": str(API_LOG_PATH),
@@ -373,6 +420,8 @@ async def get_realtime_caption_logs(
                 "user_id": user_id,
                 "search": search
             },
+            "debug_info": debug_info,
+            "suggestions": suggestions if suggestions else None,
             "file_size": stat.st_size,
             "file_size_mb": round(stat.st_size / (1024 * 1024), 2),
             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
@@ -555,6 +604,83 @@ async def get_user_logs(
             detail=f"Error getting user logs: {str(e)}"
         )
 
+@router.get("/logs/check/{identifier}")
+async def check_identifier_exists(identifier: str):
+    """
+    ตรวจสอบว่า identifier (session_id หรือ task_id) มีอยู่จริงหรือไม่
+    
+    ตรวจสอบทั้ง:
+    - Realtime Caption Sessions
+    - Transcription Tasks (ที่มี display_mode: realtime_chunks)
+    
+    Args:
+        identifier: session_id หรือ task_id ที่ต้องการตรวจสอบ
+        
+    Returns:
+        dict: ข้อมูลเกี่ยวกับ identifier
+    """
+    try:
+        result = {
+            "identifier": identifier,
+            "found_in": [],
+            "session_info": None,
+            "task_info": None,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # ตรวจสอบว่าเป็น session_id ใน realtime caption service หรือไม่
+        session = realtime_caption_service.get_session(identifier)
+        if session:
+            result["found_in"].append("realtime_caption_session")
+            result["session_info"] = {
+                "session_id": session.session_id,
+                "user_id": session.user_id,
+                "status": session.status,
+                "progress": session.progress,
+                "chunks_count": len(session.chunks),
+                "created_at": session.created_at.isoformat()
+            }
+        
+        # ตรวจสอบว่าเป็น task_id ใน transcription storage หรือไม่
+        try:
+            from ..utils.json_storage import JSONStorage
+            json_storage = JSONStorage()
+            task_data = json_storage.get_transcription(identifier)
+            if task_data:
+                result["found_in"].append("transcription_task")
+                display_mode = task_data.get("display_mode", "")
+                if display_mode == "realtime_chunks":
+                    result["found_in"].append("realtime_chunks_transcription")
+                result["task_info"] = {
+                    "task_id": identifier,
+                    "status": task_data.get("status"),
+                    "display_mode": display_mode,
+                    "file_path": task_data.get("file_path"),
+                    "created_at": task_data.get("created_at")
+                }
+        except Exception as e:
+            logger.debug(f"Could not check transcription task: {e}")
+        
+        # ตรวจสอบใน logs
+        if API_LOG_PATH.exists():
+            with open(API_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+                all_lines = f.readlines()
+            
+            matching_lines = [line for line in all_lines if identifier in line]
+            if matching_lines:
+                result["found_in"].append("logs")
+                result["log_matches_count"] = len(matching_lines)
+                result["sample_log_lines"] = [line.rstrip() for line in matching_lines[:5]]  # 5 บรรทัดแรก
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking identifier {identifier}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error checking identifier: {str(e)}"
+        )
+
 @router.get("/logs/search")
 async def search_realtime_caption_logs(
     query: str = Query(..., description="Search query (case-insensitive)"),
@@ -590,17 +716,33 @@ async def search_realtime_caption_logs(
         query_lower = query.lower()
         
         for i, line in enumerate(all_lines):
-            # ตรวจสอบว่าเป็น log ของ realtime caption หรือไม่
-            is_realtime_caption = (
-                'realtime' in line.lower() and 'caption' in line.lower()
-            ) or 'caption/realtime' in line.lower() or '🎬' in line or 'Close Caption' in line
-            
-            if not is_realtime_caption:
-                continue
-            
-            # ตรวจสอบ query
+            # ตรวจสอบ query ก่อน (เพื่อให้ค้นหาได้แม้ไม่ใช่ realtime caption log โดยตรง)
             if query_lower not in line.lower():
                 continue
+            
+            # ตรวจสอบว่าเกี่ยวข้องกับ realtime caption หรือไม่
+            # รองรับทั้ง realtime caption API และ transcription requests ที่มี display_mode: realtime_chunks
+            is_realtime_related = (
+                ('realtime' in line.lower() and 'caption' in line.lower()) or
+                'caption/realtime' in line.lower() or
+                '🎬' in line or
+                'Close Caption' in line or
+                'display_mode' in line.lower() and 'realtime_chunks' in line.lower() or
+                '/api/transcribe/' in line and 'realtime' in line.lower() or
+                'realtime_chunks' in line.lower()
+            )
+            
+            # ถ้าไม่ใช่ realtime related แต่มี query ให้ตรวจสอบว่ามี keyword ที่เกี่ยวข้องหรือไม่
+            if not is_realtime_related:
+                has_relevant_keyword = (
+                    'transcribe' in line.lower() or
+                    'caption' in line.lower() or
+                    'chunk' in line.lower() or
+                    'task_id' in line.lower() or
+                    'session_id' in line.lower()
+                )
+                if not has_relevant_keyword:
+                    continue
             
             # Filter ตาม session_id
             if session_id and session_id not in line:
