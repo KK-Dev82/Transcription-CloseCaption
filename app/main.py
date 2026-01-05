@@ -144,6 +144,15 @@ try:
 except ImportError:
     pass
 
+# Include realtime transcription router (/api/transcription/realtime/chunk)
+try:
+    from app.api import realtime_transcription_router
+    if realtime_transcription_router:
+        app.include_router(realtime_transcription_router, prefix="/api", tags=["realtime-transcription"])
+        logger.info("✅ Realtime transcription router included")
+except ImportError as e:
+    logger.warning(f"Realtime transcription router not available: {e}")
+
 # Include internal router (for worker endpoints)
 try:
     from app.api import internal_router

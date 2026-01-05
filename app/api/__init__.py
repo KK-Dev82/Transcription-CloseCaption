@@ -26,6 +26,12 @@ try:
 except ImportError:
     internal_router = None
 
+# Realtime transcription router
+try:
+    from .realtime_transcription import router as realtime_transcription_router
+except ImportError:
+    realtime_transcription_router = None
+
 __all__ = [
     "upload_router",
     "caption_router", 
@@ -36,4 +42,7 @@ if transcription_router:
     __all__.append("transcription_router")
 
 if internal_router:
-    __all__.append("internal_router") 
+    __all__.append("internal_router")
+
+if realtime_transcription_router:
+    __all__.append("realtime_transcription_router") 
