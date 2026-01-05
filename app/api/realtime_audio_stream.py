@@ -75,12 +75,14 @@ async def receive_audio_stream(
         f"ContentType={request.headers.get('content-type', 'unknown')}"
     )
     
-    # Store session info
+    # Store session info (เก็บ datetime object เพื่อใช้คำนวณ epoch_ms)
+    session_start_time = datetime.now(timezone.utc)
     active_stream_sessions[session_id] = {
         "session_id": session_id,
         "meeting_id": meeting_id,
         "status": "streaming",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": session_start_time,  # ✅ เก็บ datetime object แทน ISO string
+        "created_at_iso": session_start_time.isoformat(),  # สำหรับ JSON serialization
         "audio_size": 0,
         "chunks_processed": 0
     }
@@ -88,14 +90,37 @@ async def receive_audio_stream(
     async def stream_generator():
         """Generator สำหรับ StreamingResponse"""
         try:
+            # ✅ Send sync event first (สำหรับ sync กับวิดีโอ)
+            session_start_time = datetime.now(timezone.utc)
+            anchor_epoch_ms = int(session_start_time.timestamp() * 1000)
+            
+            sync_event = {
+                "type": "sync",
+                "session_id": session_id,
+                "stream_id": meeting_id if meeting_id != "unknown" else session_id,
+                "clock": {
+                    "kind": "program_date_time",
+                    "anchor_epoch_ms": anchor_epoch_ms,
+                    "anchor_video_time_s": 0.0
+                },
+                "hls": {
+                    "playlist_url": None,  # จะต้อง set จาก frontend
+                    "target_latency_ms": 3500
+                },
+                "seq": 1,
+                "ts": session_start_time.isoformat()
+            }
+            yield json.dumps(sync_event, ensure_ascii=False) + "\n"
+            
             # Yield initial status (NDJSON format)
             initial_response = {
+                "type": "status",
                 "session_id": session_id,
                 "status": "streaming",
                 "message": "Audio stream started, processing chunks in background",
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "created_at": session_start_time.isoformat()
             }
-            yield json.dumps(initial_response) + "\n"
+            yield json.dumps(initial_response, ensure_ascii=False) + "\n"
             
             # Process streaming audio (consume request body)
             # ⚠️ สำคัญ: อ่าน stream ใน generator เพื่อให้ connection ยังเปิดอยู่
@@ -108,6 +133,7 @@ async def receive_audio_stream(
             # Yield final status
             final_status = active_stream_sessions.get(session_id, {})
             final_response = {
+                "type": "status",
                 "session_id": session_id,
                 "status": final_status.get("status", "completed"),
                 "message": "Audio stream processing completed",
@@ -115,7 +141,7 @@ async def receive_audio_stream(
                 "audio_size": final_status.get("audio_size", 0),
                 "chunks_processed": final_status.get("chunks_processed", 0)
             }
-            yield json.dumps(final_response) + "\n"
+            yield json.dumps(final_response, ensure_ascii=False) + "\n"
             
         except asyncio.CancelledError:
             logger.warning(f"⚠️ Stream generator cancelled: SessionId={session_id}")
@@ -124,12 +150,13 @@ async def receive_audio_stream(
                 active_stream_sessions[session_id]["status"] = "cancelled"
             # Yield cancellation status
             cancel_response = {
+                "type": "status",
                 "session_id": session_id,
                 "status": "cancelled",
                 "message": "Audio stream processing cancelled (client disconnected)",
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            yield json.dumps(cancel_response) + "\n"
+            yield json.dumps(cancel_response, ensure_ascii=False) + "\n"
             raise
         except Exception as e:
             logger.error(f"❌ Error in stream generator: SessionId={session_id}, Error={e}", exc_info=True)
@@ -139,13 +166,14 @@ async def receive_audio_stream(
                 active_stream_sessions[session_id]["error"] = str(e)
             # Yield error status
             error_response = {
+                "type": "status",
                 "session_id": session_id,
                 "status": "failed",
                 "message": f"Error processing audio stream: {str(e)}",
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "error": str(e)
             }
-            yield json.dumps(error_response) + "\n"
+            yield json.dumps(error_response, ensure_ascii=False) + "\n"
     
     # Return StreamingResponse with NDJSON format
     return StreamingResponse(
@@ -437,34 +465,70 @@ async def process_audio_chunk_transcription(
         else:
             user_id = f"stream-{session_id}"
         
-        # Calculate timing (use chunk index as base time)
-        base_time = chunk_index * 5.0  # 5 seconds per chunk
+        # ✅ Calculate timing using epoch_ms (milliseconds since epoch)
+        # ใช้ session start time + chunk offset
+        session_info = active_stream_sessions.get(session_id, {})
+        session_start_time = session_info.get("created_at")
+        if session_start_time:
+            # ใช้ datetime object โดยตรง (ไม่ต้อง parse)
+            try:
+                if isinstance(session_start_time, datetime):
+                    base_epoch_ms = int(session_start_time.timestamp() * 1000)
+                elif isinstance(session_start_time, str):
+                    session_dt = datetime.fromisoformat(session_start_time.replace('Z', '+00:00'))
+                    base_epoch_ms = int(session_dt.timestamp() * 1000)
+                else:
+                    raise ValueError(f"Unexpected type for created_at: {type(session_start_time)}")
+            except Exception as e:
+                logger.warning(f"Failed to parse session start time: {e}, using current time")
+                base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        else:
+            base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         
-        # Send each segment as a caption chunk
+        # Calculate chunk start time in seconds (from session start)
+        chunk_start_seconds = chunk_index * 5.0  # 5 seconds per chunk
+        
+        # Send each segment as a caption event (ตาม format ที่แนะนำ)
         for idx, segment in enumerate(segments):
-            chunk_data = {
-                "seq": chunk_index * 100 + idx,  # Unique sequence number
-                "t0": base_time + segment.get("start", 0.0),
-                "t1": base_time + segment.get("end", segment.get("start", 0.0) + 5.0),
-                "text": segment.get("text", ""),
-                "isFinal": True
-            }
+            segment_start_s = chunk_start_seconds + segment.get("start", 0.0)
+            segment_end_s = chunk_start_seconds + segment.get("end", segment.get("start", 0.0) + 5.0)
             
-            message = {
-                "type": "caption.chunk",
+            # Convert to epoch_ms
+            start_epoch_ms = base_epoch_ms + int(segment_start_s * 1000)
+            end_epoch_ms = base_epoch_ms + int(segment_end_s * 1000)
+            
+            # ✅ Create caption event ตาม format ที่แนะนำ
+            caption_event = {
+                "type": "caption",
                 "session_id": session_id,
-                "chunk_index": chunk_index,
-                "segment_index": idx,
-                "chunk_data": chunk_data,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "stream_id": meeting_id if meeting_id != "unknown" else session_id,
+                "seq": chunk_index * 100 + idx,  # Unique sequence number
+                "timing": {
+                    "kind": "epoch_ms",
+                    "start": start_epoch_ms,
+                    "end": end_epoch_ms
+                },
+                "text": segment.get("text", ""),
+                "lang": "th",
+                "is_final": True,
+                "tokens": [],  # Optional: จะเพิ่ม tokens ถ้าต้องการ
+                "meta": {
+                    "speaker": None,
+                    "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
+                    "model": "faster-whisper",
+                    "chunk_id": f"c_{chunk_index:04d}_{idx:02d}"
+                },
+                "ts": datetime.now(timezone.utc).isoformat()
             }
             
             # Send via WebSocket
-            await websocket_manager.send_to_user(user_id, message)
+            await websocket_manager.send_to_user(user_id, caption_event)
             
             logger.debug(
-                f"📡 Sent caption chunk: SessionId={session_id}, "
-                f"ChunkIndex={chunk_index}, SegmentIndex={idx}, Text={chunk_data['text'][:50]}..."
+                f"📡 Sent caption event: SessionId={session_id}, "
+                f"ChunkIndex={chunk_index}, SegmentIndex={idx}, "
+                f"Start={start_epoch_ms}ms, End={end_epoch_ms}ms, "
+                f"Text={caption_event['text'][:50]}..."
             )
         
     except Exception as e:
