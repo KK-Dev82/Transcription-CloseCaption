@@ -153,6 +153,15 @@ try:
 except ImportError as e:
     logger.warning(f"Realtime transcription router not available: {e}")
 
+# Include realtime caption router (/api/caption/realtime/logs)
+try:
+    from app.api import realtime_caption_router
+    if realtime_caption_router:
+        app.include_router(realtime_caption_router, prefix="/api", tags=["realtime-caption"])
+        logger.info("✅ Realtime caption router included")
+except ImportError as e:
+    logger.warning(f"Realtime caption router not available: {e}")
+
 # Include internal router (for worker endpoints)
 try:
     from app.api import internal_router

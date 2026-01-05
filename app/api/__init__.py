@@ -32,6 +32,12 @@ try:
 except ImportError:
     realtime_transcription_router = None
 
+# Realtime caption router
+try:
+    from .realtime_caption import router as realtime_caption_router
+except ImportError:
+    realtime_caption_router = None
+
 __all__ = [
     "upload_router",
     "caption_router", 
@@ -45,4 +51,7 @@ if internal_router:
     __all__.append("internal_router")
 
 if realtime_transcription_router:
-    __all__.append("realtime_transcription_router") 
+    __all__.append("realtime_transcription_router")
+
+if realtime_caption_router:
+    __all__.append("realtime_caption_router") 
