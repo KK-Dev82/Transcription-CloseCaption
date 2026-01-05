@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, Header, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import aiofiles
+import json
 from io import BytesIO
 
 from ..services.whisper_service import WhisperService
@@ -43,7 +45,7 @@ class AudioStreamResponse(BaseModel):
     created_at: str
 
 
-@router.post("/stream", response_model=AudioStreamResponse)
+@router.post("/stream")
 async def receive_audio_stream(
     request: Request,
     x_meeting_id: Optional[str] = Header(None, alias="X-Meeting-Id"),
@@ -53,8 +55,8 @@ async def receive_audio_stream(
     รับ continuous audio stream จาก Audio Tap และทำ transcription แบบ real-time
     รองรับ streaming (chunked encoding) โดยอ่าน chunk by chunk
     
-    ⚠️ สำคัญ: อ่าน stream ใน request handler โดยตรง (ไม่ใช้ BackgroundTasks)
-    เพื่อให้แน่ใจว่า connection ยังเปิดอยู่และสามารถอ่าน stream ได้
+    ✅ ใช้ StreamingResponse (NDJSON) เพื่อให้ connection ยังเปิดอยู่
+    และสามารถอ่าน request body ได้ตลอดเวลา
     
     Args:
         request: FastAPI Request object (สำหรับอ่าน stream)
@@ -62,62 +64,98 @@ async def receive_audio_stream(
         x_session_id: Session ID (optional, from header)
         
     Returns:
-        AudioStreamResponse: Session ID และสถานะ
+        StreamingResponse: NDJSON stream with status updates
     """
-    try:
-        # Generate session ID
-        session_id = x_session_id or str(uuid.uuid4())
-        meeting_id = x_meeting_id or "unknown"
-        
-        logger.info(
-            f"📥 Received audio stream request: SessionId={session_id}, MeetingId={meeting_id}, "
-            f"ContentType={request.headers.get('content-type', 'unknown')}"
-        )
-        
-        # Store session info
-        active_stream_sessions[session_id] = {
-            "session_id": session_id,
-            "meeting_id": meeting_id,
-            "status": "streaming",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "audio_size": 0,
-            "chunks_processed": 0
-        }
-        
-        # ✅ อ่าน stream ใน request handler โดยตรง
-        # ใช้ asyncio.create_task() เพื่อให้ transcription processing ทำงานใน background
-        # แต่ยังคงอ่าน stream ใน handler เพื่อให้แน่ใจว่า connection ยังเปิดอยู่
-        
-        # สร้าง task สำหรับอ่าน stream และประมวลผล transcription
-        stream_task = asyncio.create_task(
-            process_streaming_audio(
+    # Generate session ID
+    session_id = x_session_id or str(uuid.uuid4())
+    meeting_id = x_meeting_id or "unknown"
+    
+    logger.info(
+        f"📥 Received audio stream request: SessionId={session_id}, MeetingId={meeting_id}, "
+        f"ContentType={request.headers.get('content-type', 'unknown')}"
+    )
+    
+    # Store session info
+    active_stream_sessions[session_id] = {
+        "session_id": session_id,
+        "meeting_id": meeting_id,
+        "status": "streaming",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "audio_size": 0,
+        "chunks_processed": 0
+    }
+    
+    async def stream_generator():
+        """Generator สำหรับ StreamingResponse"""
+        try:
+            # Yield initial status (NDJSON format)
+            initial_response = {
+                "session_id": session_id,
+                "status": "streaming",
+                "message": "Audio stream started, processing chunks in background",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            yield json.dumps(initial_response) + "\n"
+            
+            # Process streaming audio (consume request body)
+            # ⚠️ สำคัญ: อ่าน stream ใน generator เพื่อให้ connection ยังเปิดอยู่
+            await process_streaming_audio(
                 session_id=session_id,
                 meeting_id=meeting_id,
                 request_body=request.stream()
             )
-        )
-        
-        # Return response ทันทีหลังจากเริ่ม task
-        # ⚠️ สำคัญ: task จะยังคงอ่าน stream ต่อแม้ response ถูกส่งแล้ว
-        # FastAPI จะไม่ปิด connection จนกว่า handler จะจบ
-        # แต่ถ้า return response แล้ว handler จบ connection อาจถูกปิด
-        
-        # วิธีแก้: ใช้ asyncio.shield() เพื่อป้องกัน task ถูก cancel
-        # หรืออ่าน stream ใน handler โดยตรง (ไม่ return response จนกว่าจะเริ่มอ่าน)
-        
-        # สำหรับตอนนี้: return response ทันที และให้ task ทำงานต่อ
-        # ถ้ามีปัญหา connection ถูกปิด ต้องแก้ให้อ่าน stream ใน handler โดยตรง
-        
-        return AudioStreamResponse(
-            session_id=session_id,
-            status="streaming",
-            message="Audio stream started, processing chunks in background",
-            created_at=datetime.now(timezone.utc).isoformat()
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error receiving audio stream: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error receiving audio stream: {str(e)}")
+            
+            # Yield final status
+            final_status = active_stream_sessions.get(session_id, {})
+            final_response = {
+                "session_id": session_id,
+                "status": final_status.get("status", "completed"),
+                "message": "Audio stream processing completed",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "audio_size": final_status.get("audio_size", 0),
+                "chunks_processed": final_status.get("chunks_processed", 0)
+            }
+            yield json.dumps(final_response) + "\n"
+            
+        except asyncio.CancelledError:
+            logger.warning(f"⚠️ Stream generator cancelled: SessionId={session_id}")
+            # Update session status
+            if session_id in active_stream_sessions:
+                active_stream_sessions[session_id]["status"] = "cancelled"
+            # Yield cancellation status
+            cancel_response = {
+                "session_id": session_id,
+                "status": "cancelled",
+                "message": "Audio stream processing cancelled (client disconnected)",
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            yield json.dumps(cancel_response) + "\n"
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error in stream generator: SessionId={session_id}, Error={e}", exc_info=True)
+            # Update session status
+            if session_id in active_stream_sessions:
+                active_stream_sessions[session_id]["status"] = "failed"
+                active_stream_sessions[session_id]["error"] = str(e)
+            # Yield error status
+            error_response = {
+                "session_id": session_id,
+                "status": "failed",
+                "message": f"Error processing audio stream: {str(e)}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(e)
+            }
+            yield json.dumps(error_response) + "\n"
+    
+    # Return StreamingResponse with NDJSON format
+    return StreamingResponse(
+        stream_generator(),
+        media_type="application/x-ndjson",  # NDJSON format
+        headers={
+            "X-Session-Id": session_id,
+            "X-Meeting-Id": meeting_id
+        }
+    )
 
 
 async def process_streaming_audio(
@@ -128,8 +166,13 @@ async def process_streaming_audio(
     """
     อ่าน audio stream chunk by chunk และประมวลผล transcription ทีละ chunk
     
-    ⚠️ สำคัญ: ฟังก์ชันนี้จะถูกเรียกจาก request handler โดยตรง
+    ✅ ฟังก์ชันนี้ถูกเรียกจาก stream_generator() ใน StreamingResponse
     เพื่อให้แน่ใจว่า connection ยังเปิดอยู่และสามารถอ่าน stream ได้
+    
+    Args:
+        session_id: Session ID
+        meeting_id: Meeting ID
+        request_body: Request stream iterator
     """
     temp_dir = Path("temp")
     temp_dir.mkdir(exist_ok=True)
@@ -288,19 +331,43 @@ async def process_streaming_audio(
             f"TotalChunks={chunk_index}, TotalBytes={total_bytes}"
         )
         
+        # Log final status for debugging
+        if total_bytes == 0:
+            logger.warning(
+                f"⚠️ Warning: No audio data received for SessionId={session_id}"
+            )
+        else:
+            logger.info(
+                f"📊 Final stats: SessionId={session_id}, "
+                f"TotalBytes={total_bytes}, ChunksProcessed={chunk_index}"
+            )
+        
     except asyncio.CancelledError:
-        logger.warning(f"⚠️ Streaming audio processing cancelled: SessionId={session_id}")
+        logger.warning(
+            f"⚠️ Streaming audio processing cancelled (client disconnected): "
+            f"SessionId={session_id}, TotalBytes={total_bytes}, ChunksProcessed={chunk_index}"
+        )
         if session_id in active_stream_sessions:
             active_stream_sessions[session_id]["status"] = "cancelled"
         raise
     except Exception as e:
         logger.error(
-            f"❌ Error processing streaming audio: SessionId={session_id}, Error={e}",
+            f"❌ Error processing streaming audio: SessionId={session_id}, "
+            f"TotalBytes={total_bytes}, ChunksProcessed={chunk_index}, Error={e}",
             exc_info=True
         )
         if session_id in active_stream_sessions:
             active_stream_sessions[session_id]["status"] = "failed"
             active_stream_sessions[session_id]["error"] = str(e)
+        raise
+    finally:
+        # Cleanup: Log final state
+        final_state = active_stream_sessions.get(session_id, {})
+        logger.info(
+            f"🏁 Real-time stream ended: SessionId={session_id}, "
+            f"Status={final_state.get('status', 'unknown')}, "
+            f"TotalBytes={total_bytes}, ChunksProcessed={chunk_index}"
+        )
 
 
 def create_wav_header(data_size: int) -> bytes:
