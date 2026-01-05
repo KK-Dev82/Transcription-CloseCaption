@@ -1,35 +1,77 @@
 """
-API endpoints สำหรับจัดการ RabbitMQ queue
+API endpoints สำหรับจัดการ Queue (รองรับทั้ง RabbitMQ และ Redis)
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 import pika
 import uuid
 import json
 import time
 
-from ..services.rabbitmq_service import RabbitMQService
+# Optional import - rabbitmq_service may not exist
+try:
+    from ..services.rabbitmq_service import RabbitMQService
+    RABBITMQ_AVAILABLE = True
+except ImportError:
+    RabbitMQService = None
+    RABBITMQ_AVAILABLE = False
+
+# Try to use Redis Queue wrapper as fallback
+try:
+    from ..services.redis_queue_wrapper import RedisQueueWrapper
+    REDIS_QUEUE_AVAILABLE = True
+except ImportError:
+    RedisQueueWrapper = None
+    REDIS_QUEUE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/queue", tags=["Queue Management"])
 
+def get_queue_service():
+    """
+    Get queue service (RabbitMQ or Redis fallback)
+    Returns service with compatible interface: get_queue_info(), purge_queue()
+    """
+    # Try RabbitMQ first
+    if RABBITMQ_AVAILABLE:
+        try:
+            service = RabbitMQService()
+            service._ensure_connection()
+            logger.debug("✅ Using RabbitMQ service")
+            return service
+        except Exception as e:
+            logger.warning(f"⚠️ RabbitMQ service failed: {e}, trying Redis fallback...")
+    
+    # Fallback to Redis Queue
+    if REDIS_QUEUE_AVAILABLE:
+        try:
+            service = RedisQueueWrapper()
+            logger.info("✅ Using Redis Queue service (fallback from RabbitMQ)")
+            return service
+        except Exception as e:
+            logger.error(f"❌ Redis Queue service also failed: {e}")
+            raise ImportError(f"Neither RabbitMQ nor Redis Queue service is available. RabbitMQ error: {RABBITMQ_AVAILABLE}, Redis error: {e}")
+    
+    raise ImportError("No queue service available (RabbitMQ and Redis Queue both unavailable)")
+
+# Backward compatibility
 def get_rabbitmq_service():
-    """Get a fresh RabbitMQ service instance with active connection"""
-    service = RabbitMQService()
-    service._ensure_connection()
-    return service
+    """Get queue service (for backward compatibility)"""
+    return get_queue_service()
 
 @router.get("/info")
 async def get_queue_info():
-    """ดึงข้อมูล queue ทั้งหมด"""
+    """ดึงข้อมูล queue ทั้งหมด (รองรับทั้ง RabbitMQ และ Redis)"""
     try:
-        rabbitmq_service = get_rabbitmq_service()
-        queue_info = rabbitmq_service.get_queue_info()
+        queue_service = get_queue_service()
+        queue_info = queue_service.get_queue_info()
+        service_type = "RabbitMQ" if (RABBITMQ_AVAILABLE and RabbitMQService and isinstance(queue_service, RabbitMQService)) else "Redis Queue"
         return {
-            "message": "ดึงข้อมูล queue สำเร็จ",
+            "message": f"ดึงข้อมูล queue สำเร็จ (ใช้ {service_type})",
+            "service_type": service_type,
             "queues": queue_info
         }
     except Exception as e:
@@ -40,6 +82,7 @@ async def get_queue_info():
 async def get_queue_status():
     """
     ตรวจสอบสถานะ queue และบอกว่าสามารถรับ request ใหม่ได้หรือไม่
+    (รองรับทั้ง RabbitMQ และ Redis)
     
     Returns:
         - available: True ถ้ายังรับ request ได้
@@ -48,7 +91,8 @@ async def get_queue_status():
     """
     try:
         import os
-        queue_info = rabbitmq_service.get_queue_info()
+        queue_service = get_queue_service()
+        queue_info = queue_service.get_queue_info()
         
         # Get queue limits from env
         MAX_QUEUE_REQUEST = int(os.getenv('MAX_QUEUE_REQUEST', '51'))
@@ -123,9 +167,10 @@ async def get_queue_status():
 
 @router.post("/purge/{queue_name}")
 async def purge_queue(queue_name: str):
-    """ลบ messages ทั้งหมดใน queue"""
+    """ลบ messages ทั้งหมดใน queue (รองรับทั้ง RabbitMQ และ Redis)"""
     try:
-        success = rabbitmq_service.purge_queue(queue_name)
+        queue_service = get_queue_service()
+        success = queue_service.purge_queue(queue_name)
         if success:
             return {
                 "message": f"ลบ messages ใน queue {queue_name} เรียบร้อย",
@@ -139,18 +184,32 @@ async def purge_queue(queue_name: str):
 
 @router.get("/health")
 async def check_queue_health():
-    """ตรวจสอบสถานะของ RabbitMQ"""
+    """ตรวจสอบสถานะของ Queue Service (รองรับทั้ง RabbitMQ และ Redis)"""
     try:
         # ตรวจสอบการเชื่อมต่อ
-        queue_info = rabbitmq_service.get_queue_info()
+        queue_service = get_queue_service()
+        queue_info = queue_service.get_queue_info()
+        
+        service_type = "RabbitMQ" if (RABBITMQ_AVAILABLE and RabbitMQService and isinstance(queue_service, RabbitMQService)) else "Redis Queue"
         
         # ตรวจสอบว่ามี queue ทั้งหมดหรือไม่
-        expected_queues = [
-            'video_trim_queue',
-            'video_merge_queue', 
-            'video_convert_queue',
-            'video_resize_queue'
-        ]
+        # สำหรับ Redis Queue จะมี queue ที่แตกต่างจาก RabbitMQ
+        if isinstance(queue_service, RedisQueueWrapper):
+            # Redis Queue - ตรวจสอบ transcription queues
+            expected_queues = [
+                'transcription_gpu0',
+                'transcription_priority',
+                'transcription_cpu',
+                'transcription_preprocess'
+            ]
+        else:
+            # RabbitMQ - ตรวจสอบ video processing queues
+            expected_queues = [
+                'video_trim_queue',
+                'video_merge_queue', 
+                'video_convert_queue',
+                'video_resize_queue'
+            ]
         
         available_queues = list(queue_info.keys())
         missing_queues = [q for q in expected_queues if q not in available_queues]
@@ -158,6 +217,7 @@ async def check_queue_health():
         if missing_queues:
             return {
                 "status": "warning",
+                "service_type": service_type,
                 "message": f"ขาด queue: {', '.join(missing_queues)}",
                 "available_queues": available_queues,
                 "missing_queues": missing_queues
@@ -165,25 +225,29 @@ async def check_queue_health():
         else:
             return {
                 "status": "healthy",
-                "message": "RabbitMQ ทำงานปกติ",
+                "service_type": service_type,
+                "message": f"{service_type} ทำงานปกติ",
                 "available_queues": available_queues,
                 "queue_info": queue_info
             }
             
     except Exception as e:
-        logger.error(f"เกิดข้อผิดพลาดในการตรวจสอบ RabbitMQ: {e}")
+        logger.error(f"เกิดข้อผิดพลาดในการตรวจสอบ Queue Service: {e}")
         return {
             "status": "error",
-            "message": f"ไม่สามารถเชื่อมต่อ RabbitMQ: {str(e)}",
+            "service_type": "unknown",
+            "message": f"ไม่สามารถเชื่อมต่อ Queue Service: {str(e)}",
             "available_queues": [],
-            "missing_queues": expected_queues
+            "missing_queues": []
         }
 
 @router.get("/stats")
 async def get_queue_stats():
-    """ดึงสถิติของ queue"""
+    """ดึงสถิติของ queue (รองรับทั้ง RabbitMQ และ Redis)"""
     try:
-        queue_info = rabbitmq_service.get_queue_info()
+        queue_service = get_queue_service()
+        queue_info = queue_service.get_queue_info()
+        service_type = "RabbitMQ" if (RABBITMQ_AVAILABLE and RabbitMQService and isinstance(queue_service, RabbitMQService)) else "Redis Queue"
         
         total_messages = sum(q['message_count'] for q in queue_info.values())
         total_consumers = sum(q['consumer_count'] for q in queue_info.values())
@@ -196,7 +260,8 @@ async def get_queue_stats():
         }
         
         return {
-            "message": "ดึงสถิติ queue สำเร็จ",
+            "message": f"ดึงสถิติ queue สำเร็จ (ใช้ {service_type})",
+            "service_type": service_type,
             "stats": stats
         }
         
@@ -254,8 +319,17 @@ async def test_queue_flow(count: int = 1):
             try:
                 # ใช้ send_transcription_request_task method ซึ่งมี retry logic และ connection handling
                 # แต่เราต้องส่ง test message โดยตรงผ่าน connection
-                # ใช้ method ที่มีอยู่แล้วใน rabbitmq_service แต่ส่ง test message โดยตรง
-                from ..services.rabbitmq_service import RabbitMQService
+                # ใช้ method ที่มีอยู่แล้วใน queue service แต่ส่ง test message โดยตรง
+                queue_service = get_queue_service()
+                
+                # Test flow ต้องการ RabbitMQ สำหรับ publish message
+                # ถ้าใช้ Redis Queue จะต้องใช้ Redis Queue Service แทน
+                if not RABBITMQ_AVAILABLE or not (RabbitMQService and isinstance(queue_service, RabbitMQService)):
+                    raise HTTPException(
+                        status_code=501, 
+                        detail="Test flow endpoint requires RabbitMQ. Redis Queue test flow not yet implemented."
+                    )
+                
                 test_rabbitmq = RabbitMQService()
                 
                 # ใช้ send_transcription_request_task method ซึ่งมี retry logic
@@ -378,7 +452,8 @@ async def check_task_in_queue(task_id: str):
             result["recommendations"].append("⚠️ Task ไม่พบใน storage - อาจถูกลบหรือยังไม่ถูกสร้าง")
         
         # 2. ตรวจสอบ Queue Status
-        queue_info = rabbitmq_service.get_queue_info()
+        queue_service = get_queue_service()
+        queue_info = queue_service.get_queue_info()
         
         # ตรวจสอบ audio_extraction_queue
         audio_extraction_queue = queue_info.get('audio_extraction_queue', {})

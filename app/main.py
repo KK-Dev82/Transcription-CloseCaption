@@ -45,8 +45,11 @@ async def lifespan(app: FastAPI):
             import asyncio
             await asyncio.wait_for(initialize_websocket_service(), timeout=1.0)
             logger.info("✅ WebSocket service initialized")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️  WebSocket service initialization timeout (continuing anyway)")
         except Exception as e:
-            logger.warning(f"⚠️  WebSocket service initialization failed: {e} (continuing anyway)")
+            error_msg = str(e) if e else "Unknown error"
+            logger.warning(f"⚠️  WebSocket service initialization failed: {error_msg} (continuing anyway)")
     
     # Start WebSocket init in background (don't wait)
     import asyncio
