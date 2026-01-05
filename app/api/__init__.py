@@ -38,6 +38,12 @@ try:
 except ImportError:
     realtime_caption_router = None
 
+# Realtime audio stream router
+try:
+    from .realtime_audio_stream import router as realtime_audio_stream_router
+except ImportError:
+    realtime_audio_stream_router = None
+
 __all__ = [
     "upload_router",
     "caption_router", 

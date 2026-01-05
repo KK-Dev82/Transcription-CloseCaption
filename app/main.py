@@ -162,6 +162,15 @@ try:
 except ImportError as e:
     logger.warning(f"Realtime caption router not available: {e}")
 
+# Include realtime audio stream router (/api/transcription/realtime/stream)
+try:
+    from app.api import realtime_audio_stream_router
+    if realtime_audio_stream_router:
+        app.include_router(realtime_audio_stream_router, prefix="/api", tags=["realtime-audio-stream"])
+        logger.info("✅ Realtime audio stream router included")
+except ImportError as e:
+    logger.warning(f"Realtime audio stream router not available: {e}")
+
 # Include internal router (for worker endpoints)
 try:
     from app.api import internal_router
