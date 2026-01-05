@@ -41,6 +41,18 @@ Scripts สำหรับการจัดการ Models และ Utilities
    - GPU workers (2 per GPU)
    - CPU workers (2)
 
+### Restart Services:
+```bash
+# Restart Main API เฉพาะ (ไม่กระทบ services อื่น)
+bash scripts/pod/restart-main-api.sh
+
+# Restart ทุก services
+bash scripts/pod/restart-pod.sh
+
+# Restart RQ Workers
+bash scripts/pod/restart-rq-workers.sh
+```
+
 ### ตรวจสอบ Status:
 ```bash
 # Health check
@@ -140,6 +152,39 @@ bash scripts/utility/fix-models.sh
 **Use Case:**
 - เมื่อ models หายไปหรือ permission ผิด
 - หลังจาก clone repository ใหม่
+
+---
+
+### `check-pending-tasks.py` ⭐
+**ตรวจสอบ Task ที่ค้างอยู่ใน Redis Queue**
+- แสดงจำนวน jobs ที่รอ, กำลังทำงาน, และล้มเหลว
+- แสดงรายละเอียดของ jobs ที่ค้างอยู่
+- ตรวจสอบ task keys ใน Redis
+
+**Usage:**
+```bash
+python3 scripts/utility/check-pending-tasks.py
+```
+
+**Output:**
+- สรุป queue status (queued, started, failed)
+- รายละเอียด jobs ที่รออยู่ใน queue
+- รายละเอียด jobs ที่กำลังทำงาน
+- รายละเอียด jobs ที่ล้มเหลว (ล่าสุด 10 jobs)
+- จำนวน task keys ใน Redis
+
+**Use Case:**
+- เมื่อระบบดูช้า - ตรวจสอบว่ามี task ค้างอยู่หรือไม่
+- ตรวจสอบ failed jobs ที่อาจทำให้ระบบช้า
+- Monitor queue status
+
+**Example Output:**
+```
+📊 สรุป Queue Status:
+✅ transcription_preprocess | Queued: 0 | Started: 0 | Failed: 4
+✅ transcription_cpu         | Queued: 0 | Started: 0 | Failed: 14
+...
+```
 
 ---
 

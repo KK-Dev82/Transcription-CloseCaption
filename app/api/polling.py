@@ -49,6 +49,13 @@ async def poll_task_status(task_id: str):
                     else:
                         chunks = task.chunks
                 
+            # ดึง full_text จาก task object
+            full_text = ""
+            if hasattr(task, 'full_text') and task.full_text:
+                full_text = task.full_text
+            elif hasattr(task, 'text') and task.text:
+                full_text = task.text
+            
             response_data = {
                 "task_id": task_id,
                 "status": task.status,
@@ -60,6 +67,7 @@ async def poll_task_status(task_id: str):
                 "stage": getattr(task, 'current_stage', 'unknown'),
                 "results_available": task.status == "completed",
                 "partial_text": partial_text,
+                "full_text": full_text,  # เพิ่ม full_text
                 "chunks": chunks
             }
             
@@ -81,6 +89,9 @@ async def poll_task_status(task_id: str):
             if task_data.get("chunks"):
                 chunks = task_data.get("chunks")
                 
+            # ดึง full_text จาก storage
+            full_text = task_data.get("full_text") or task_data.get("text") or ""
+            
             return {
                 "task_id": task_id,
                 "status": task_data.get("status", "unknown"),
@@ -92,6 +103,7 @@ async def poll_task_status(task_id: str):
                 "stage": task_data.get("current_stage", "completed" if task_data.get("status") == "completed" else "unknown"),
                 "results_available": task_data.get("status") == "completed",
                 "partial_text": partial_text,
+                "full_text": full_text,  # เพิ่ม full_text
                 "chunks": chunks
             }
         

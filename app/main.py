@@ -115,7 +115,7 @@ app.include_router(websocket_router, tags=["websocket"])
 # Include v2 unified APIs (Consolidated endpoints)
 try:
     from app.api.v2 import unified_tasks_router
-    app.include_router(unified_tasks_router, tags=["v2-unified"])
+    app.include_router(unified_tasks_router)  # ใช้ tags จาก router เอง ["Tasks V2 (Unified)"]
     logger.info("✅ Unified APIs v2 included")
 except ImportError as e:
     logger.warning(f"Unified APIs v2 not available: {e}")
@@ -165,8 +165,8 @@ except ImportError:
 # Include tasks router (important - must be included)
 try:
     from app.api import tasks
-    # tasks.router already has prefix="/api/tasks", so don't add prefix again
-    app.include_router(tasks.router, tags=["tasks"])
+    # tasks.router already has prefix="/api/tasks" and tags=["Tasks"], so don't override
+    app.include_router(tasks.router)  # ใช้ tags จาก router เอง
     logger.info("✅ Tasks router included")
 except ImportError as e:
     logger.warning(f"Tasks router not available: {e}")

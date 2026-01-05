@@ -512,6 +512,10 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
 
 3. Restart API:
    ```bash
+   # วิธีที่ 1: ใช้ script restart-main-api.sh (แนะนำ)
+   bash scripts/pod/restart-main-api.sh
+   
+   # วิธีที่ 2: Restart manual
    pkill -f "uvicorn.*app.main"
    bash scripts/pod/start-pod.sh
    ```
