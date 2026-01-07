@@ -44,6 +44,9 @@ class FasterWhisperProvider(WhisperProvider):
         
         self.compute_type = os.getenv('WHISPER_COMPUTE_TYPE', None)
         
+        # Configuration - Model download root (สำหรับ persistent model storage)
+        self.download_root = os.getenv('WHISPER_DOWNLOAD_ROOT', '/workspace/transcription-service/models')
+        
         # Auto-detect compute_type based on device
         if self.compute_type is None:
             if self.base_device.startswith('cuda'):
@@ -209,7 +212,8 @@ class FasterWhisperProvider(WhisperProvider):
             model = WhisperModel(
                 model_size,
                 device=current_device,
-                compute_type=self.compute_type
+                compute_type=self.compute_type,
+                download_root=self.download_root
             )
             self._model_cache[cache_key] = model
             
