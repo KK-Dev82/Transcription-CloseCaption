@@ -8,6 +8,7 @@ from .groq_provider import GroqProvider
 from .builtin_provider import BuiltinProvider
 from .openai_whisper_provider import OpenAIWhisperProvider
 from .faster_whisper_provider import FasterWhisperProvider
+from .whisper_cpp_provider import WhisperCppProvider
 from .provider_factory import WhisperProviderFactory, ProviderType
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     'BuiltinProvider',
     'OpenAIWhisperProvider',
     'FasterWhisperProvider',
+    'WhisperCppProvider',
     'WhisperProviderFactory',
     'ProviderType'
 ]

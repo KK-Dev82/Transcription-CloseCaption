@@ -4,12 +4,22 @@ import logging
 from typing import List
 
 from ..models.caption import CaptionRequest, CaptionResponse
-from ..services.caption_service import CaptionService
+
+# 🧪 MOCK MODE: Skip CaptionService import
+import os
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
+
+if not MOCK_MODE:
+    from ..services.caption_service import CaptionService
+    caption_service = CaptionService()
+else:
+    # MOCK MODE: Create dummy CaptionService
+    class CaptionService:
+        pass
+    caption_service = CaptionService()
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/caption", tags=["caption"])
-
-caption_service = CaptionService()
 
 @router.post("/", response_model=CaptionResponse)
 async def start_caption_generation(request: CaptionRequest):

@@ -7,12 +7,22 @@ from datetime import datetime
 import uuid
 
 from ..models.upload import UploadResponse
-from ..services.file_service import FileService
+
+# 🧪 MOCK MODE: Skip FileService import
+import os
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
+
+if not MOCK_MODE:
+    from ..services.file_service import FileService
+    file_service = FileService()
+else:
+    # MOCK MODE: Create dummy FileService
+    class FileService:
+        pass
+    file_service = FileService()
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
-
-file_service = FileService()
 
 class UploadFromURLRequest(BaseModel):
     """Request model สำหรับอัปโหลดจาก URL"""

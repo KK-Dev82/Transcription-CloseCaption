@@ -23,6 +23,7 @@ from .builtin_provider import BuiltinProvider
 from .groq_provider import GroqProvider
 from .openai_whisper_provider import OpenAIWhisperProvider
 from .faster_whisper_provider import FasterWhisperProvider
+from .whisper_cpp_provider import WhisperCppProvider
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class ProviderType(Enum):
     GROQ = "groq"
     OPENAI_WHISPER = "openai-whisper"
     FASTER_WHISPER = "faster-whisper"
+    WHISPER_CPP = "whisper-cpp"
     # Future providers
     # FIREWORKS = "fireworks"
     # OPENAI = "openai"
@@ -57,8 +59,16 @@ class WhisperProviderFactory:
     _providers: Dict[str, WhisperProvider] = {}
     
     # Fallback order (primary -> fallback)
-    # Note: faster-whisper ควรเป็น primary สำหรับ GPU (เร็วกว่า)
-    _fallback_order = [ProviderType.FASTER_WHISPER, ProviderType.OPENAI_WHISPER, ProviderType.GROQ, ProviderType.BUILTIN]
+    # Note: 
+    # - faster-whisper ควรเป็น primary สำหรับ GPU (เร็วกว่า)
+    # - whisper-cpp ควรเป็น primary สำหรับ Local Test (Mac Mini M4)
+    _fallback_order = [
+        ProviderType.FASTER_WHISPER,  # GPU (Runpod)
+        ProviderType.WHISPER_CPP,      # Local Test (Mac Mini M4)
+        ProviderType.OPENAI_WHISPER,   # Fallback
+        ProviderType.GROQ,              # Cloud API
+        ProviderType.BUILTIN            # Docker API (last resort)
+    ]
     
     @classmethod
     def get_provider(cls, provider_type: str = None) -> WhisperProvider:
@@ -104,6 +114,8 @@ class WhisperProviderFactory:
             return OpenAIWhisperProvider(config)
         elif provider_type == ProviderType.FASTER_WHISPER.value:
             return FasterWhisperProvider(config)
+        elif provider_type == ProviderType.WHISPER_CPP.value:
+            return WhisperCppProvider(config)
         else:
             logger.warning(f"[Factory] ⚠️ Unknown provider '{provider_type}', using builtin")
             return BuiltinProvider(config)
@@ -137,6 +149,13 @@ class WhisperProviderFactory:
                 'compute_type': os.getenv('WHISPER_COMPUTE_TYPE', None),
                 'batch_size': int(os.getenv('WHISPER_BATCH_SIZE', '16')),
                 'download_root': os.getenv('WHISPER_DOWNLOAD_ROOT', None)
+            }
+        elif provider_type == ProviderType.WHISPER_CPP.value:
+            return {
+                'whisper_cpp_path': os.getenv('WHISPER_CPP_PATH', None),
+                'model_dir': os.getenv('WHISPER_MODEL_DIR', 'models'),
+                'model': os.getenv('WHISPER_MODEL', 'base'),
+                'use_metal': os.getenv('WHISPER_USE_METAL', None)
             }
         return {}
     

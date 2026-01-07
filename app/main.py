@@ -38,7 +38,11 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("🚀 Starting application startup...")
     
-    # Initialize WebSocket service in background (don't wait)
+    # 🧪 MOCK MODE: WebSocket ยังต้องทำงานได้ (สำหรับ realtime caption events)
+    MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
+    
+    # ✅ Initialize WebSocket service in background (ทำงานได้ทั้ง MOCK MODE และ normal mode)
+    # เพราะ WebSocket จำเป็นสำหรับ realtime caption events
     async def init_websocket():
         try:
             from app.services.websocket_service import initialize_websocket_service
@@ -55,26 +59,30 @@ async def lifespan(app: FastAPI):
     import asyncio
     asyncio.create_task(init_websocket())
     
-    # Start periodic cleanup (must be in async context with running event loop)
-    try:
-        from app.services.cleanup_service import cleanup_service
+    if not MOCK_MODE:
         
-        # Start periodic cleanup task (requires running event loop)
-        # Create task directly since we're in async startup context
-        async def start_cleanup_task():
-            try:
-                cleanup_service.start_periodic_cleanup()
-                logger.info("✅ Periodic cleanup started")
-            except Exception as e:
-                logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
-        
-        # Start in background
-        asyncio.create_task(start_cleanup_task())
-        
-        # Skip startup cleanup completely (may hang) - will be done by periodic cleanup instead
-        logger.info("ℹ️  Skipping startup cleanup (will be done by periodic cleanup)")
-    except Exception as e:
-        logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+        # Start periodic cleanup (must be in async context with running event loop)
+        try:
+            from app.services.cleanup_service import cleanup_service
+            
+            # Start periodic cleanup task (requires running event loop)
+            # Create task directly since we're in async startup context
+            async def start_cleanup_task():
+                try:
+                    cleanup_service.start_periodic_cleanup()
+                    logger.info("✅ Periodic cleanup started")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+            
+            # Start in background
+            asyncio.create_task(start_cleanup_task())
+            
+            # Skip startup cleanup completely (may hang) - will be done by periodic cleanup instead
+            logger.info("ℹ️  Skipping startup cleanup (will be done by periodic cleanup)")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+    else:
+        logger.info("🧪 MOCK MODE: Skipping WebSocket and cleanup initialization")
     
     logger.info("✅ Application startup complete")
     
@@ -83,12 +91,13 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("🛑 Starting application shutdown...")
-    try:
-        from app.services.cleanup_service import cleanup_service
-        cleanup_service.stop_periodic_cleanup()
-        logger.info("🛑 Periodic cleanup stopped")
-    except Exception as e:
-        logger.warning(f"⚠️  Failed to stop periodic cleanup: {e}")
+    if not MOCK_MODE:
+        try:
+            from app.services.cleanup_service import cleanup_service
+            cleanup_service.stop_periodic_cleanup()
+            logger.info("🛑 Periodic cleanup stopped")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to stop periodic cleanup: {e}")
     logger.info("✅ Application shutdown complete")
 
 # Create FastAPI app with lifespan
@@ -109,10 +118,17 @@ app.add_middleware(
 )
 
 # Include routers
-from app.api import upload_router, caption_router, websocket_router
+# 🧪 MOCK MODE: Skip routers ที่ไม่จำเป็นสำหรับ realtime audio stream
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
-app.include_router(upload_router, prefix="/api", tags=["upload"])
-app.include_router(caption_router, prefix="/api", tags=["caption"])
+from app.api import websocket_router
+
+if not MOCK_MODE:
+    from app.api import upload_router, caption_router
+    app.include_router(upload_router, prefix="/api", tags=["upload"])
+    app.include_router(caption_router, prefix="/api", tags=["caption"])
+
+# WebSocket router is needed for realtime audio stream (even in MOCK MODE)
 app.include_router(websocket_router, tags=["websocket"])
 
 # Include v2 unified APIs (Consolidated endpoints)

@@ -12,24 +12,31 @@ import os
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Header, Query
 from pydantic import BaseModel
 import aiohttp
 import aiofiles
 
-from ..services.whisper_service import WhisperService
-from ..services.file_service import FileService
+# 🧪 Mock mode: ตรวจสอบ environment variable เพื่อ skip transcription
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transcription/realtime", tags=["realtime-transcription"])
 
 # Initialize services
-whisper_service = WhisperService()
-file_service = FileService()
+if not MOCK_MODE:
+    from ..services.whisper_service import WhisperService
+    from ..services.file_service import FileService
+    whisper_service = WhisperService()
+    file_service = FileService()
+else:
+    logger.info("🧪 MOCK MODE: Transcription disabled - only testing chunk connectivity")
+    whisper_service = None
+    file_service = None
 
 
 class RealtimeChunkRequest(BaseModel):
-    """Request model สำหรับ real-time transcription chunk"""
+    """Request model สำหรับ real-time transcription chunk (audio_url-based)"""
     audio_url: str  # Public URL ของ audio file
     callback_url: str  # Webhook callback URL
     chunk_index: Optional[int] = 0
@@ -37,6 +44,17 @@ class RealtimeChunkRequest(BaseModel):
     duration: Optional[float] = 5.0
     language: str = "th"
     model_size: str = "base"
+
+
+class LiveChunkRequest(BaseModel):
+    """Request model สำหรับ live audio chunk (raw PCM/WAV จาก body)"""
+    chunk_index: Optional[int] = 0
+    start_time: Optional[float] = 0.0
+    duration: Optional[float] = 3.0
+    language: str = "th"
+    model_size: str = "base"
+    session_id: Optional[str] = None
+    meeting_id: Optional[str] = None
 
 
 class RealtimeChunkResponse(BaseModel):
@@ -305,5 +323,578 @@ async def process_realtime_chunk_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"เกิดข้อผิดพลาดในการประมวลผล: {str(e)}"
+        )
+
+
+@router.post("/live-chunk")
+async def process_live_chunk(
+    request: Request,
+    x_meeting_id: Optional[str] = Header(None, alias="X-Meeting-Id"),
+    x_chunk_index: Optional[str] = Header(None, alias="X-Chunk-Index"),
+    x_start_time: Optional[str] = Header(None, alias="X-Start-Time"),
+    x_duration: Optional[str] = Header(None, alias="X-Duration"),
+    x_audio_format: Optional[str] = Header(None, alias="X-Audio-Format"),
+    x_sample_rate: Optional[str] = Header(None, alias="X-Sample-Rate"),
+    x_channels: Optional[str] = Header(None, alias="X-Channels"),
+    background_tasks: BackgroundTasks = None
+):
+    """
+    ✅ Chunk-based: ประมวลผล live audio chunk จาก Request.Body (raw PCM/WAV)
+    
+    รับ raw PCM/WAV data จาก Request.Body
+    บันทึกเป็น temp file → transcription → ส่งผลลัพธ์ผ่าน WebSocket
+    
+    Args:
+        request: HTTP Request (body = raw PCM/WAV data)
+        x_meeting_id: Meeting ID (header)
+        x_chunk_index: Chunk index (header)
+        x_start_time: Start time in seconds (header)
+        x_duration: Duration in seconds (header)
+        background_tasks: Background tasks
+    
+    Returns:
+        202 Accepted (process in background)
+    """
+    try:
+        # Parse headers
+        meeting_id = x_meeting_id or "unknown"
+        chunk_index = int(x_chunk_index) if x_chunk_index and x_chunk_index.isdigit() else 0
+        start_time = float(x_start_time) if x_start_time else 0.0
+        duration = float(x_duration) if x_duration else 3.0
+        audio_format = x_audio_format or "s16le"
+        sample_rate = int(x_sample_rate) if x_sample_rate and x_sample_rate.isdigit() else 16000
+        channels = int(x_channels) if x_channels and x_channels.isdigit() else 1
+        
+        # Generate session ID
+        session_id = f"live-{meeting_id}-{chunk_index}"
+        
+        logger.info(f"📥 Received live chunk: MeetingId={meeting_id}, ChunkIndex={chunk_index}, StartTime={start_time}s, Duration={duration}s")
+        
+        # Read raw audio data from Request.Body
+        audio_data = await request.body()
+        if not audio_data or len(audio_data) == 0:
+            raise HTTPException(status_code=400, detail="Audio data is required in request body")
+        
+        logger.info(f"✅ Received audio data: {len(audio_data)} bytes")
+        
+        temp_path = None
+        # Create temporary file (only if not MOCK_MODE)
+        if not MOCK_MODE:
+            temp_dir = Path("temp")
+            temp_dir.mkdir(exist_ok=True)
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix=".wav" if audio_format.lower() != "s16le" else ".raw",
+                delete=False,
+                dir=str(temp_dir)
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            # Save audio data to temp file
+            async with aiofiles.open(temp_path, 'wb') as f:
+                await f.write(audio_data)
+            
+            logger.info(f"✅ Saved audio data to: {temp_path}")
+        else:
+            logger.info(f"🧪 MOCK MODE: Skipping file save (audio data received: {len(audio_data)} bytes)")
+        
+        # If raw PCM (s16le), convert to WAV format (only if not MOCK_MODE)
+        if audio_format.lower() == "s16le" and not MOCK_MODE:
+            # Convert raw PCM to WAV
+            import wave
+            import struct
+            
+            wav_path = temp_path.replace(".raw", ".wav")
+            with wave.open(wav_path, 'wb') as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(2)  # 16-bit = 2 bytes
+                wav_file.setframerate(sample_rate)
+                
+                # Write raw PCM data
+                wav_file.writeframes(audio_data)
+            
+            # Remove raw file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            temp_path = wav_path
+        
+        # Add background task to process chunk
+        if background_tasks:
+            background_tasks.add_task(
+                process_live_chunk_background,
+                session_id=session_id,
+                meeting_id=meeting_id,
+                chunk_index=chunk_index,
+                start_time=start_time,
+                duration=duration,
+                audio_path=temp_path if not MOCK_MODE else None  # Skip saving file in MOCK_MODE
+            )
+        
+        return {
+            "status": "accepted",
+            "session_id": session_id,
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "start_time": start_time,
+            "duration": duration,
+            "message": "Audio chunk received. Processing in background. Caption events will be sent via WebSocket."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in live chunk endpoint: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการประมวลผล: {str(e)}"
+        )
+
+
+async def process_live_chunk_background(
+    session_id: str,
+    meeting_id: str,
+    chunk_index: int,
+    start_time: float,
+    duration: float,
+    audio_path: Optional[str] = None
+):
+    """
+    ประมวลผล live chunk ใน background (transcription + WebSocket)
+    ใน MOCK_MODE: ส่ง mock caption events แทน transcription
+    """
+    temp_path = audio_path
+    processed_at = datetime.now(timezone.utc).isoformat()
+    try:
+        logger.info(f"🔄 Processing live chunk: SessionId={session_id}, ChunkIndex={chunk_index}, StartTime={start_time}s, MockMode={MOCK_MODE}")
+        
+        # ✅ Track chunk metadata (เก็บไว้ใน memory เพื่อแสดงใน UI)
+        chunk_metadata = {
+            "session_id": session_id,
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "start_time": start_time,
+            "duration": duration,
+            "processed_at": processed_at,
+            "status": "processing",
+            "mock_mode": MOCK_MODE
+        }
+        
+        # Add to metadata store
+        if meeting_id not in _chunk_metadata_store:
+            _chunk_metadata_store[meeting_id] = []
+        _chunk_metadata_store[meeting_id].append(chunk_metadata)
+        
+        # Keep only last 100 chunks per meeting (prevent memory leak)
+        if len(_chunk_metadata_store[meeting_id]) > 100:
+            _chunk_metadata_store[meeting_id] = _chunk_metadata_store[meeting_id][-100:]
+        
+        if MOCK_MODE:
+            # 🧪 MOCK MODE: ส่ง mock caption events แทน transcription
+            logger.info(f"🧪 MOCK MODE: Generating mock caption events for chunk {chunk_index}")
+            
+            # Import websocket_manager (try to import even in MOCK_MODE)
+            try:
+                from ..services.websocket_service import websocket_manager
+            except ImportError:
+                logger.warning("⚠️ websocket_manager not available in MOCK_MODE")
+                websocket_manager = None
+            
+            # ✅ V3 Compliant: Calculate chunk timing in milliseconds
+            chunk_start_ms = int(start_time * 1000)  # Convert seconds to milliseconds
+            chunk_duration_ms = int(duration * 1000)
+            
+            # Mock text (แสดงว่า chunk ถูกส่งสำเร็จ)
+            mock_text = f"[MOCK] Audio chunk {chunk_index} received ({duration}s, start={start_time:.1f}s)"
+            
+            # ✅ V3 Compliant: Create "final" event with V3 schema
+            final_event = {
+                "type": "final",
+                "meeting_id": meeting_id,
+                "session_id": session_id,
+                "seq": chunk_index * 100,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "chunk_index": chunk_index,
+                "chunk_start_ms": chunk_start_ms,
+                "chunk_duration_ms": chunk_duration_ms,
+                "language": "th",
+                "model": "base",
+                "provider": "mock",
+                "text": mock_text,
+                "segments": [
+                    {
+                        "id": f"seg-{chunk_index}-0",
+                        "t0_ms": chunk_start_ms,
+                        "t1_ms": chunk_start_ms + chunk_duration_ms,
+                        "text": mock_text,
+                        "confidence": 0.95,
+                        "is_final": True,
+                        "speaker": None
+                    }
+                ]
+            }
+            
+            # Send via WebSocket (use meeting_id as user_id)
+            if websocket_manager:
+                await websocket_manager.send_to_user(meeting_id, final_event)
+                logger.info(f"📤 Sent V3 MOCK final event: ChunkIndex={chunk_index}, Text={mock_text}")
+            else:
+                logger.info(f"📤 MOCK final event (WebSocket not available): ChunkIndex={chunk_index}, Text={mock_text}")
+            
+            # ✅ Update chunk metadata status
+            chunk_metadata["status"] = "completed"
+            chunk_metadata["text_length"] = len(mock_text)
+            chunk_metadata["completed_at"] = datetime.now(timezone.utc).isoformat()
+        else:
+            # Normal mode: Transcribe audio
+            if not whisper_service:
+                logger.error("❌ whisper_service not available")
+                return
+            
+            if not temp_path or not os.path.exists(temp_path):
+                logger.error(f"❌ Audio file not found: {temp_path}")
+                return
+            
+            transcription_result = whisper_service.transcribe_file(
+                audio_path=temp_path,
+                model_size="base",
+                language="th",
+                use_thai_processor=True
+            )
+            
+            transcription_text = transcription_result.get('text', '')
+            logger.info(f"✅ Transcription completed: {len(transcription_text)} characters")
+            
+            # ✅ Update chunk metadata status
+            chunk_metadata["status"] = "completed"
+            chunk_metadata["text_length"] = len(transcription_text)
+            chunk_metadata["completed_at"] = datetime.now(timezone.utc).isoformat()
+            chunk_metadata["segments_count"] = len(transcription_result.get("segments", []))
+            
+            # Send caption events via WebSocket
+            segments = transcription_result.get("segments", [])
+            
+            # ✅ V3 Compliant: Calculate chunk timing in milliseconds
+            chunk_start_ms = int(start_time * 1000)  # Convert seconds to milliseconds
+            chunk_duration_ms = int(duration * 1000)
+            chunk_end_ms = chunk_start_ms + chunk_duration_ms
+            
+            # Import websocket_manager
+            from ..services.websocket_service import websocket_manager
+            
+            # ✅ V3 Compliant: Send single "final" event with all segments (not per-segment)
+            # Build segments array with V3 format
+            v3_segments = []
+            for idx, segment in enumerate(segments):
+                segment_start_s = segment.get("start", 0.0)
+                segment_end_s = segment.get("end", segment.get("start", 0.0) + duration)
+                
+                # Convert to milliseconds (relative to chunk start)
+                segment_start_ms = int(segment_start_s * 1000)
+                segment_end_ms = int(segment_end_s * 1000)
+                
+                # Calculate absolute time (for search/seek)
+                segment_t0_ms = chunk_start_ms + segment_start_ms
+                segment_t1_ms = chunk_start_ms + segment_end_ms
+                
+                v3_segments.append({
+                    "id": f"seg-{chunk_index}-{idx}",
+                    "t0_ms": segment_t0_ms,  # Absolute time (meeting timeline)
+                    "t1_ms": segment_t1_ms,
+                    "text": segment.get("text", ""),
+                    "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
+                    "is_final": True,
+                    "speaker": None
+                })
+            
+            # ✅ V3 Compliant: Create "final" event with V3 schema
+            # Get provider info
+            provider_name = "faster-whisper"  # Default
+            try:
+                if whisper_service and hasattr(whisper_service, 'provider'):
+                    provider_name = getattr(whisper_service.provider, '__class__', {}).__name__ or "faster-whisper"
+                    if "whisper_cpp" in provider_name.lower():
+                        provider_name = "whisper-cpp"
+            except:
+                pass
+            
+            # Create V3 compliant final event
+            final_event = {
+                "type": "final",
+                "meeting_id": meeting_id,
+                "session_id": session_id,
+                "seq": chunk_index * 100 + len(segments),  # Use last segment index
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "chunk_index": chunk_index,
+                "chunk_start_ms": chunk_start_ms,
+                "chunk_duration_ms": chunk_duration_ms,
+                "language": "th",
+                "model": "base",
+                "provider": provider_name,
+                "text": transcription_text,  # Full text
+                "segments": v3_segments
+            }
+            
+            # Send via WebSocket (use meeting_id as user_id)
+            if websocket_manager:
+                await websocket_manager.send_to_user(meeting_id, final_event)
+                logger.info(f"📤 Sent V3 final caption event: ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
+            
+            # ✅ Backward compatibility: Also send legacy events (for existing clients)
+            # Send each segment as a legacy caption event (for backward compatibility)
+            base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - int(start_time * 1000)
+            for idx, segment in enumerate(segments):
+                segment_start_s = start_time + segment.get("start", 0.0)
+                segment_end_s = start_time + segment.get("end", segment.get("start", 0.0) + duration)
+                
+                # Convert to epoch_ms
+                start_epoch_ms = base_epoch_ms + int(segment_start_s * 1000)
+                end_epoch_ms = base_epoch_ms + int(segment_end_s * 1000)
+                
+                # Create legacy caption event (for backward compatibility)
+                legacy_event = {
+                    "type": "caption",
+                    "session_id": session_id,
+                    "stream_id": meeting_id,
+                    "seq": chunk_index * 100 + idx,
+                    "timing": {
+                        "kind": "epoch_ms",
+                        "start": start_epoch_ms,
+                        "end": end_epoch_ms
+                    },
+                    "text": segment.get("text", ""),
+                    "lang": "th",
+                    "is_final": True,
+                    "tokens": [],
+                    "meta": {
+                        "speaker": None,
+                        "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
+                        "model": "faster-whisper",
+                        "chunk_id": f"c_{chunk_index:04d}_{idx:02d}"
+                    },
+                    "ts": datetime.now(timezone.utc).isoformat()
+                }
+                
+                # Send legacy event (for backward compatibility)
+                if websocket_manager:
+                    await websocket_manager.send_to_user(meeting_id, legacy_event)
+                    logger.debug(f"📤 Sent legacy caption event: ChunkIndex={chunk_index}, Segment={idx}, Text={segment.get('text', '')[:50]}...")
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing live chunk: {e}", exc_info=True)
+        # ✅ Update chunk metadata status on error
+        if 'chunk_metadata' in locals():
+            chunk_metadata["status"] = "error"
+            chunk_metadata["error"] = str(e)
+            chunk_metadata["error_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
+        # Cleanup temporary file (only if not MOCK_MODE)
+        if temp_path and os.path.exists(temp_path) and not MOCK_MODE:
+            try:
+                os.unlink(temp_path)
+                logger.info(f"🧹 Cleaned up temporary file: {temp_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to cleanup temporary file: {e}")
+
+
+# ✅ In-memory chunk metadata tracking (แทนการแสดง files ที่ถูก cleanup แล้ว)
+_chunk_metadata_store: dict[str, list[dict]] = {}  # meeting_id -> list of chunk metadata
+
+
+@router.get("/chunk-metadata")
+async def list_chunk_metadata(meeting_id: Optional[str] = None):
+    """
+    ✅ List chunk metadata ที่ถูก process แล้ว (ไม่ใช่ files เพราะ files ถูก cleanup ทันที)
+    
+    Args:
+        meeting_id: Optional meeting ID เพื่อ filter chunks
+    
+    Returns:
+        List of chunk metadata (chunk_index, start_time, duration, processed_at, etc.)
+    """
+    try:
+        if not meeting_id:
+            # Return all meetings' chunks
+            all_chunks = []
+            for mid, chunks in _chunk_metadata_store.items():
+                all_chunks.extend(chunks)
+            all_chunks.sort(key=lambda x: x.get("processed_at", ""), reverse=True)
+            return {
+                "status": "success",
+                "total_chunks": len(all_chunks),
+                "chunks": all_chunks[:100]  # Limit to 100 most recent chunks
+            }
+        else:
+            # Return chunks for specific meeting
+            chunks = _chunk_metadata_store.get(meeting_id, [])
+            chunks.sort(key=lambda x: x.get("chunk_index", 0))
+            return {
+                "status": "success",
+                "meeting_id": meeting_id,
+                "total_chunks": len(chunks),
+                "chunks": chunks
+            }
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing chunk metadata: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงรายการ chunk metadata: {str(e)}"
+        )
+
+
+@router.get("/chunk-files")
+async def list_chunk_files(meeting_id: Optional[str] = None):
+    """
+    ⚠️ DEPRECATED: Chunk files ถูก cleanup ทันทีหลัง transcription
+    ใช้ /chunk-metadata แทน
+    
+    Returns:
+        Empty list (files are cleaned up immediately after processing)
+    """
+    return {
+        "status": "deprecated",
+        "message": "Chunk files are cleaned up immediately after transcription. Use /chunk-metadata instead.",
+        "files": []
+    }
+
+
+@router.get("/active-chunks")
+async def list_active_chunks(meeting_id: Optional[str] = Query(None, description="Filter by meeting ID")):
+    """
+    ✅ List active chunk processing jobs (chunks ที่ยังอยู่ใน memory)
+    
+    Args:
+        meeting_id: Optional meeting ID เพื่อ filter chunks
+    
+    Returns:
+        List of active chunk processing jobs (แสดง chunks ทั้งหมดที่ยังอยู่ใน memory)
+    """
+    try:
+        # ✅ Debug logging
+        logger.info(f"📋 list_active_chunks called: meeting_id={meeting_id}, store_keys={list(_chunk_metadata_store.keys())}")
+        
+        active_chunks = []
+        
+        if meeting_id:
+            # Filter chunks for specific meeting
+            chunks = _chunk_metadata_store.get(meeting_id, [])
+            logger.info(f"📋 Found {len(chunks)} chunks for meeting_id={meeting_id}")
+            # ✅ Return all chunks for the meeting (ไม่ใช้ time-based filter)
+            active_chunks = list(chunks)
+        else:
+            # Get active chunks from all meetings
+            for mid, chunks in _chunk_metadata_store.items():
+                logger.info(f"📋 Meeting {mid}: {len(chunks)} chunks")
+                # ✅ Return all chunks from all meetings (ไม่ใช้ time-based filter)
+                active_chunks.extend(list(chunks))
+        
+        # Sort by processed_at (newest first)
+        active_chunks.sort(key=lambda x: x.get("processed_at", ""), reverse=True)
+        
+        logger.info(f"📋 Returning {len(active_chunks)} active chunks")
+        
+        return {
+            "status": "success",
+            "meeting_id": meeting_id,
+            "total_active": len(active_chunks),
+            "active_chunks": active_chunks
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing active chunks: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงรายการ active chunks: {str(e)}"
+        )
+
+
+@router.post("/stop-chunks")
+async def stop_chunks(
+    meeting_id: Optional[str] = None,
+    chunk_index: Optional[int] = None
+):
+    """
+    ✅ Stop/cancel chunk processing jobs
+    
+    ⚠️ หมายเหตุสำคัญ:
+    - การหยุด chunks จะหยุดเฉพาะ chunks ที่กำลัง process อยู่ (status = "processing")
+    - Chunks ที่เสร็จแล้ว (status = "completed") ไม่สามารถหยุดได้
+    - การหยุด chunks ไม่ได้หยุดการส่ง chunks ใหม่จาก Audio Tap
+    - ต้องการหยุดการส่ง chunks ใหม่? กรุณาหยุด Audio Tap แทน (POST /api/audio-tap/stop/{meetingId})
+    
+    Args:
+        meeting_id: Meeting ID เพื่อ stop chunks (ถ้าไม่ระบุจะ stop ทุก meeting)
+        chunk_index: Optional chunk index เพื่อ stop chunk เฉพาะ (ถ้าไม่ระบุจะ stop ทุก chunk ของ meeting)
+    
+    Returns:
+        Result of stop operation
+    """
+    try:
+        stopped_count = 0
+        not_found_count = 0
+        
+        if meeting_id:
+            # Stop chunks for specific meeting
+            if meeting_id in _chunk_metadata_store:
+                chunks = _chunk_metadata_store[meeting_id]
+                
+                if chunk_index is not None:
+                    # Stop specific chunk
+                    found = False
+                    for chunk in chunks:
+                        if chunk.get("chunk_index") == chunk_index:
+                            found = True
+                            if chunk.get("status") == "processing":
+                                chunk["status"] = "cancelled"
+                                chunk["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                                stopped_count += 1
+                                logger.info(f"⏹️ Cancelled chunk: MeetingId={meeting_id}, ChunkIndex={chunk_index}")
+                            else:
+                                logger.info(f"⚠️ Chunk already {chunk.get('status')}: MeetingId={meeting_id}, ChunkIndex={chunk_index}")
+                                not_found_count += 1
+                    if not found:
+                        logger.warning(f"⚠️ Chunk not found: MeetingId={meeting_id}, ChunkIndex={chunk_index}")
+                        not_found_count += 1
+                else:
+                    # Stop all processing chunks for this meeting
+                    for chunk in chunks:
+                        if chunk.get("status") == "processing":
+                            chunk["status"] = "cancelled"
+                            chunk["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                            stopped_count += 1
+                            logger.info(f"⏹️ Cancelled chunk: MeetingId={meeting_id}, ChunkIndex={chunk.get('chunk_index')}")
+        else:
+            # Stop all processing chunks from all meetings
+            for mid, chunks in _chunk_metadata_store.items():
+                for chunk in chunks:
+                    if chunk.get("status") == "processing":
+                        chunk["status"] = "cancelled"
+                        chunk["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+                        stopped_count += 1
+                        logger.info(f"⏹️ Cancelled chunk: MeetingId={mid}, ChunkIndex={chunk.get('chunk_index')}")
+        
+        logger.info(f"⏹️ Stopped {stopped_count} chunk processing job(s), {not_found_count} not found/already completed")
+        
+        message = f"Stopped {stopped_count} chunk processing job(s)"
+        if not_found_count > 0:
+            message += f" ({not_found_count} chunk(s) not found or already completed)"
+        if stopped_count == 0 and not_found_count == 0:
+            message = "No processing chunks found to stop"
+        
+        return {
+            "status": "success",
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "stopped_count": stopped_count,
+            "not_found_count": not_found_count,
+            "message": message,
+            "note": "⚠️ การหยุด chunks ไม่ได้หยุดการส่ง chunks ใหม่จาก Audio Tap. ต้องการหยุดการส่ง chunks ใหม่? กรุณาหยุด Audio Tap (POST /api/audio-tap/stop/{meetingId})"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error stopping chunks: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการหยุด chunks: {str(e)}"
         )
 

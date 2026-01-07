@@ -1,6 +1,22 @@
-from .upload import router as upload_router
-from .caption import router as caption_router
-from .websocket import router as websocket_router
+# 🧪 MOCK MODE: Skip routers ที่ไม่จำเป็น
+import os
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
+
+if not MOCK_MODE:
+    from .upload import router as upload_router
+    from .caption import router as caption_router
+else:
+    # MOCK MODE: Create dummy routers
+    from fastapi import APIRouter
+    upload_router = APIRouter()
+    caption_router = APIRouter()
+
+# WebSocket router is needed for realtime audio stream
+try:
+    from .websocket import router as websocket_router
+except ImportError:
+    from fastapi import APIRouter
+    websocket_router = APIRouter()
 
 # Optional imports (if files exist)
 try:

@@ -33,10 +33,68 @@
 
 4. **Redis** (สำหรับ job queue)
    - ใช้ Redis Cloud หรือ local Redis
+   - ต้องมี Redis URL สำหรับเชื่อมต่อ (ระบุใน `.env.runpod`)
+
+5. **System Libraries** (สำหรับ audio processing)
+   - `libmagic1` - File type detection (optional, สำหรับ python-magic)
+   - `libsndfile1` - Audio file I/O (required สำหรับ soundfile)
+   - `tzdata` - Timezone data (required สำหรับ PyThaiNLP)
 
 ### Python Dependencies
 
-ติดตั้งผ่าน `pip install -r requirements.txt` (ดูรายละเอียดใน requirements.txt)
+ติดตั้งผ่าน `pip install -r requirements.txt`
+
+**Dependencies หลัก** (ดูรายละเอียดทั้งหมดใน `requirements.txt`):
+
+#### Web Framework
+- `fastapi==0.104.1` - FastAPI framework
+- `uvicorn[standard]==0.24.0` - ASGI server
+- `python-multipart==0.0.6` - Form data handling
+- `websockets==12.0` - WebSocket support
+
+#### Whisper & Transcription
+- `openai-whisper==20231117` - OpenAI Whisper
+- `faster-whisper==1.2.1` - Faster Whisper (GPU accelerated)
+- `ctranslate2==4.4.0` - CTranslate2 backend (รองรับ cuDNN 8.x)
+
+#### Audio Processing
+- `librosa==0.10.1` - Audio analysis
+- `soundfile==0.12.1` - Audio file I/O
+- `pydub==0.25.1` - Audio manipulation
+- `ffmpeg-python==0.2.0` - FFmpeg Python wrapper
+
+#### Job Queue & Database
+- `redis[hiredis]==5.0.1` - Redis client
+- `rq==1.15.1` - Redis Queue for job management
+- `sqlalchemy==2.0.23` - SQL toolkit and ORM
+
+#### Networking & Messaging
+- `aiohttp==3.9.1` - Async HTTP client/server
+- `requests==2.31.0` - HTTP library
+- `httpx==0.25.2` - Async HTTP client
+- `pika==1.3.2` - RabbitMQ client
+- `aio-pika==9.3.0` - Async RabbitMQ client
+
+#### Thai NLP
+- `pythainlp==4.0.2` - Thai NLP library
+- `attacut==1.0.6` - Thai word segmentation
+- `tzdata>=2024.1` - Timezone data (required for PyThaiNLP)
+
+#### Utilities
+- `python-dotenv==1.0.0` - Environment variables
+- `aiofiles==23.2.1` - Async file operations
+- `pydantic==2.5.0` - Data validation
+- `python-magic==0.4.27` - File type detection
+- `psutil==5.9.6` - System and process utilities
+- `jinja2==3.1.2` - Template engine
+
+#### Security & Authentication
+- `python-jose[cryptography]==3.3.0` - JWT handling
+- `passlib[bcrypt]==1.7.4` - Password hashing
+
+**หมายเหตุ**: 
+- `torch` และ `torchaudio` ใช้จาก base image (2.2.0+cu121) ไม่ต้องติดตั้งใหม่
+- Development dependencies (pytest, black, flake8) รวมอยู่ใน requirements.txt
 
 ---
 
@@ -558,4 +616,3 @@ CUDNN_DISABLE=0
 ---
 
 **Last Updated**: 2026-01-03
-

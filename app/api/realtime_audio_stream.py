@@ -18,17 +18,26 @@ import aiofiles
 import json
 from io import BytesIO
 
-from ..services.whisper_service import WhisperService
-from ..services.websocket_service import websocket_manager
+# 🧪 Mock mode: ตรวจสอบ environment variable เพื่อ skip transcription
+MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/transcription/realtime", tags=["realtime-transcription"])
 
-# Initialize services
-whisper_service = WhisperService()
+if not MOCK_MODE:
+    from ..services.whisper_service import WhisperService
+    from ..services.websocket_service import websocket_manager
+    whisper_service = WhisperService()
+else:
+    logger.info("🧪 MOCK MODE: Transcription disabled - only testing stream connectivity")
+    whisper_service = None
+    websocket_manager = None
+router = APIRouter(prefix="/transcription/realtime", tags=["realtime-transcription"])
 
 # Store active audio stream sessions
 active_stream_sessions: dict[str, dict] = {}
+
+# Store caption event queues per session (สำหรับ yield events กลับไป NDJSON stream)
+caption_event_queues: dict[str, asyncio.Queue] = {}
 
 # Chunk size for processing (5 seconds of audio at 16kHz mono PCM16)
 # PCM16: 16kHz * 2 bytes * 5 seconds = 160,000 bytes (raw audio data)
@@ -50,6 +59,9 @@ async def receive_audio_stream(
     request: Request,
     x_meeting_id: Optional[str] = Header(None, alias="X-Meeting-Id"),
     x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    x_audio_format: Optional[str] = Header(None, alias="X-Audio-Format"),
+    x_sample_rate: Optional[str] = Header(None, alias="X-Sample-Rate"),
+    x_channels: Optional[str] = Header(None, alias="X-Channels"),
 ):
     """
     รับ continuous audio stream จาก Audio Tap และทำ transcription แบบ real-time
@@ -62,6 +74,9 @@ async def receive_audio_stream(
         request: FastAPI Request object (สำหรับอ่าน stream)
         x_meeting_id: Meeting ID (optional, from header)
         x_session_id: Session ID (optional, from header)
+        x_audio_format: Audio format (s16le, wav, etc.) - optional
+        x_sample_rate: Sample rate (16000, etc.) - optional
+        x_channels: Number of channels (1, 2, etc.) - optional
         
     Returns:
         StreamingResponse: NDJSON stream with status updates
@@ -70,9 +85,16 @@ async def receive_audio_stream(
     session_id = x_session_id or str(uuid.uuid4())
     meeting_id = x_meeting_id or "unknown"
     
+    # Log audio format metadata
+    audio_format = x_audio_format or "unknown"
+    sample_rate = x_sample_rate or "unknown"
+    channels = x_channels or "unknown"
+    
+    # ✅ เพิ่ม log ทันทีเพื่อตรวจสอบว่า request เข้ามาหรือไม่ (ก่อนอ่าน body)
     logger.info(
-        f"📥 Received audio stream request: SessionId={session_id}, MeetingId={meeting_id}, "
-        f"ContentType={request.headers.get('content-type', 'unknown')}"
+        f"📥 INGEST: request accepted - SessionId={session_id}, MeetingId={meeting_id}, "
+        f"ContentType={request.headers.get('content-type', 'unknown')}, "
+        f"AudioFormat={audio_format}, SampleRate={sample_rate}, Channels={channels}"
     )
     
     # Store session info (เก็บ datetime object เพื่อใช้คำนวณ epoch_ms)
@@ -84,7 +106,10 @@ async def receive_audio_stream(
         "created_at": session_start_time,  # ✅ เก็บ datetime object แทน ISO string
         "created_at_iso": session_start_time.isoformat(),  # สำหรับ JSON serialization
         "audio_size": 0,
-        "chunks_processed": 0
+        "chunks_processed": 0,
+        "audio_format": audio_format,
+        "sample_rate": sample_rate,
+        "channels": channels
     }
     
     async def stream_generator():
@@ -117,18 +142,61 @@ async def receive_audio_stream(
                 "type": "status",
                 "session_id": session_id,
                 "status": "streaming",
-                "message": "Audio stream started, processing chunks in background",
-                "created_at": session_start_time.isoformat()
+                "message": f"Audio stream started, processing chunks in background (MOCK_MODE={MOCK_MODE})",
+                "created_at": session_start_time.isoformat(),
+                "audio_format": audio_format,
+                "sample_rate": sample_rate,
+                "channels": channels
             }
             yield json.dumps(initial_response, ensure_ascii=False) + "\n"
             
-            # Process streaming audio (consume request body)
-            # ⚠️ สำคัญ: อ่าน stream ใน generator เพื่อให้ connection ยังเปิดอยู่
-            await process_streaming_audio(
-                session_id=session_id,
-                meeting_id=meeting_id,
-                request_body=request.stream()
+            # ✅ สร้าง queue สำหรับ caption events (เพื่อ yield กลับไป NDJSON stream)
+            event_queue = asyncio.Queue()
+            caption_event_queues[session_id] = event_queue
+            
+            # ✅ เริ่ม background task เพื่อ process streaming audio
+            processing_task = asyncio.create_task(
+                process_streaming_audio(
+                    session_id=session_id,
+                    meeting_id=meeting_id,
+                    request_body=request.stream(),
+                    event_queue=event_queue  # ✅ ส่ง queue ไปให้ process_streaming_audio
+                )
             )
+            
+            try:
+                # ✅ อ่าน caption events จาก queue และ yield กลับไป (พร้อม heartbeat)
+                while True:
+                    try:
+                        # รอ event จาก queue (timeout 1 วินาที)
+                        event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                        if event is None:  # Sentinel value = stop
+                            break
+                        yield json.dumps(event, ensure_ascii=False) + "\n"
+                    except asyncio.TimeoutError:
+                        # Timeout = ไม่มี event ใหม่ - yield heartbeat เพื่อ keep connection alive
+                        heartbeat = {
+                            "type": "heartbeat",
+                            "session_id": session_id,
+                            "status": "streaming",
+                            "ts": datetime.now(timezone.utc).isoformat()
+                        }
+                        yield json.dumps(heartbeat, ensure_ascii=False) + "\n"
+                        
+                        # ตรวจสอบว่า processing task ยังทำงานอยู่หรือไม่
+                        if processing_task.done():
+                            break
+            finally:
+                # ✅ Signal stop และรอ processing task จบ
+                await event_queue.put(None)  # Sentinel value
+                try:
+                    await asyncio.wait_for(processing_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    processing_task.cancel()
+                finally:
+                    # Cleanup
+                    if session_id in caption_event_queues:
+                        del caption_event_queues[session_id]
             
             # Yield final status
             final_status = active_stream_sessions.get(session_id, {})
@@ -175,13 +243,17 @@ async def receive_audio_stream(
             }
             yield json.dumps(error_response, ensure_ascii=False) + "\n"
     
+    # ✅ เพิ่ม headers เพื่อปิด proxy buffering (ลดเวลารอ headers จาก 95s → < 3s)
     # Return StreamingResponse with NDJSON format
     return StreamingResponse(
         stream_generator(),
         media_type="application/x-ndjson",  # NDJSON format
         headers={
             "X-Session-Id": session_id,
-            "X-Meeting-Id": meeting_id
+            "X-Meeting-Id": meeting_id,
+            "Cache-Control": "no-cache",              # ✅ ปิด cache
+            "X-Accel-Buffering": "no",               # ✅ ปิด Nginx buffering (สำคัญ!)
+            "Connection": "keep-alive"                # ✅ Keep connection alive
         }
     )
 
@@ -189,7 +261,8 @@ async def receive_audio_stream(
 async def process_streaming_audio(
     session_id: str,
     meeting_id: str,
-    request_body
+    request_body,
+    event_queue: Optional[asyncio.Queue] = None  # ✅ Queue สำหรับ caption events
 ):
     """
     อ่าน audio stream chunk by chunk และประมวลผล transcription ทีละ chunk
@@ -214,7 +287,7 @@ async def process_streaming_audio(
     try:
         logger.info(
             f"🔄 Starting streaming audio processing: SessionId={session_id}, "
-            f"MeetingId={meeting_id}"
+            f"MeetingId={meeting_id}, MOCK_MODE={MOCK_MODE}"
         )
         
         # อ่าน stream chunk by chunk
@@ -293,7 +366,8 @@ async def process_streaming_audio(
                         meeting_id=meeting_id,
                         audio_path=temp_path,
                         chunk_index=chunk_index,
-                        audio_size=audio_data_size
+                        audio_size=audio_data_size,
+                        event_queue=event_queue  # ✅ ส่ง queue ไปให้ process_audio_chunk_transcription
                     )
                 )
                 
@@ -344,7 +418,8 @@ async def process_streaming_audio(
                 meeting_id=meeting_id,
                 audio_path=temp_path,
                 chunk_index=chunk_index,
-                audio_size=audio_data_size
+                audio_size=audio_data_size,
+                event_queue=event_queue  # ✅ ส่ง queue ไปให้ process_audio_chunk_transcription
             )
             
             chunk_index += 1
@@ -389,13 +464,23 @@ async def process_streaming_audio(
             active_stream_sessions[session_id]["error"] = str(e)
         raise
     finally:
-        # Cleanup: Log final state
+        # ✅ Cleanup: Log final state และลบ session จาก active_stream_sessions
         final_state = active_stream_sessions.get(session_id, {})
+        duration = datetime.now(timezone.utc) - final_state.get("created_at", datetime.now(timezone.utc))
         logger.info(
             f"🏁 Real-time stream ended: SessionId={session_id}, "
             f"Status={final_state.get('status', 'unknown')}, "
-            f"TotalBytes={total_bytes}, ChunksProcessed={chunk_index}"
+            f"TotalBytes={total_bytes}, ChunksProcessed={chunk_index}, "
+            f"Duration={duration}"
         )
+        
+        # ✅ ลบ session จาก active_stream_sessions เพื่อป้องกัน memory leak
+        if session_id in active_stream_sessions:
+            del active_stream_sessions[session_id]
+        
+        # ✅ ลบ queue จาก caption_event_queues (ถ้ายังมีอยู่)
+        if session_id in caption_event_queues:
+            del caption_event_queues[session_id]
 
 
 def create_wav_header(data_size: int) -> bytes:
@@ -431,105 +516,187 @@ async def process_audio_chunk_transcription(
     meeting_id: str,
     audio_path: str,
     chunk_index: int,
-    audio_size: int
+    audio_size: int,
+    event_queue: Optional[asyncio.Queue] = None  # ✅ Queue สำหรับ caption events
 ):
     """
     ประมวลผล transcription สำหรับ audio chunk หนึ่ง
+    🧪 ใน MOCK_MODE: จะ skip transcription และส่ง mock caption events
     """
     temp_path = audio_path
     try:
         logger.info(
             f"🔄 Processing audio chunk transcription: SessionId={session_id}, "
-            f"ChunkIndex={chunk_index}, AudioPath={audio_path}"
+            f"ChunkIndex={chunk_index}, AudioPath={audio_path}, MOCK_MODE={MOCK_MODE}"
         )
         
-        # Transcribe audio
-        transcription_result = whisper_service.transcribe_file(
-            audio_path=temp_path,
-            model_size="base",
-            language="th",
-            use_thai_processor=True
-        )
-        
-        text = transcription_result.get("text", "")
-        segments = transcription_result.get("segments", [])
+        if MOCK_MODE:
+            # 🧪 Mock mode: ส่ง mock caption events โดยไม่ทำ transcription
+            logger.info(
+                f"🧪 MOCK MODE: Skipping transcription, sending mock caption events"
+            )
+            
+            # Mock transcription result
+            text = f"[Mock transcription for chunk {chunk_index}]"
+            segments = [
+                {
+                    "start": 0.0,
+                    "end": 5.0,
+                    "text": text,
+                    "confidence": 0.95
+                }
+            ]
+        else:
+            # Real transcription
+            if whisper_service is None:
+                raise RuntimeError("WhisperService not initialized")
+            
+            transcription_result = whisper_service.transcribe_file(
+                audio_path=temp_path,
+                model_size="base",
+                language="th",
+                use_thai_processor=True
+            )
+            
+            text = transcription_result.get("text", "")
+            segments = transcription_result.get("segments", [])
         
         logger.info(
             f"✅ Transcription completed for chunk {chunk_index}: SessionId={session_id}, "
             f"TextLength={len(text)}, SegmentsCount={len(segments)}"
         )
         
-        # Send caption events via WebSocket
-        if meeting_id and meeting_id != "unknown":
-            user_id = f"user-{meeting_id}"
-        else:
-            user_id = f"stream-{session_id}"
-        
-        # ✅ Calculate timing using epoch_ms (milliseconds since epoch)
-        # ใช้ session start time + chunk offset
-        session_info = active_stream_sessions.get(session_id, {})
-        session_start_time = session_info.get("created_at")
-        if session_start_time:
-            # ใช้ datetime object โดยตรง (ไม่ต้อง parse)
-            try:
-                if isinstance(session_start_time, datetime):
-                    base_epoch_ms = int(session_start_time.timestamp() * 1000)
-                elif isinstance(session_start_time, str):
-                    session_dt = datetime.fromisoformat(session_start_time.replace('Z', '+00:00'))
-                    base_epoch_ms = int(session_dt.timestamp() * 1000)
-                else:
-                    raise ValueError(f"Unexpected type for created_at: {type(session_start_time)}")
-            except Exception as e:
-                logger.warning(f"Failed to parse session start time: {e}, using current time")
+        # Send caption events via WebSocket (ถ้าไม่ใช่ MOCK_MODE)
+        if not MOCK_MODE and websocket_manager is not None:
+            if meeting_id and meeting_id != "unknown":
+                user_id = f"user-{meeting_id}"
+            else:
+                user_id = f"stream-{session_id}"
+            
+            # ✅ Calculate timing using epoch_ms (milliseconds since epoch)
+            # ใช้ session start time + chunk offset
+            session_info = active_stream_sessions.get(session_id, {})
+            session_start_time = session_info.get("created_at")
+            if session_start_time:
+                # ใช้ datetime object โดยตรง (ไม่ต้อง parse)
+                try:
+                    if isinstance(session_start_time, datetime):
+                        base_epoch_ms = int(session_start_time.timestamp() * 1000)
+                    elif isinstance(session_start_time, str):
+                        session_dt = datetime.fromisoformat(session_start_time.replace('Z', '+00:00'))
+                        base_epoch_ms = int(session_dt.timestamp() * 1000)
+                    else:
+                        raise ValueError(f"Unexpected type for created_at: {type(session_start_time)}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse session start time: {e}, using current time")
+                    base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            else:
                 base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            
+            # Calculate chunk start time in seconds (from session start)
+            chunk_start_seconds = chunk_index * 5.0  # 5 seconds per chunk
+            
+            # Send each segment as a caption event (ตาม format ที่แนะนำ)
+            for idx, segment in enumerate(segments):
+                segment_start_s = chunk_start_seconds + segment.get("start", 0.0)
+                segment_end_s = chunk_start_seconds + segment.get("end", segment.get("start", 0.0) + 5.0)
+                
+                # Convert to epoch_ms
+                start_epoch_ms = base_epoch_ms + int(segment_start_s * 1000)
+                end_epoch_ms = base_epoch_ms + int(segment_end_s * 1000)
+                
+                # ✅ Create caption event ตาม format ที่แนะนำ
+                caption_event = {
+                    "type": "caption",
+                    "session_id": session_id,
+                    "stream_id": meeting_id if meeting_id != "unknown" else session_id,
+                    "seq": chunk_index * 100 + idx,  # Unique sequence number
+                    "timing": {
+                        "kind": "epoch_ms",
+                        "start": start_epoch_ms,
+                        "end": end_epoch_ms
+                    },
+                    "text": segment.get("text", ""),
+                    "lang": "th",
+                    "is_final": True,
+                    "tokens": [],  # Optional: จะเพิ่ม tokens ถ้าต้องการ
+                    "meta": {
+                        "speaker": None,
+                        "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
+                        "model": "faster-whisper" if not MOCK_MODE else "mock",
+                        "chunk_id": f"c_{chunk_index:04d}_{idx:02d}"
+                    },
+                    "ts": datetime.now(timezone.utc).isoformat()
+                }
+                
+                # ✅ Send via WebSocket (ถ้าไม่ใช่ MOCK_MODE)
+                if not MOCK_MODE and websocket_manager is not None:
+                    await websocket_manager.send_to_user(user_id, caption_event)
+                
+                # ✅ Put caption event ลง queue เพื่อ yield กลับไป NDJSON stream
+                if event_queue is not None:
+                    try:
+                        await event_queue.put(caption_event)
+                        logger.debug(
+                            f"📡 Queued caption event: SessionId={session_id}, "
+                            f"ChunkIndex={chunk_index}, SegmentIndex={idx}, "
+                            f"Start={start_epoch_ms}ms, End={end_epoch_ms}ms, "
+                            f"Text={caption_event['text'][:50]}..."
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to queue caption event: {e}")
+                else:
+                    logger.debug(
+                        f"📡 Caption event (no queue): SessionId={session_id}, "
+                        f"ChunkIndex={chunk_index}, SegmentIndex={idx}, "
+                        f"Start={start_epoch_ms}ms, End={end_epoch_ms}ms, "
+                        f"Text={caption_event['text'][:50]}..."
+                    )
         else:
-            base_epoch_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        
-        # Calculate chunk start time in seconds (from session start)
-        chunk_start_seconds = chunk_index * 5.0  # 5 seconds per chunk
-        
-        # Send each segment as a caption event (ตาม format ที่แนะนำ)
-        for idx, segment in enumerate(segments):
-            segment_start_s = chunk_start_seconds + segment.get("start", 0.0)
-            segment_end_s = chunk_start_seconds + segment.get("end", segment.get("start", 0.0) + 5.0)
-            
-            # Convert to epoch_ms
-            start_epoch_ms = base_epoch_ms + int(segment_start_s * 1000)
-            end_epoch_ms = base_epoch_ms + int(segment_end_s * 1000)
-            
-            # ✅ Create caption event ตาม format ที่แนะนำ
-            caption_event = {
-                "type": "caption",
-                "session_id": session_id,
-                "stream_id": meeting_id if meeting_id != "unknown" else session_id,
-                "seq": chunk_index * 100 + idx,  # Unique sequence number
-                "timing": {
-                    "kind": "epoch_ms",
-                    "start": start_epoch_ms,
-                    "end": end_epoch_ms
-                },
-                "text": segment.get("text", ""),
-                "lang": "th",
-                "is_final": True,
-                "tokens": [],  # Optional: จะเพิ่ม tokens ถ้าต้องการ
-                "meta": {
-                    "speaker": None,
-                    "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
-                    "model": "faster-whisper",
-                    "chunk_id": f"c_{chunk_index:04d}_{idx:02d}"
-                },
-                "ts": datetime.now(timezone.utc).isoformat()
-            }
-            
-            # Send via WebSocket
-            await websocket_manager.send_to_user(user_id, caption_event)
-            
-            logger.debug(
-                f"📡 Sent caption event: SessionId={session_id}, "
-                f"ChunkIndex={chunk_index}, SegmentIndex={idx}, "
-                f"Start={start_epoch_ms}ms, End={end_epoch_ms}ms, "
-                f"Text={caption_event['text'][:50]}..."
-            )
+            # MOCK_MODE: ส่ง mock caption event ผ่าน queue
+            if event_queue is not None:
+                # ✅ สร้าง mock caption event
+                chunk_start_seconds = chunk_index * 5.0
+                base_epoch_ms = int(active_stream_sessions.get(session_id, {}).get("created_at", datetime.now(timezone.utc)).timestamp() * 1000)
+                start_epoch_ms = base_epoch_ms + int(chunk_start_seconds * 1000)
+                end_epoch_ms = base_epoch_ms + int((chunk_start_seconds + 5.0) * 1000)
+                
+                mock_caption_event = {
+                    "type": "caption",
+                    "session_id": session_id,
+                    "stream_id": meeting_id if meeting_id != "unknown" else session_id,
+                    "seq": chunk_index * 100,
+                    "timing": {
+                        "kind": "epoch_ms",
+                        "start": start_epoch_ms,
+                        "end": end_epoch_ms
+                    },
+                    "text": text,
+                    "lang": "th",
+                    "is_final": True,
+                    "tokens": [],
+                    "meta": {
+                        "speaker": None,
+                        "confidence": 0.95,
+                        "model": "mock",
+                        "chunk_id": f"c_{chunk_index:04d}_00"
+                    },
+                    "ts": datetime.now(timezone.utc).isoformat()
+                }
+                
+                try:
+                    await event_queue.put(mock_caption_event)
+                    logger.info(
+                        f"🧪 MOCK MODE: Queued mock caption event: SessionId={session_id}, "
+                        f"ChunkIndex={chunk_index}, Text={text[:50]}..."
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to queue mock caption event: {e}")
+            else:
+                logger.info(
+                    f"🧪 MOCK MODE: Would send caption event: SessionId={session_id}, "
+                    f"ChunkIndex={chunk_index}, Text={text[:50]}..."
+                )
         
     except Exception as e:
         logger.error(
@@ -566,4 +733,3 @@ async def list_active_streams():
         "sessions": list(active_stream_sessions.values()),
         "count": len(active_stream_sessions)
     }
-
