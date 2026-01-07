@@ -141,18 +141,20 @@ cython_debug/
 uploads/
 temp/
 storage/
-# Ignore large model files but allow Python files
-models/*.bin
-models/*.ggml
-models/*.model
-models/*.pt
-models/*.pth
-models/*.onnx
-models/*.tflite
-models/*.h5
-models/*.pkl
-models/*.safetensors
-models/*.gguf
+# Ignore large model files and entire models directory
+# Models are too large for GitHub (2.1GB+) and should be downloaded separately
+models/
+*.bin
+*.ggml
+*.model
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.h5
+*.pkl
+*.safetensors
+*.gguf
 *.mp4
 *.avi
 *.mov

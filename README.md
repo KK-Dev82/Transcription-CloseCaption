@@ -38,6 +38,20 @@
 
 ติดตั้งผ่าน `pip install -r requirements.txt` (ดูรายละเอียดใน requirements.txt)
 
+### Models (Whisper Models)
+
+⚠️ **สำคัญ**: โฟลเดอร์ `models/` ไม่ได้ถูก commit ใน Git repository เพราะมีขนาดใหญ่เกินไป (2.1GB+) และ GitHub มีไฟล์ size limit 100MB
+
+Models จะถูกดาวน์โหลดอัตโนมัติเมื่อ:
+- ใช้ `faster-whisper`: Models จะถูกดาวน์โหลดจาก Hugging Face Hub เมื่อเรียกใช้ครั้งแรก
+- ตั้งค่า `WHISPER_DOWNLOAD_ROOT` environment variable เป็น `/workspace/transcription-service/models` เพื่อเก็บ models แบบถาวร
+
+**Model Paths**:
+- Default: `models/` (ใน working directory)
+- สามารถกำหนดผ่าน: `WHISPER_DOWNLOAD_ROOT` environment variable
+
+**หมายเหตุ**: สำหรับการ deploy ครั้งแรก Models จะต้องถูกดาวน์โหลดก่อนใช้งาน (อาจใช้เวลา 5-15 นาที ขึ้นอยู่กับ model size)
+
 ---
 
 ## 🚀 Quick Start (หลังจาก Restart Pod Container)
