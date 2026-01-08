@@ -57,12 +57,13 @@ else
     exit 1
 fi
 
-# หยุด worker เดิม (ถ้ามี) - kill ครบทุก queue
+# หยุด worker เดิม (ถ้ามี) - kill ครบทุก queue (รวม multi-worker pattern)
 print_info "Stopping existing RQ workers..."
 pkill -f "rq worker.*transcription_gpu" 2>/dev/null || true
 pkill -f "rq worker.*transcription_priority" 2>/dev/null || true
 pkill -f "rq worker.*transcription_cpu" 2>/dev/null || true
 pkill -f "rq worker.*transcription_preprocess" 2>/dev/null || true
+pkill -f "rq.*worker-gpu.*-w" 2>/dev/null || true  # Kill multi-worker pattern
 sleep 2
 
 # ตั้งค่า LD_LIBRARY_PATH สำหรับ CUDA, cuDNN และ CTranslate2
@@ -146,57 +147,73 @@ if command -v nvidia-smi &> /dev/null; then
     NUM_GPUS=${NUM_GPUS:-$DETECTED_GPUS}
     print_info "Detected $DETECTED_GPUS GPUs (using $NUM_GPUS)"
 else
-    NUM_GPUS=${NUM_GPUS:-4}
+    NUM_GPUS=${NUM_GPUS:-1}
     print_warning "nvidia-smi not found, using NUM_GPUS=$NUM_GPUS (default)"
 fi
+
+# จำนวน workers ต่อ 1 GPU (เพื่อให้ GPU utilization สูงขึ้น)
+# 4 workers = optimal สำหรับ RTX 4000 Ada (20GB VRAM) + small model
+# แต่ Pod มี 6 vCPU → ใช้ 3 workers เพื่อไม่ให้ CPU bottleneck
+GPU_WORKERS_PER_GPU=${GPU_WORKERS_PER_GPU:-4}  # เพิ่มจาก 3 เป็น 4 เพื่อความเร็ว
+print_info "GPU Workers per GPU: $GPU_WORKERS_PER_GPU"
 
 # Set PYTHONPATH เพื่อให้ import app.* ได้
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
-# เริ่ม RQ Workers สำหรับแต่ละ GPU
+# เริ่ม RQ Workers สำหรับแต่ละ GPU (multiple workers per GPU)
 # แต่ละ worker ฟัง priority queue ก่อน แล้วค่อย gpu queue ของตัวเอง
 # เพื่อให้ priority jobs ได้ GPU ทันทีโดยไม่แย่ง GPU0
+# 🚀 OPTIMIZATION: Multiple workers per GPU = concurrent GPU utilization
 WORKER_PIDS=()
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "Starting RQ Worker GPU $i (listening to priority + gpu$i)..."
-    # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
-    # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
-    # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
-    # - WHISPER_DEVICE: ต้องเป็น 'cuda'
-    # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
-    # ⚠️ สำคัญ: ต้องส่งต่อ LD_LIBRARY_PATH ให้ worker process
-    # ถ้าไม่ส่งต่อ CTranslate2 จะไม่พบ cuDNN → fallback เป็น CPU → ใช้ RAM มาก
-    # FIX: ใช้ env command เพื่อให้แน่ใจว่า environment variables ถูกส่งต่ออย่างถูกต้อง
-    # และใช้ explicit LD_LIBRARY_PATH แทน ${LD_LIBRARY_PATH:-} เพื่อป้องกัน empty value
-    env CUDA_VISIBLE_DEVICES=$i \
-        LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
-        REDIS_URL="$REDIS_URL" \
-        PYTHONPATH="$PYTHONPATH" \
-        WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
-        WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
-        WHISPER_MODEL="${WHISPER_MODEL:-base}" \
-        WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
-        WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
-        CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
-        VIDEO_WORKER_TYPE=pika \
-        RQ_PRELOAD_MODEL=true \
-        RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
-        rq worker \
-        --url "$REDIS_URL" \
-        transcription_priority \
-        transcription_gpu$i \
-        --name worker-gpu$i \
-        --pid /tmp/rq-worker-gpu$i.pid \
-        > /tmp/rq-worker-gpu$i.log 2>&1 &
+    print_info "Starting $GPU_WORKERS_PER_GPU RQ Workers for GPU $i..."
     
-    WORKER_PID=$!
-    WORKER_PIDS+=($WORKER_PID)
-    print_success "RQ Worker GPU $i started (PID: $WORKER_PID) - listening to priority + gpu$i"
+    # Start multiple workers for this GPU (each in separate process)
+    for w in $(seq 0 $((GPU_WORKERS_PER_GPU - 1))); do
+        worker_name="worker-gpu${i}-w${w}"
+        print_info "   Starting ${worker_name} (listening to priority + gpu$i)..."
+        
+        # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
+        # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
+        # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
+        # - WHISPER_DEVICE: ต้องเป็น 'cuda'
+        # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
+        # ⚠️ สำคัญ: ต้องส่งต่อ LD_LIBRARY_PATH ให้ worker process
+        # ถ้าไม่ส่งต่อ CTranslate2 จะไม่พบ cuDNN → fallback เป็น CPU → ใช้ RAM มาก
+        # FIX: ใช้ env command เพื่อให้แน่ใจว่า environment variables ถูกส่งต่ออย่างถูกต้อง
+        # และใช้ explicit LD_LIBRARY_PATH แทน ${LD_LIBRARY_PATH:-} เพื่อป้องกัน empty value
+        env CUDA_VISIBLE_DEVICES=$i \
+            LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+            REDIS_URL="$REDIS_URL" \
+            PYTHONPATH="$PYTHONPATH" \
+            WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
+            WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
+            WHISPER_MODEL="${WHISPER_MODEL:-base}" \
+            WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
+            WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
+            CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
+            VIDEO_WORKER_TYPE=pika \
+            RQ_PRELOAD_MODEL=true \
+            RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
+            rq worker \
+            --url "$REDIS_URL" \
+            transcription_priority \
+            transcription_gpu$i \
+            --name $worker_name \
+            --pid /tmp/rq-${worker_name}.pid \
+            > /tmp/rq-${worker_name}.log 2>&1 &
+        
+        WORKER_PID=$!
+        WORKER_PIDS+=($WORKER_PID)
+        print_success "✅ ${worker_name} started (PID: $WORKER_PID)"
+    done
+    
+    print_success "✅ GPU $i: $GPU_WORKERS_PER_GPU workers started"
 done
 
-# เริ่ม Preprocess Workers (6 workers สำหรับ extract + chunking)
+# เริ่ม Preprocess Workers (1 worker สำหรับ extract + chunking - ลดเพื่อลด setup complexity)
 # ใช้ CPU workers หลายตัวเพื่อรองรับ 25 concurrent requests
-NUM_PREPROCESS_WORKERS=${NUM_PREPROCESS_WORKERS:-6}
+NUM_PREPROCESS_WORKERS=${NUM_PREPROCESS_WORKERS:-1}
 print_info "Starting RQ Preprocess Workers (${NUM_PREPROCESS_WORKERS} workers for extract + chunking)..."
 PREPROCESS_PIDS=()
 for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
@@ -216,8 +233,8 @@ for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
     print_success "RQ Preprocess Worker $i started (PID: $PREPROCESS_PID)"
 done
 
-# เริ่ม CPU Workers สำหรับ aggregator jobs (2 workers)
-NUM_CPU_WORKERS=${NUM_CPU_WORKERS:-2}
+# เริ่ม CPU Workers สำหรับ aggregator jobs (1 worker - ลดเพื่อลด setup complexity)
+NUM_CPU_WORKERS=${NUM_CPU_WORKERS:-1}
 print_info "Starting RQ CPU Workers (${NUM_CPU_WORKERS} workers for aggregator jobs)..."
 CPU_PIDS=()
 for i in $(seq 0 $((NUM_CPU_WORKERS - 1))); do
