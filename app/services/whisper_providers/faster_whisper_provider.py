@@ -5,7 +5,7 @@ Faster Whisper Provider
 import os
 import logging
 import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from pathlib import Path
 
 from .base_provider import WhisperProvider, TranscriptionResult
@@ -15,10 +15,12 @@ logger = logging.getLogger(__name__)
 # Import faster-whisper
 try:
     from faster_whisper import WhisperModel, BatchedInferencePipeline
+    import numpy as np
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
     logger.warning("faster-whisper not installed. Please install: pip install faster-whisper")
+    np = None
 
 
 class FasterWhisperProvider(WhisperProvider):
@@ -89,7 +91,8 @@ class FasterWhisperProvider(WhisperProvider):
         Transcribe audio file using faster-whisper
         
         Args:
-            audio_path: Path to audio file
+            audio_path: Path to audio file (.wav, .mp3, etc.) หรือ .npy file (numpy array)
+                       หรือถ้าเป็น numpy array ใน RAM ใช้ path เป็น memory identifier
             language: Language code (th, en, auto)
             model_size: Model size (tiny, base, small, medium, large)
             initial_prompt: Initial prompt for better accuracy
@@ -98,9 +101,21 @@ class FasterWhisperProvider(WhisperProvider):
             TranscriptionResult
         """
         try:
-            # Validate file
-            if not Path(audio_path).exists():
-                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+            # OPTIMIZATION: ถ้า path เป็น .npy file (pre-decoded audio) ให้โหลดเป็น numpy array
+            # เพื่อลด I/O และ CPU overhead (GPU จะทำงานต่อเนื่องขึ้น)
+            audio_input: Union[str, np.ndarray] = audio_path
+            
+            if audio_path.endswith('.npy'):
+                # โหลด pre-decoded numpy array (เร็วกว่า decode WAV file)
+                if not Path(audio_path).exists():
+                    raise FileNotFoundError(f"Audio array file not found: {audio_path}")
+                logger.info(f"[Faster Whisper] 📦 Loading pre-decoded audio array: {audio_path}")
+                audio_input = np.load(audio_path, mmap_mode='r')  # mmap_mode='r' เพื่อลด memory
+                logger.info(f"[Faster Whisper] ✅ Loaded audio array: shape={audio_input.shape}, dtype={audio_input.dtype}")
+            else:
+                # Validate file สำหรับ audio files ปกติ
+                if not Path(audio_path).exists():
+                    raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
             # Use default model if not specified
             if model_size is None:
@@ -113,7 +128,10 @@ class FasterWhisperProvider(WhisperProvider):
             current_device = self._get_device()
             
             # Transcribe
-            logger.info(f"[Faster Whisper] Transcribing: {audio_path}")
+            if isinstance(audio_input, np.ndarray):
+                logger.info(f"[Faster Whisper] Transcribing: numpy array (shape={audio_input.shape})")
+            else:
+                logger.info(f"[Faster Whisper] Transcribing: {audio_path}")
             logger.info(f"   Model: {model_size}, Language: {language}, Device: {current_device}")
             
             import time
@@ -137,7 +155,7 @@ class FasterWhisperProvider(WhisperProvider):
                 logger.info(f"[Faster Whisper] 🚀 Using BatchedInferencePipeline (batch_size={batch_size})")
                 batched_model = BatchedInferencePipeline(model=model)
                 segments, info = batched_model.transcribe(
-                    audio_path,
+                    audio_input,  # รองรับทั้ง str และ np.ndarray
                     language=language if language != "auto" else None,
                     vad_filter=vad_filter,
                     initial_prompt=initial_prompt,
@@ -150,7 +168,7 @@ class FasterWhisperProvider(WhisperProvider):
             else:
                 logger.info(f"[Faster Whisper] Using standard WhisperModel.transcribe()")
                 segments, info = model.transcribe(
-                    audio_path,
+                    audio_input,  # รองรับทั้ง str และ np.ndarray
                     language=language if language != "auto" else None,
                     vad_filter=vad_filter,
                     initial_prompt=initial_prompt,
