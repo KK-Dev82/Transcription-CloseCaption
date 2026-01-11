@@ -20,6 +20,20 @@ ctranslate2==4.4.0
 #   - ใช้ ctranslate2==4.4.0 (รองรับ cuDNN 8.x ที่ PyTorch 2.2.0 ใช้)
 #   - สำหรับ GPU mode: ต้องมี cuDNN libraries ครบในระบบ
 #   - สำหรับ CPU mode: ทำงานได้ทันที (ช้ากว่า GPU)
+#
+# 🔧 ปัญหา cuDNN และ LD_LIBRARY_PATH (เคยมีปัญหา):
+#   - CTranslate2 ต้องการ cuDNN libraries (libcudnn_ops_infer.so.8) ใน LD_LIBRARY_PATH
+#   - ปัญหาหลัก: CTranslate2 มองหา cuDNN ใน system path (/usr/lib/x86_64-linux-gnu/)
+#     แต่ไฟล์อยู่ใน PyTorch path (/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/)
+#   - วิธีแก้ไข: เพิ่ม system path เข้าไปใน LD_LIBRARY_PATH (แก้ไขแล้วใน start-rq-workers.sh)
+#   - Order ของ LD_LIBRARY_PATH (สำคัญ!):
+#     1. cuDNN path (PyTorch): /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib
+#     2. System path: /usr/lib/x86_64-linux-gnu ⚠️ จำเป็น! CTranslate2 มองหา cuDNN ใน path นี้
+#     3. CUDA path: /usr/local/cuda-12.1/lib64
+#     4. CTranslate2 path: /usr/local/lib/python3.10/dist-packages/ctranslate2.libs
+#   - ถ้า transcription ช้า (>2 นาที สำหรับ 30 นาที audio): ตรวจสอบว่า workers ใช้ GPU จริงหรือไม่
+#   - ถ้า LD_LIBRARY_PATH ไม่ถูกต้อง: Workers อาจ fallback เป็น CPU (ช้ามาก!)
+#   - วิธีตรวจสอบ: nvidia-smi --query-compute-apps (ควรเห็น processes เมื่อ transcription ทำงาน)
 # torch และ torchaudio ใช้จาก base image (2.2.0+cu121)
 # ไม่ต้องติดตั้งใหม่ เพื่อหลีกเลี่ยง conflict
 # torch==2.2.0+cu121  (ใช้จาก base image)

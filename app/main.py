@@ -41,12 +41,21 @@ async def lifespan(app: FastAPI):
     # 🧪 MOCK MODE: WebSocket ยังต้องทำงานได้ (สำหรับ realtime caption events)
     MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
     
-    # ✅ Initialize WebSocket service in background (ทำงานได้ทั้ง MOCK MODE และ normal mode)
-    # เพราะ WebSocket จำเป็นสำหรับ realtime caption events
-    async def init_websocket():
+    # ✅ Initialize services in background (non-blocking)
+    # FIX: ย้าย async tasks ไปหลัง yield เพื่อให้ uvicorn bind port ได้ทันที
+    # เพราะ async tasks ก่อน yield อาจทำให้ uvicorn ไม่ bind port ได้
+    logger.info("✅ Application startup complete")
+    
+    # Yield control to uvicorn FIRST (this allows uvicorn to bind port immediately)
+    yield
+    
+    # After yield, uvicorn is running - now we can start background tasks
+    import asyncio
+    
+    # Start WebSocket initialization in background (after uvicorn is running)
+    async def init_websocket_background():
         try:
             from app.services.websocket_service import initialize_websocket_service
-            import asyncio
             await asyncio.wait_for(initialize_websocket_service(), timeout=1.0)
             logger.info("✅ WebSocket service initialized")
         except asyncio.TimeoutError:
@@ -55,39 +64,22 @@ async def lifespan(app: FastAPI):
             error_msg = str(e) if e else "Unknown error"
             logger.warning(f"⚠️  WebSocket service initialization failed: {error_msg} (continuing anyway)")
     
-    # Start WebSocket init in background (don't wait)
-    import asyncio
-    asyncio.create_task(init_websocket())
+    # Start WebSocket init in background (after uvicorn is running)
+    asyncio.create_task(init_websocket_background())
     
     if not MOCK_MODE:
-        
-        # Start periodic cleanup (must be in async context with running event loop)
+        # Start periodic cleanup (after uvicorn is running)
         try:
             from app.services.cleanup_service import cleanup_service
-            
-            # Start periodic cleanup task (requires running event loop)
-            # Create task directly since we're in async startup context
-            async def start_cleanup_task():
-                try:
-                    cleanup_service.start_periodic_cleanup()
-                    logger.info("✅ Periodic cleanup started")
-                except Exception as e:
-                    logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
-            
-            # Start in background
-            asyncio.create_task(start_cleanup_task())
-            
-            # Skip startup cleanup completely (may hang) - will be done by periodic cleanup instead
-            logger.info("ℹ️  Skipping startup cleanup (will be done by periodic cleanup)")
+            try:
+                cleanup_service.start_periodic_cleanup()
+                logger.info("✅ Periodic cleanup started")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
         except Exception as e:
-            logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
+            logger.warning(f"⚠️  Failed to import cleanup service: {e}")
     else:
         logger.info("🧪 MOCK MODE: Skipping WebSocket and cleanup initialization")
-    
-    logger.info("✅ Application startup complete")
-    
-    # Yield control to uvicorn
-    yield
     
     # Shutdown
     logger.info("🛑 Starting application shutdown...")

@@ -123,32 +123,61 @@ async def _update_task_stage_and_webhook(
         stage: Current stage (e.g., "extracting_audio", "transcribing", "merging")
         stage_description: Stage description in Thai
         stage_progress: Progress within current stage (0-100), optional
-        json_storage: JSONStorage instance (will create if None)
+        json_storage: JSONStorage instance (will create if None) - สำหรับ backward compatibility
     """
     try:
-        if json_storage is None:
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
+        # FIX: ใช้ SQLiteStorage เป็นหลัก (ตาม STORAGE_TYPE)
+        # Note: os is already imported at module level (line 8)
+        from datetime import datetime, timezone
         
-        # โหลด task data
-        task_dir = json_storage.storage_dir / "transcriptions" / task_id
-        metadata_path = task_dir / "metadata.json"
-        if metadata_path.exists():
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                task_data = json.load(f)
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        
+        if storage_type == 'sqlite':
+            # ใช้ SQLiteStorage
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+            
+            # โหลด task data
+            task_data = storage.load_transcription(task_id, skip_migration=True)
+            if not task_data:
+                task_data = {}
+            
+            # อัปเดต stage information
+            task_data["progress"] = progress
+            task_data["status"] = status
+            task_data["current_stage"] = stage
+            task_data["current_stage_description"] = stage_description
+            if stage_progress is not None:
+                task_data["stage_progress"] = stage_progress
+            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # บันทึก
+            storage.save_transcription(task_id, task_data)
         else:
-            task_data = {}
-        
-        # อัปเดต stage information
-        task_data["progress"] = progress
-        task_data["status"] = status
-        task_data["current_stage"] = stage
-        task_data["current_stage_description"] = stage_description
-        if stage_progress is not None:
-            task_data["stage_progress"] = stage_progress
-        
-        # บันทึก
-        json_storage.save_transcription(task_id, task_data)
+            # Fallback to JSONStorage
+            if json_storage is None:
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+            
+            # โหลด task data
+            task_dir = json_storage.storage_dir / "transcriptions" / task_id
+            metadata_path = task_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    task_data = json.load(f)
+            else:
+                task_data = {}
+            
+            # อัปเดต stage information
+            task_data["progress"] = progress
+            task_data["status"] = status
+            task_data["current_stage"] = stage
+            task_data["current_stage_description"] = stage_description
+            if stage_progress is not None:
+                task_data["stage_progress"] = stage_progress
+            
+            # บันทึก
+            json_storage.save_transcription(task_id, task_data)
         
         # ส่ง webhook progress (ถ้ามี callback_url)
         callback_url = task_data.get("callback_url")
@@ -163,6 +192,34 @@ async def _update_task_stage_and_webhook(
                 )
             except Exception as e:
                 logger.warning(f"⚠️  Failed to send webhook progress: {e}")
+        
+        # ส่ง WebSocket notification (real-time updates)
+        # Rate limiting: ส่งเมื่อ progress เปลี่ยน >= 5% หรือ stage เปลี่ยน
+        try:
+            from app.services.websocket_service import websocket_manager
+            
+            # ตรวจสอบว่า progress เปลี่ยนพอหรือไม่ (rate limiting)
+            last_progress_key = f"task:{task_id}:ws_last_progress"
+            conn = get_redis_connection(decode_responses=True)
+            last_progress_str = conn.get(last_progress_key)
+            last_progress = int(last_progress_str) if last_progress_str else -1
+            
+            # ส่งเมื่อ progress เปลี่ยน >= 5% หรือ stage เปลี่ยน หรือเป็นสถานะใหม่
+            progress_changed = abs(progress - last_progress) >= 5
+            should_notify = progress_changed or (status in ["completed", "failed", "queued", "processing"] and progress == 0)
+            
+            if should_notify:
+                await websocket_manager.notify_transcription_progress(
+                    task_id=task_id,
+                    progress=progress,
+                    status=status,
+                    stage=stage or stage_description
+                )
+                # เก็บ last progress สำหรับ rate limiting
+                conn.setex(last_progress_key, 3600, str(progress))  # TTL 1 hour
+        except Exception as e:
+            # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว (non-critical)
+            logger.debug(f"WebSocket notification failed (non-critical): {e}")
         
         logger.debug(f"📊 Task {task_id}: {stage} - Progress {progress}%")
         
@@ -193,58 +250,92 @@ def _update_task_stage_sync(
 
 async def _send_completion_callback(task_id: str, status: str = "completed", error_message: Optional[str] = None):
     """
-    ส่ง callback เมื่อ transcription เสร็จหรือล้มเหลว
+    ส่ง callback (webhook) และ WebSocket notification เมื่อ transcription เสร็จหรือล้มเหลว
     
     Args:
         task_id: Task ID
         status: "completed" or "failed"
         error_message: Error message (if failed)
+    
+    Note:
+        - WebSocket notification ถูกส่งเสมอ (ไม่ต้องรอ callback_url)
+        - Webhook callback ถูกส่งเฉพาะเมื่อมี callback_url
     """
     try:
-        from app.utils.json_storage import JSONStorage
-        from app.models.transcription import TranscriptionResponse
         from datetime import datetime, timezone
-        import aiohttp
+        import os
         
-        json_storage = JSONStorage()
-        task_dir = json_storage.storage_dir / "transcriptions" / task_id
-        metadata_path = task_dir / "metadata.json"
+        # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         
-        if not metadata_path.exists():
-            return
-        
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            task_data = json.load(f)
-        
-        callback_url = task_data.get("callback_url")
-        if not callback_url:
-            return
-        
-        # สร้าง TranscriptionResponse object สำหรับ _send_callback
-        task = TranscriptionResponse(
-            task_id=task_id,
-            status=status,
-            file_path=task_data.get("file_path"),
-            language=task_data.get("language", "th"),
-            model_size=task_data.get("model_size", "base"),
-            created_at=datetime.fromisoformat(task_data.get("created_at", datetime.now(timezone.utc).isoformat()).replace('Z', '+00:00')),
-            callback_url=callback_url,
-            progress=task_data.get("progress", 100 if status == "completed" else 0),
-            full_text=task_data.get("full_text", ""),
-            total_duration=task_data.get("total_duration", 0)
-        )
-        
-        if status == "completed":
-            task.completed_at = datetime.fromisoformat(
-                task_data.get("completed_at", datetime.now(timezone.utc).isoformat()).replace('Z', '+00:00')
-            )
+        if storage_type == 'sqlite':
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+            task_data = storage.load_transcription(task_id, skip_migration=True)
         else:
-            task.error_message = error_message
+            from app.utils.json_storage import JSONStorage
+            json_storage = JSONStorage()
+            task_data = json_storage.load_transcription(task_id)
         
-        # ใช้ _send_callback จาก TranscriptionService
-        from app.services.transcription_service import TranscriptionService
-        transcription_service = TranscriptionService()
-        await transcription_service._send_callback(task, status)
+        if not task_data:
+            logger.warning(f"⚠️  Task data not found for {task_id}")
+            return
+        
+        # ส่ง WebSocket notification เสมอ (ไม่ต้องรอ callback_url)
+        try:
+            from app.services.websocket_service import websocket_manager
+            
+            if status == "completed":
+                results = {
+                    "text": task_data.get("full_text", "") or task_data.get("text", ""),
+                    "chunks": task_data.get("chunks", []) or task_data.get("segments", []),
+                    "duration": task_data.get("total_duration", 0),
+                    "language": task_data.get("language", "th"),
+                    "processing_time": task_data.get("processing_time", 0)
+                }
+                await websocket_manager.notify_transcription_completed(task_id, results)
+                logger.debug(f"📡 WebSocket: Sent completed notification for {task_id}")
+            elif status == "failed":
+                await websocket_manager.notify_transcription_failed(task_id, error_message or "Unknown error")
+                logger.debug(f"📡 WebSocket: Sent failed notification for {task_id}")
+        except Exception as ws_e:
+            # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว (non-critical)
+            logger.debug(f"WebSocket notification failed (non-critical): {ws_e}")
+        
+        # ส่ง webhook callback (เฉพาะเมื่อมี callback_url)
+        callback_url = task_data.get("callback_url")
+        if callback_url:
+            try:
+                from app.models.transcription import TranscriptionResponse
+                from app.services.transcription_service import TranscriptionService
+                
+                # สร้าง TranscriptionResponse object สำหรับ _send_callback
+                task = TranscriptionResponse(
+                    task_id=task_id,
+                    status=status,
+                    file_path=task_data.get("file_path"),
+                    language=task_data.get("language", "th"),
+                    model_size=task_data.get("model_size", "base"),
+                    created_at=datetime.fromisoformat(task_data.get("created_at", datetime.now(timezone.utc).isoformat()).replace('Z', '+00:00')),
+                    callback_url=callback_url,
+                    progress=task_data.get("progress", 100 if status == "completed" else 0),
+                    full_text=task_data.get("full_text", "") or task_data.get("text", ""),
+                    total_duration=task_data.get("total_duration", 0)
+                )
+                
+                if status == "completed":
+                    completed_at = task_data.get("completed_at")
+                    if completed_at:
+                        task.completed_at = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                else:
+                    task.error_message = error_message
+                
+                # ใช้ _send_callback จาก TranscriptionService
+                transcription_service = TranscriptionService()
+                await transcription_service._send_callback(task, status)
+                logger.debug(f"📡 Webhook: Sent {status} callback for {task_id}")
+            except Exception as webhook_e:
+                logger.warning(f"⚠️  Failed to send webhook callback: {webhook_e}")
         
     except Exception as e:
         logger.warning(f"⚠️  Failed to send completion callback: {e}")
@@ -365,6 +456,31 @@ def process_transcription_job(
             total_chunks = conn.get(total_key)
             if total_chunks:
                 total_chunks = int(total_chunks)
+                
+                # อัปเดต progress (40% base + 50% for chunks = 40-90%)
+                chunk_progress = int((done_count / total_chunks) * 50) + 40
+                chunk_progress = min(chunk_progress, 90)  # ไม่เกิน 90% (เหลือ 10% สำหรับ aggregator)
+                
+                # ส่ง WebSocket notification สำหรับ chunk completed (optional, granular update)
+                # Rate limiting: ส่งทุก 3 chunks หรือเมื่อ chunks เสร็จหมด
+                try:
+                    from app.services.websocket_service import websocket_manager
+                    if done_count % 3 == 0 or done_count >= total_chunks:
+                        loop = get_event_loop()
+                        loop.run_until_complete(
+                            websocket_manager.broadcast_task_update(main_task_id, {
+                                "type": "transcription.chunk_completed",
+                                "chunk_index": chunk_index,
+                                "total_chunks": total_chunks,
+                                "done_chunks": done_count,
+                                "progress": chunk_progress,
+                                "status": "processing",
+                                "stage": "transcribing"
+                            })
+                        )
+                except Exception as e:
+                    logger.debug(f"WebSocket chunk notification failed (non-critical): {e}")
+                
                 if done_count >= total_chunks:
                     # ทุก chunks เสร็จแล้ว - trigger aggregator (ถ้ายังไม่ถูก trigger)
                     aggregator_trigger_key = f"task:{main_task_id}:aggregator_triggered"
@@ -647,19 +763,26 @@ def process_transcription_job(
             phase_timings['t_merge_end'] = datetime.now(timezone.utc).isoformat()
             phase_timings['merge_time'] = t_merge_end - t_merge_start
             
-            # อัปเดต main task จาก storage (ไม่ใช้ in-memory tasks dict)
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
+            # อัปเดต main task จาก storage (รองรับทั้ง SQLite และ JSON)
+            # Note: os is already imported at module level (line 8)
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             
-            # โหลด main task จาก storage
-            task_dir = json_storage.storage_dir / "transcriptions" / main_task_id
-            metadata_path = task_dir / "metadata.json"
-            
-            if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    task_data = json.load(f)
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+                task_data = storage.load_transcription(main_task_id, skip_migration=True)
+                if not task_data:
+                    task_data = {}
             else:
-                task_data = {}
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+                task_dir = json_storage.storage_dir / "transcriptions" / main_task_id
+                metadata_path = task_dir / "metadata.json"
+                if metadata_path.exists():
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        task_data = json.load(f)
+                else:
+                    task_data = {}
             
             # FIX: บันทึก phase timings และคำนวณ total time
             t_aggregator_end = time.time()
@@ -687,7 +810,7 @@ def process_transcription_job(
                 stage="finalizing",
                 stage_description="กำลังจัดเก็บข้อมูล",
                 stage_progress=100,
-                json_storage=json_storage
+                json_storage=None  # จะใช้ storage ที่ถูกต้องภายใน function
             )
             
             # อัปเดต task data
@@ -704,7 +827,6 @@ def process_transcription_job(
             # FIX: ไม่เก็บ segments ใน task_data (เก็บใน SQLite แล้ว)
             # ถ้าใช้ SQLite: segments อยู่ใน segments table แล้ว
             # ถ้าใช้ JSON: ยังต้องเก็บ chunks (backward compatibility)
-            storage_type = os.getenv('STORAGE_TYPE', 'json').lower()
             if storage_type != 'sqlite':
                 # Fallback: ถ้ายังใช้ JSON storage ต้องเก็บ chunks (แต่ไม่ควรใช้)
                 logger.warning(f"⚠️  Using JSON storage - segments not stored in SQLite")
@@ -714,10 +836,14 @@ def process_transcription_job(
                 task_data['phase_timings'] = {}
             task_data['phase_timings']['aggregator'] = phase_timings
             
-            # บันทึกกลับไป storage
-            json_storage.save_transcription(main_task_id, task_data)
+            # บันทึกกลับไป storage (ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE)
+            if storage_type == 'sqlite':
+                storage.save_transcription(main_task_id, task_data)
+            else:
+                json_storage.save_transcription(main_task_id, task_data)
             
-            # ส่ง completion callback
+            # ส่ง completion callback (webhook + WebSocket)
+            # _send_completion_callback จะส่งทั้ง WebSocket notification และ webhook callback
             loop = get_event_loop()
             loop.run_until_complete(_send_completion_callback(main_task_id, "completed"))
             
@@ -1045,10 +1171,33 @@ def process_preprocess_job(
         
         # บันทึก phase timings ลง task_data
         task_data['phase_timings'] = phase_timings
-        json_storage.save_transcription(task_id, task_data)
+        
+        # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        if storage_type == 'sqlite':
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+            storage.save_transcription(task_id, task_data)
+        else:
+            json_storage.save_transcription(task_id, task_data)
         
         logger.info(f"✅ Aggregator job enqueued: {aggregator_job_id}")
         logger.info(f"✅ Preprocess job {task_id} completed")
+        
+        # ส่ง WebSocket notification สำหรับ task started (หลังจาก preprocess เสร็จ)
+        try:
+            from app.services.websocket_service import websocket_manager
+            loop = get_event_loop()
+            loop.run_until_complete(
+                websocket_manager.notify_transcription_started(
+                    task_id=task_id,
+                    file_path=file_path,
+                    language=language
+                )
+            )
+            logger.debug(f"📡 WebSocket: Sent started notification for {task_id}")
+        except Exception as e:
+            logger.debug(f"WebSocket started notification failed (non-critical): {e}")
         logger.info(f"📊 Phase Timings:")
         logger.info(f"   Extract: {phase_timings['extract_time']:.2f}s")
         logger.info(f"   Chunk: {phase_timings['chunk_time']:.2f}s")
@@ -1066,19 +1215,35 @@ def process_preprocess_job(
         logger.error(f"❌ RQ Worker: Error in preprocess job {task_id}: {e}", exc_info=True)
         # อัปเดต task status เป็น failed
         try:
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
-            task_data["status"] = "failed"
-            task_data["error_message"] = str(e)
-            task_data["current_stage"] = "failed"
-            task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-            json_storage.save_transcription(task_id, task_data)
+            # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                from datetime import datetime, timezone
+                storage = SQLiteStorage()
+                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                storage.save_transcription(task_id, task_data)
+            else:
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+                task_data = {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                json_storage.save_transcription(task_id, task_data)
             
-            # ส่ง failure callback
+            # ส่ง failure callback (webhook + WebSocket)
+            # _send_completion_callback จะส่งทั้ง WebSocket notification และ webhook callback
             loop = get_event_loop()
             loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
-        except:
-            pass
+        except Exception as save_error:
+            logger.error(f"❌ Failed to save error status: {save_error}")
         raise
 
 # ============================================================================

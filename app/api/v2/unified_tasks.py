@@ -37,9 +37,56 @@ def _get_task_from_storage(task_id: str) -> Optional[Dict]:
     """Get task from storage (try SQLite first, fallback to JSON)"""
     sqlite_storage, json_storage = _get_storage()
     
-    task = sqlite_storage.get_transcription(task_id)
+    # Try SQLite first
+    task = sqlite_storage.load_transcription(task_id)
     if not task:
         task = json_storage.get_transcription(task_id)
+    
+    # ถ้าใช้ SQLite storage และ task มีอยู่แล้ว ให้ลองดึง segments จาก segments table
+    if task:
+        try:
+            # Check if segments table exists and has data
+            conn = sqlite_storage._get_connection()
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='segments'"
+            )
+            if cursor.fetchone():
+                # ดึง segments จาก segments table
+                cursor = conn.execute(
+                    "SELECT idx, start_time, end_time, text, confidence FROM segments WHERE task_id = ? ORDER BY idx",
+                    (task_id,)
+                )
+                segments_rows = cursor.fetchall()
+                
+                # ถ้าพบ segments ใน segments table ให้ใช้แทน chunks
+                if segments_rows:
+                    segments = []
+                    for row in segments_rows:
+                        # row format: (idx, start_time, end_time, text, confidence)
+                        # Use dict-like access if Row factory, else index access
+                        if hasattr(row, 'keys'):
+                            # sqlite3.Row with row_factory
+                            segments.append({
+                                "start_time": float(row['start_time']) if row['start_time'] is not None else 0.0,
+                                "end_time": float(row['end_time']) if row['end_time'] is not None else 0.0,
+                                "text": str(row['text']) if row['text'] is not None else "",
+                                "confidence": float(row['confidence']) if row['confidence'] is not None else None
+                            })
+                        else:
+                            # Tuple access (fallback)
+                            segments.append({
+                                "start_time": float(row[1]) if len(row) > 1 and row[1] is not None else 0.0,
+                                "end_time": float(row[2]) if len(row) > 2 and row[2] is not None else 0.0,
+                                "text": str(row[3]) if len(row) > 3 and row[3] is not None else "",
+                                "confidence": float(row[4]) if len(row) > 4 and row[4] is not None else None
+                            })
+                    # เพิ่ม segments เข้า task (ใช้แทน chunks หรือ segments เดิม)
+                    if segments:
+                        task["segments"] = segments
+                        task["chunks"] = segments  # เก็บ chunks ด้วยเพื่อ backward compatibility
+                        logger.debug(f"✅ Loaded {len(segments)} segments from segments table for {task_id}")
+        except Exception as e:
+            logger.debug(f"Could not load segments from segments table for {task_id}: {e}")
     
     return task
 
@@ -193,10 +240,40 @@ def _build_full_response(
     
     # Include result if completed
     if task.get("status") == "completed":
+        # ดึง full_text (ใช้ full_text แทน text)
+        full_text = task.get("full_text", "") or task.get("text", "")
+        
+        # ดึง segments จาก chunks (ข้อมูลถูกเก็บเป็น chunks)
+        chunks = task.get("chunks", []) or task.get("segments", [])
+        segments = []
+        
+        # แปลง chunks format เป็น segments format
+        for chunk in chunks:
+            if isinstance(chunk, dict):
+                # ถ้า chunk มี format ที่ถูกต้องแล้ว
+                if "start_time" in chunk and "end_time" in chunk:
+                    segments.append({
+                        "start_time": chunk.get("start_time", 0),
+                        "end_time": chunk.get("end_time", 0),
+                        "text": chunk.get("text", ""),
+                        "confidence": chunk.get("confidence")
+                    })
+                # ถ้า chunk เป็น format อื่น ให้ลองแปลง
+                elif "start" in chunk and "end" in chunk:
+                    segments.append({
+                        "start_time": chunk.get("start", 0),
+                        "end_time": chunk.get("end", 0),
+                        "text": chunk.get("text", ""),
+                        "confidence": chunk.get("confidence")
+                    })
+        
+        # ดึง word_segments ถ้ามี (อาจไม่มีใน storage)
+        word_segments = task.get("word_segments", [])
+        
         response["result"] = {
-            "text": task.get("text", ""),
-            "segments": task.get("segments", []),
-            "word_segments": task.get("word_segments", [])
+            "text": full_text,
+            "segments": segments,
+            "word_segments": word_segments
         }
         
         # Include subtitle if available
@@ -615,8 +692,3 @@ async def get_available_dates():
     except Exception as e:
         logger.error(f"Error getting available dates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-

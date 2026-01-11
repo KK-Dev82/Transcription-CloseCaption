@@ -275,7 +275,9 @@ else
     export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
     export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
     # Note: Using UTC timezone (datetime.now(timezone.utc)) - frontend handles conversion
-    nohup env RABBITMQ_HOST="${RABBITMQ_HOST}" \
+    # FIX: เพิ่ม PYTHONPATH ใน env เพื่อให้ import app.* ได้ (ใช้ PROJECT_ROOT แทน hardcode)
+    nohup env PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" \
+             RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
              RABBITMQ_USER="${RABBITMQ_USER}" \
              RABBITMQ_PASSWORD="${RABBITMQ_PASSWORD}" \

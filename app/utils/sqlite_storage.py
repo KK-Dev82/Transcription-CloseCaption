@@ -405,21 +405,64 @@ class SQLiteStorage:
             logger.debug(f"WebSocket notification error: {e}")
     
     async def _notify_websocket(self, task_id: str, task_data: dict, is_new_task: bool):
-        """Helper method สำหรับส่ง WebSocket notification (async)"""
+        """
+        Helper method สำหรับส่ง WebSocket notification (async)
+        ส่ง notifications ตาม status เพื่อให้ frontend ได้รับ real-time updates
+        """
         try:
             from ..services.websocket_service import websocket_manager
             
-            if is_new_task:
-                event_type = "task.created"
-            elif task_data.get("status") == "completed":
-                event_type = "task.completed"
-            elif task_data.get("status") == "failed":
-                event_type = "task.failed"
-            else:
-                event_type = "task.updated"
+            status = task_data.get("status", "pending")
+            progress = task_data.get("progress", 0)
+            stage = task_data.get("current_stage", "")
+            stage_description = task_data.get("current_stage_description", "")
             
-            await websocket_manager.notify_task_list_update(task_id, task_data, event_type)
+            # ส่ง notifications ตาม status (ตามคำแนะนำ)
+            if status == "completed":
+                # ส่ง completed notification พร้อม results
+                results = {
+                    "text": task_data.get("full_text", "") or task_data.get("text", ""),
+                    "chunks": task_data.get("chunks", []) or task_data.get("segments", []),
+                    "duration": task_data.get("total_duration", 0),
+                    "language": task_data.get("language", "th"),
+                    "processing_time": task_data.get("processing_time", 0)
+                }
+                await websocket_manager.notify_transcription_completed(task_id, results)
+                
+                # ส่ง task list update สำหรับ history (backward compatibility)
+                await websocket_manager.notify_task_list_update(task_id, task_data, "task.completed")
+                
+            elif status == "failed":
+                # ส่ง failed notification
+                error_message = task_data.get("error_message", task_data.get("error", "Unknown error"))
+                await websocket_manager.notify_transcription_failed(task_id, error_message)
+                
+                # ส่ง task list update สำหรับ history (backward compatibility)
+                await websocket_manager.notify_task_list_update(task_id, task_data, "task.failed")
+                
+            elif status in ["processing", "queued", "pending"]:
+                # ส่ง progress update (rate-limited: เฉพาะเมื่อ progress เปลี่ยน >= 5% หรือ stage เปลี่ยน)
+                # Note: Rate limiting จะทำใน caller (ไม่ต้องทำที่นี่)
+                await websocket_manager.notify_transcription_progress(
+                    task_id=task_id,
+                    progress=progress,
+                    status=status,
+                    stage=stage or stage_description
+                )
+                
+                # ส่ง task list update สำหรับ new tasks หรือ major updates
+                if is_new_task:
+                    await websocket_manager.notify_task_list_update(task_id, task_data, "task.created")
+                elif progress > 0:  # Only update for significant changes
+                    await websocket_manager.notify_task_list_update(task_id, task_data, "task.updated")
+                    
+            else:
+                # Fallback: ส่ง generic update
+                event_type = "task.created" if is_new_task else "task.updated"
+                await websocket_manager.notify_task_list_update(task_id, task_data, event_type)
+                
         except Exception as e:
+            # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว (non-critical)
             logger.debug(f"WebSocket notification error: {e}")
     
     def load_transcription(self, task_id: str, skip_migration: bool = False) -> Optional[Dict]:

@@ -27,7 +27,7 @@
 
 3. **CUDA 12.1+ และ cuDNN** (สำหรับ GPU acceleration)
    - ใช้ base image: `runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04`
-   - cuDNN 8.9.7 ติดตั้งแล้ว (compatible กับ CUDA 12.1)
+   - cuDNN 8.9.0.2 ติดตั้งแล้ว (compatible กับ CUDA 12.1)
    - `libcudnn_ops_infer.so.8` อยู่ใน `/usr/lib/x86_64-linux-gnu/`
    - Scripts จะตั้งค่า `LD_LIBRARY_PATH` อัตโนมัติ
 
@@ -149,7 +149,7 @@ pip install -r requirements.txt
 
 **หมายเหตุ**: 
 - Scripts จะจัดการ cuDNN และ CTranslate2 libraries อัตโนมัติผ่าน `LD_LIBRARY_PATH`
-- cuDNN 8.9.7 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
+- cuDNN 8.9.0.2 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
 - `whisper_api.py` จะตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
 
 ### 3. Start Services
@@ -175,6 +175,8 @@ bash scripts/pod/restart-rq-workers.sh
 Script นี้จะ:
 - ✅ หยุด workers เดิม (ถ้ามี)
 - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ CUDA, cuDNN และ CTranslate2
+  - **Order**: cuDNN → System path (`/usr/lib/x86_64-linux-gnu`) → CUDA → CTranslate2
+  - ⚠️ **สำคัญ**: System path จำเป็นเพื่อให้ CTranslate2 หา `libcudnn_ops_infer.so.8` ได้
 - ✅ Start workers สำหรับทุก queue:
   - `transcription_preprocess` (6 workers)
   - `transcription_gpu0`, `transcription_gpu1` (2 workers)
@@ -189,9 +191,10 @@ Script นี้จะ:
 Scripts และ code จัดการ cuDNN และ CTranslate2 ให้อัตโนมัติ:
 
 1. **cuDNN Libraries**: 
-   - System cuDNN: `/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8` (cuDNN 8.9.7)
-   - PyTorch cuDNN: `/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib`
-   - ติดตั้งแล้วผ่าน `apt-get install libcudnn8` (cuDNN 8.9.7 สำหรับ CUDA 12.2)
+   - PyTorch cuDNN (หลัก): `/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/libcudnn_ops_infer.so.8` (cuDNN 8.9.0.2)
+   - System cuDNN (optional): `/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8` (อาจไม่มี - ไม่เป็นปัญหา)
+   - ⚠️ **สำคัญ**: CTranslate2 มองหา cuDNN libraries ใน system path (`/usr/lib/x86_64-linux-gnu/`)
+   - **วิธีแก้ไข**: Scripts จะเพิ่ม system path เข้าไปใน `LD_LIBRARY_PATH` อัตโนมัติ
    - Compatible กับ CUDA 12.1 และ CTranslate2 4.4.0
 
 2. **CTranslate2 Libraries**: อยู่ใน `/usr/local/lib/python3.10/dist-packages/ctranslate2.libs`
@@ -201,7 +204,12 @@ Scripts และ code จัดการ cuDNN และ CTranslate2 ให้�
 3. **Auto Configuration**:
    - `whisper_api.py` ตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
    - `start-pod.sh` ตั้งค่า `LD_LIBRARY_PATH` สำหรับ Whisper API
-   - `start-rq-workers.sh` ตั้งค่า `LD_LIBRARY_PATH` สำหรับ workers (order: cuDNN → CUDA → CTranslate2)
+   - `start-rq-workers.sh` ตั้งค่า `LD_LIBRARY_PATH` สำหรับ workers
+   - **Order ของ LD_LIBRARY_PATH** (สำคัญมาก!):
+     1. cuDNN path (PyTorch): `/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib`
+     2. System path: `/usr/lib/x86_64-linux-gnu` ⚠️ **จำเป็น!** CTranslate2 มองหา cuDNN libraries ใน path นี้
+     3. CUDA path: `/usr/local/cuda-12.1/lib64`
+     4. CTranslate2 path: `/usr/local/lib/python3.10/dist-packages/ctranslate2.libs`
 
 4. **Error Handling**:
    - ถ้า cuDNN error → auto-fallback เป็น CPU (แต่ไม่แนะนำ - ใช้ GPU เป็นหลัก)
@@ -536,36 +544,58 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
 
 ### cuDNN/CTranslate2 Issues
 
+⚠️ **ปัญหาเรื่อง LD_LIBRARY_PATH ที่เคยพบ**:
+- CTranslate2 ต้องการ cuDNN libraries (`libcudnn_ops_infer.so.8`) ใน `LD_LIBRARY_PATH`
+- **ปัญหาหลัก**: CTranslate2 มองหา cuDNN libraries ใน system path (`/usr/lib/x86_64-linux-gnu/`) แต่ไฟล์อยู่ใน PyTorch path (`/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/`)
+- **วิธีแก้ไข**: เพิ่ม system path (`/usr/lib/x86_64-linux-gnu`) เข้าไปใน `LD_LIBRARY_PATH` (แก้ไขแล้วใน `start-rq-workers.sh`)
+- อาการ: Transcription ใช้เวลา >2 นาที สำหรับไฟล์ 30 นาที (ควรใช้ 1-2 นาที), GPU ไม่ทำงาน (CPU fallback)
+
+**วิธีแก้ไข**:
+
 1. ตรวจสอบ cuDNN installation:
    ```bash
-   # ตรวจสอบว่า cuDNN ติดตั้งแล้ว
-   ls -la /usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8
+   # ตรวจสอบ cuDNN ใน PyTorch path (หลัก)
+   ls -la /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/libcudnn_ops_infer.so.8
    
-   # ถ้าไม่มี ให้ติดตั้ง
-   apt-get update
-   apt-get install -y libcudnn8
+   # ตรวจสอบ cuDNN ใน system path (อาจไม่มี - ไม่เป็นปัญหา)
+   ls -la /usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8
+   # ⚠️ ถ้าไม่มีใน system path ไม่เป็นปัญหา - scripts จะเพิ่ม path นี้เข้าไปใน LD_LIBRARY_PATH
    ```
 
-2. ตรวจสอบ `LD_LIBRARY_PATH`:
+2. ตรวจสอบ `LD_LIBRARY_PATH` ใน workers:
    ```bash
-   echo $LD_LIBRARY_PATH
-   # ควรมี: /usr/lib/x86_64-linux-gnu, /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib
+   # ตรวจสอบ LD_LIBRARY_PATH ใน worker process
+   ps aux | grep "rq worker" | grep -v grep | head -1 | awk '{print $2}' | xargs -I {} cat /proc/{}/environ | tr '\0' '\n' | grep LD_LIBRARY_PATH
+   
+   # ควรมี (ในลำดับนี้):
+   # 1. /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib
+   # 2. /usr/lib/x86_64-linux-gnu  ⚠️ สำคัญ!
+   # 3. /usr/local/cuda-12.1/lib64
+   # 4. /usr/local/lib/python3.10/dist-packages/ctranslate2.libs
    ```
 
-3. ตรวจสอบ Libraries:
+3. ตรวจสอบว่า workers ใช้ GPU จริงหรือไม่:
    ```bash
-   ls -la /usr/lib/x86_64-linux-gnu/libcudnn*.so.8
+   # ตรวจสอบ GPU usage (ควรเห็น processes เมื่อ transcription ทำงาน)
+   nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+   
+   # ถ้าไม่เห็น processes = workers ใช้ CPU (ช้ามาก!)
+   ```
+
+4. ตรวจสอบ Libraries:
+   ```bash
+   ls -la /usr/lib/x86_64-linux-gnu/libcudnn*.so.8  # อาจไม่มี - ไม่เป็นปัญหา
    ls -la /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/
    ls -la /usr/local/lib/python3.10/dist-packages/ctranslate2.libs/
    ```
 
-4. Restart Services:
+5. Restart Services:
    ```bash
    bash scripts/pod/start-pod.sh
    bash scripts/pod/restart-rq-workers.sh
    ```
 
-5. ตรวจสอบ Whisper API logs:
+6. ตรวจสอบ Worker logs:
    ```bash
    tail -f /tmp/whisper.log | grep -E "cuDNN|Model loaded|ops_infer"
    ```
@@ -625,7 +655,15 @@ CUDNN_DISABLE=0
 - [ ] `bash scripts/pod/start-pod.sh`
 - [ ] `bash scripts/pod/restart-rq-workers.sh`
 - [ ] ตรวจสอบ Worker Health: `bash scripts/pod/check-worker-health.sh`
+- [ ] ตรวจสอบ GPU Usage: `nvidia-smi --query-compute-apps` (ควรเห็น processes เมื่อ transcription ทำงาน)
+- [ ] ตรวจสอบ LD_LIBRARY_PATH ใน workers:
+  ```bash
+  ps aux | grep "rq worker" | grep -v grep | head -1 | awk '{print $2}' | xargs -I {} cat /proc/{}/environ | tr '\0' '\n' | grep LD_LIBRARY_PATH
+  # ควรมี: /usr/lib/x86_64-linux-gnu (system path) ⚠️ สำคัญ!
+  ```
 - [ ] ทดสอบ API: `curl https://0b3x44foetagtu-8010.proxy.runpod.net/health`
+
+**หมายเหตุ**: Scripts (`start-rq-workers.sh`) จะตั้งค่า LD_LIBRARY_PATH อัตโนมัติ (รวม system path) - ไม่ต้องตั้งค่าเอง
 
 ---
 

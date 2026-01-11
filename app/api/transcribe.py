@@ -169,14 +169,21 @@ async def start_transcription(request: TranscriptionRequest):
             )
         
         import uuid
+        import os
         from datetime import datetime, timezone
         from app.models.transcription import TranscriptionResponse
         from app.services.file_service import FileService
-        from app.utils.json_storage import JSONStorage
         from pathlib import Path
         
-        # ใช้ JSONStorage โดยตรง (ไม่สร้าง TranscriptionService ใหม่ทุก request)
-        json_storage = JSONStorage()
+        # ใช้ storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        if storage_type == 'sqlite':
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+        else:
+            from app.utils.json_storage import JSONStorage
+            storage = JSONStorage()
+        
         file_service = FileService()
         
         # กรณีใช้ file_url - ดาวน์โหลดไฟล์ก่อน
@@ -260,7 +267,7 @@ async def start_transcription(request: TranscriptionRequest):
             "created_at": task.created_at.isoformat(),
             "callback_url": request.callback_url,  # บันทึก callback_url เพื่อใช้ส่ง callback เมื่อเสร็จ
         }
-        json_storage.save_transcription(task_id, task_dict)
+        storage.save_transcription(task_id, task_dict)
         
         # ใช้ Fan-out/Fan-in Pattern: enqueue preprocessing job แล้ว return ทันที
         # Preprocessing (extract + chunking) จะทำงานใน background
