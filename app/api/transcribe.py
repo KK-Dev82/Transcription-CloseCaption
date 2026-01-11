@@ -296,15 +296,27 @@ async def start_transcription(request: TranscriptionRequest):
             chunk_duration = request.chunk_duration or 150
             
             # Enqueue preprocessing job (จะทำ extract + chunking แล้ว enqueue chunk jobs)
-            preprocess_job_id = queue_service.enqueue_preprocess(
-                task_id=task_id,
-                file_path=file_path,
-                language=request.language,
-                model_size=request.model_size,
-                chunk_duration=chunk_duration
-            )
-            
-            logger.info(f"✅ Preprocess job enqueued: {preprocess_job_id}")
+            try:
+                preprocess_job_id = queue_service.enqueue_preprocess(
+                    task_id=task_id,
+                    file_path=file_path,
+                    language=request.language,
+                    model_size=request.model_size,
+                    chunk_duration=chunk_duration
+                )
+                
+                logger.info(f"✅ Preprocess job enqueued: {preprocess_job_id}")
+            except Exception as e:
+                # ตรวจสอบว่าเป็น QueueFullError หรือไม่
+                from app.services.redis_queue_service import QueueFullError
+                if isinstance(e, QueueFullError):
+                    logger.warning(f"⚠️ Queue full: {e.message}")
+                    raise HTTPException(
+                        status_code=429,
+                        detail=e.message
+                    )
+                # ถ้าไม่ใช่ QueueFullError ให้ raise ใหม่
+                raise
             
             return {
                 "task_id": task_id,

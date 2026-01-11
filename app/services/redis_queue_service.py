@@ -27,6 +27,18 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+
+class QueueFullError(Exception):
+    """Exception เมื่อ queue เต็ม"""
+    
+    def __init__(self, current_count: int, max_size: int, queue_name: str):
+        self.current_count = current_count
+        self.max_size = max_size
+        self.queue_name = queue_name
+        self.message = f"Queue เต็มแล้ว (มี {current_count}/{max_size} jobs ในคิว {queue_name}) โปรดรอซักครู่แล้วลองใหม่"
+        super().__init__(self.message)
+
+
 class RedisQueueService:
     """Redis Queue Service สำหรับจัดการ transcription jobs"""
     
@@ -110,6 +122,31 @@ class RedisQueueService:
         )
         
         logger.info("✅ Redis Queue Service initialized (GPU queues + CPU queue + Preprocess queue)")
+    
+    def _check_preprocess_queue_limit(self):
+        """
+        ตรวจสอบว่า preprocess queue เต็มหรือไม่
+        
+        Raises:
+            QueueFullError: ถ้า queue เต็ม (current >= max)
+        """
+        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '25'))
+        queue_length = len(self.preprocess_queue)
+        
+        # รวม started jobs ด้วย (jobs ที่กำลังประมวลผล)
+        from rq.registry import StartedJobRegistry
+        started_count = len(StartedJobRegistry(queue=self.preprocess_queue))
+        total_count = queue_length + started_count
+        
+        if total_count >= max_size:
+            logger.warning(f"⚠️ Preprocess queue เต็ม: {total_count}/{max_size} (queued: {queue_length}, started: {started_count})")
+            raise QueueFullError(
+                current_count=total_count,
+                max_size=max_size,
+                queue_name="transcription_preprocess"
+            )
+        
+        logger.debug(f"✅ Preprocess queue OK: {total_count}/{max_size} (queued: {queue_length}, started: {started_count})")
     
     def enqueue_transcription(
         self,
@@ -209,7 +246,7 @@ class RedisQueueService:
         chunk_duration: int = 90
     ) -> str:
         """
-        Enqueue preprocessing job ไปยัง CPU queue
+        Enqueue preprocessing job ไปยัง preprocess queue
         
         Args:
             task_id: Task ID
@@ -220,8 +257,14 @@ class RedisQueueService:
         
         Returns:
             Job ID
+        
+        Raises:
+            QueueFullError: ถ้า queue เต็ม (current >= max)
         """
-        # Preprocessing ไป CPU queue
+        # ตรวจสอบ queue limit ก่อน enqueue
+        self._check_preprocess_queue_limit()
+        
+        # Preprocessing ไป preprocess queue
         job = self.preprocess_queue.enqueue(
             'app.workers.rq_worker.process_preprocess_job',
             task_id,

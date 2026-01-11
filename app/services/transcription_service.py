@@ -13,7 +13,7 @@ import ffmpeg
 
 from .whisper_service import WhisperService
 from .file_service import FileService
-from ..utils.json_storage import JSONStorage
+from ..utils.storage_factory import StorageFactory
 from ..models.transcription import TranscriptionResponse
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,11 @@ class TranscriptionService:
     def __init__(self):
         self.whisper_service = WhisperService()
         self.file_service = FileService()
-        self.json_storage = JSONStorage()
+        # ใช้ StorageFactory เพื่อเลือก storage ตาม STORAGE_TYPE (sqlite หรือ json)
+        self.storage = StorageFactory.create_storage()
         self.tasks: Dict[str, TranscriptionResponse] = {}
-        logger.info("✅ TranscriptionService initialized")
+        storage_type = os.getenv('STORAGE_TYPE', 'json').lower()
+        logger.info(f"✅ TranscriptionService initialized (storage: {storage_type})")
     
     async def _process_transcription(
         self,
@@ -432,7 +434,7 @@ class TranscriptionService:
                 "completed_at": task.completed_at.isoformat() if hasattr(task, 'completed_at') and task.completed_at else None,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
-            self.json_storage.save_transcription(task.task_id, task_dict)
+            self.storage.save_transcription(task.task_id, task_dict)
             logger.debug(f"✅ Task {task.task_id} saved to storage")
         except Exception as e:
             logger.error(f"❌ Error saving task: {e}", exc_info=True)
