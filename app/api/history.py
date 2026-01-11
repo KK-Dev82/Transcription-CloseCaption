@@ -97,10 +97,39 @@ async def get_transcription_history(
         
         # จัดรูปแบบข้อมูล
         history_items = []
+        # Get SQLite storage to check segments
+        sqlite_storage = get_sqlite_storage()
+        
         for item in paginated_results:
+            task_id = item.get("task_id")
+            full_text = item.get("full_text", "")
+            chunks = item.get("chunks", [])
+            
+            # Check segments in SQLite (for SQLite storage)
+            has_segments = False
+            if task_id:
+                try:
+                    # Check if segments exist in SQLite
+                    import sqlite3
+                    from pathlib import Path
+                    db_path = Path("storage/database.db")
+                    if db_path.exists():
+                        conn = sqlite3.connect(str(db_path))
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM segments WHERE task_id = ?", (task_id,))
+                        segments_count = cursor.fetchone()[0]
+                        has_segments = segments_count > 0
+                        conn.close()
+                except Exception as e:
+                    # Non-critical: if we can't check segments, continue
+                    pass
+            
+            # has_results: check full_text, chunks, or segments
+            has_results = bool(full_text or chunks or has_segments)
+            
             history_items.append({
-                "task_id": item.get("task_id"),
-                "id": item.get("task_id"),  # Alias for compatibility
+                "task_id": task_id,
+                "id": task_id,  # Alias for compatibility
                 "filename": item.get("filename") or item.get("file_name"),  # Support both field names
                 "file_name": item.get("file_name") or item.get("filename"),  # Support both field names
                 "file_path": item.get("file_path"),  # Add file path
@@ -113,10 +142,10 @@ async def get_transcription_history(
                 "file_size": item.get("file_size"),
                 "language": item.get("language", "th"),
                 "model_used": item.get("model_size", "base"),
-                "chunks_count": len(item.get("chunks", [])),
-                "word_count": len(item.get("full_text", "").split()) if item.get("full_text") else 0,
+                "chunks_count": len(chunks),
+                "word_count": len(full_text.split()) if full_text else 0,
                 "error_message": item.get("error_message"),
-                "has_results": bool(item.get("full_text") or item.get("chunks"))
+                "has_results": has_results
             })
         
         return {

@@ -263,7 +263,7 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
     """
     try:
         from datetime import datetime, timezone
-        import os
+        # os already imported at module level (line 8)
         
         # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
@@ -973,6 +973,39 @@ def process_transcription_job(
         
     except Exception as e:
         logger.error(f"❌ RQ Worker: Error processing job {task_id}: {e}", exc_info=True)
+        
+        # บันทึก error status และส่ง WebSocket notification
+        try:
+            from datetime import datetime, timezone
+            # os already imported at module level (line 8)
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                storage.save_transcription(task_id, task_data)
+            else:
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+                task_data = json_storage.load_transcription(task_id) or {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                json_storage.save_transcription(task_id, task_data)
+            
+            # ส่ง failure callback (webhook + WebSocket)
+            loop = get_event_loop()
+            loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
+        except Exception as save_error:
+            logger.error(f"❌ Failed to save error status: {save_error}")
+        
         # ลบ task แม้เกิด error
         try:
             transcription_service = get_transcription_service()
@@ -1033,6 +1066,13 @@ def process_preprocess_job(
                 task_data = json.load(f)
         else:
             task_data = {}
+        
+        # FIX: บันทึก file_path, file_name, language, model_size ลง task_data
+        task_data["file_path"] = file_path
+        task_data["file_name"] = os.path.basename(file_path) if file_path else None
+        task_data["language"] = language
+        task_data["model_size"] = model_size
+        task_data["chunk_duration"] = chunk_duration
         
         # อัปเดต stage: preprocessing
         _update_task_stage_sync(

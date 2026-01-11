@@ -358,6 +358,7 @@ class SQLiteStorage:
             is_new_task = existing_data is None or not existing_data
             
             # สร้าง task_data สำหรับ WebSocket notification
+            # เพิ่ม full_text, chunks, error_message ตามคำแนะนำ
             task_data = {
                 "task_id": task_id,
                 "status": transcription_data.get("status", "pending"),
@@ -371,6 +372,13 @@ class SQLiteStorage:
                 "total_duration": transcription_data.get("total_duration"),
                 "current_stage": transcription_data.get("current_stage"),
                 "current_stage_description": transcription_data.get("current_stage_description"),
+                "full_text": transcription_data.get("full_text", ""),
+                "text": transcription_data.get("text", ""),  # backward compatibility
+                "chunks": transcription_data.get("chunks", []),
+                "segments": transcription_data.get("segments", []),  # backward compatibility
+                "error_message": transcription_data.get("error_message", ""),
+                "error": transcription_data.get("error", ""),  # backward compatibility
+                "processing_time": transcription_data.get("processing_time", 0),
             }
             
             # ส่ง notification แบบ async ใน background thread

@@ -66,6 +66,14 @@ pkill -f "rq worker.*transcription_preprocess" 2>/dev/null || true
 pkill -f "rq.*worker-gpu.*-w" 2>/dev/null || true  # Kill multi-worker pattern
 sleep 2
 
+# Clear stale worker registrations from Redis
+print_info "Clearing stale worker registrations from Redis..."
+if python3 "$SCRIPT_DIR/clear-stale-workers.py" 2>/dev/null; then
+    print_success "✅ Stale worker registrations cleared"
+else
+    print_warning "⚠️  Could not clear stale worker registrations (non-fatal)"
+fi
+
 # ตั้งค่า LD_LIBRARY_PATH สำหรับ CUDA, cuDNN และ CTranslate2
 # ⚠️ สำคัญ: ต้องมี cuDNN libraries ก่อน CUDA เพื่อให้ CTranslate2 พบ cuDNN ได้
 # Order: cuDNN → CUDA → CTranslate2
