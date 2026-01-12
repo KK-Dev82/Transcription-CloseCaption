@@ -2,6 +2,7 @@
 Real-time Transcription API Endpoint
 สำหรับการประมวลผล audio chunks แบบ real-time (ทุก 5 วินาที)
 รองรับการส่ง audio_url และ callback_url สำหรับ webhook
+รองรับ CloseCaption Profile: TH-CC-RT v1 (Small + Overlap + Dedupe + Postprocess)
 """
 
 import logging
@@ -10,7 +11,7 @@ import asyncio
 import tempfile
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Header, Query
 from pydantic import BaseModel
@@ -19,6 +20,12 @@ import aiofiles
 
 # 🧪 Mock mode: ตรวจสอบ environment variable เพื่อ skip transcription
 MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
+
+# CloseCaption Configuration
+from ..services.close_caption_config import CloseCaptionConfig
+from ..utils.overlap_buffer import OverlapBuffer
+from ..utils.dedupe_text import dedupe_text, dedupe_segments
+from ..utils.thai_postprocess import postprocess_thai_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transcription/realtime", tags=["realtime-transcription"])
@@ -33,6 +40,12 @@ else:
     logger.info("🧪 MOCK MODE: Transcription disabled - only testing chunk connectivity")
     whisper_service = None
     file_service = None
+
+# Overlap buffers per meeting (เก็บ tail audio สำหรับ overlap)
+_overlap_buffers: Dict[str, OverlapBuffer] = {}
+
+# Last emitted text per meeting (สำหรับ dedupe)
+_last_emitted_text: Dict[str, str] = {}
 
 
 class RealtimeChunkRequest(BaseModel):
@@ -400,6 +413,22 @@ async def process_live_chunk(
         
         # If raw PCM (s16le), convert to WAV format (only if not MOCK_MODE)
         if audio_format.lower() == "s16le" and not MOCK_MODE:
+            # ✅ CloseCaption: ใช้ overlap buffer ถ้าเปิดใช้งาน
+            if CloseCaptionConfig.is_enabled():
+                # สร้าง overlap buffer สำหรับ meeting นี้ (ถ้ายังไม่มี)
+                if meeting_id not in _overlap_buffers:
+                    overlap_seconds = CloseCaptionConfig.CHUNK_OVERLAP_SECONDS
+                    _overlap_buffers[meeting_id] = OverlapBuffer(
+                        overlap_seconds=overlap_seconds,
+                        sample_rate=sample_rate
+                    )
+                    logger.info(f"🔗 Created overlap buffer for meeting {meeting_id}: {overlap_seconds}s overlap")
+                
+                # เพิ่ม chunk พร้อม prepend tail
+                overlap_buffer = _overlap_buffers[meeting_id]
+                audio_data = overlap_buffer.add_chunk(audio_data)
+                logger.info(f"🔗 Applied overlap: {len(audio_data)} bytes (with tail)")
+            
             # Convert raw PCM to WAV
             import wave
             import struct
@@ -410,7 +439,7 @@ async def process_live_chunk(
                 wav_file.setsampwidth(2)  # 16-bit = 2 bytes
                 wav_file.setframerate(sample_rate)
                 
-                # Write raw PCM data
+                # Write raw PCM data (อาจมี overlap แล้ว)
                 wav_file.writeframes(audio_data)
             
             # Remove raw file
@@ -418,10 +447,12 @@ async def process_live_chunk(
                 os.unlink(temp_path)
             temp_path = wav_path
         
-        # Add background task to process chunk
-        if background_tasks:
-            background_tasks.add_task(
-                process_live_chunk_background,
+        # ✅ ใช้ RQ + Priority Queue แทน background_tasks
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            
+            queue_service = get_redis_queue_service()
+            job_id = queue_service.enqueue_live_chunk(
                 session_id=session_id,
                 meeting_id=meeting_id,
                 chunk_index=chunk_index,
@@ -429,16 +460,44 @@ async def process_live_chunk(
                 duration=duration,
                 audio_path=temp_path if not MOCK_MODE else None  # Skip saving file in MOCK_MODE
             )
-        
-        return {
-            "status": "accepted",
-            "session_id": session_id,
-            "meeting_id": meeting_id,
-            "chunk_index": chunk_index,
-            "start_time": start_time,
-            "duration": duration,
-            "message": "Audio chunk received. Processing in background. Caption events will be sent via WebSocket."
-        }
+            logger.info(f"📌 Live chunk enqueued to PRIORITY queue (Job ID: {job_id})")
+            
+            return {
+                "status": "accepted",
+                "session_id": session_id,
+                "meeting_id": meeting_id,
+                "chunk_index": chunk_index,
+                "start_time": start_time,
+                "duration": duration,
+                "job_id": job_id,
+                "queue": "priority",
+                "message": "Audio chunk received. Processing in priority queue. Caption events will be sent via WebSocket."
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to enqueue live chunk to RQ: {e}", exc_info=True)
+            # Fallback: ใช้ background_tasks ถ้า RQ ไม่พร้อม
+            logger.warning("⚠️ Falling back to background_tasks (RQ not available)")
+            if background_tasks:
+                background_tasks.add_task(
+                    process_live_chunk_background,
+                    session_id=session_id,
+                    meeting_id=meeting_id,
+                    chunk_index=chunk_index,
+                    start_time=start_time,
+                    duration=duration,
+                    audio_path=temp_path if not MOCK_MODE else None  # Skip saving file in MOCK_MODE
+                )
+            
+            return {
+                "status": "accepted",
+                "session_id": session_id,
+                "meeting_id": meeting_id,
+                "chunk_index": chunk_index,
+                "start_time": start_time,
+                "duration": duration,
+                "queue": "background_tasks",
+                "message": "Audio chunk received. Processing in background (fallback). Caption events will be sent via WebSocket."
+            }
         
     except HTTPException:
         raise
@@ -554,15 +613,53 @@ async def process_live_chunk_background(
                 logger.error(f"❌ Audio file not found: {temp_path}")
                 return
             
+            # ✅ CloseCaption: ใช้ config จาก CloseCaptionConfig ถ้าเปิดใช้งาน
+            if CloseCaptionConfig.is_enabled():
+                cc_config = CloseCaptionConfig.get_whisper_params()
+                model_size = cc_config["model_size"]
+                language = cc_config["language"]
+                logger.info(f"🎯 Using CloseCaption Profile (TH-CC-RT v1): model={model_size}, language={language}")
+                logger.info(CloseCaptionConfig.get_summary())
+            else:
+                # ใช้ default config
+                model_size = "base"
+                language = "th"
+            
             transcription_result = whisper_service.transcribe_file(
                 audio_path=temp_path,
-                model_size="base",
-                language="th",
+                model_size=model_size,
+                language=language,
                 use_thai_processor=True
             )
             
             transcription_text = transcription_result.get('text', '')
             logger.info(f"✅ Transcription completed: {len(transcription_text)} characters")
+            
+            # ✅ CloseCaption: Dedupe ข้อความ (ตัดส่วนซ้ำจาก overlap)
+            if CloseCaptionConfig.is_enabled() and CloseCaptionConfig.DEDUPE_ENABLED:
+                last_text = _last_emitted_text.get(meeting_id, "")
+                deduped_text = dedupe_text(
+                    transcription_text,
+                    last_text,
+                    max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH
+                )
+                
+                if deduped_text != transcription_text:
+                    logger.info(f"🔍 Dedupe: removed {len(transcription_text) - len(deduped_text)} chars overlap")
+                    transcription_text = deduped_text
+                
+                # เก็บข้อความที่ emit แล้ว
+                _last_emitted_text[meeting_id] = transcription_text
+            
+            # ✅ CloseCaption: Postprocess ข้อความภาษาไทย
+            if CloseCaptionConfig.is_enabled() and CloseCaptionConfig.POSTPROCESS_ENABLED:
+                transcription_text = postprocess_thai_text(
+                    transcription_text,
+                    normalize=CloseCaptionConfig.POSTPROCESS_NORMALIZE,
+                    fix_words=True,
+                    word_segmentation=CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION
+                )
+                logger.info(f"🔧 Postprocessed text: {len(transcription_text)} characters")
             
             # ✅ Update chunk metadata status
             chunk_metadata["status"] = "completed"
@@ -635,9 +732,36 @@ async def process_live_chunk_background(
             }
             
             # Send via WebSocket (use meeting_id as user_id)
+            # ✅ สำคัญ: Worker process ไม่มี WebSocket connections → ต้อง publish ไปยัง Redis
             if websocket_manager:
-                await websocket_manager.send_to_user(meeting_id, final_event)
-                logger.info(f"📤 Sent V3 final caption event: ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
+                # ลองส่งไปยัง local connections ก่อน (ถ้าเป็น main API process)
+                sent_local = await websocket_manager.send_to_user(meeting_id, final_event)
+                
+                # ✅ Publish ไปยัง Redis เพื่อให้ main API process รับและส่ง WebSocket
+                # ใช้ channel pattern: "live-chunk:{meeting_id}"
+                # ✅ Initialize Redis client ถ้ายังไม่มี (สำหรับ worker process)
+                if not websocket_manager.redis_client:
+                    try:
+                        await websocket_manager.connect_redis()
+                        logger.info(f"✅ Redis client initialized for live-chunk worker")
+                    except Exception as redis_init_e:
+                        logger.warning(f"⚠️  Failed to initialize Redis client: {redis_init_e}")
+                
+                if websocket_manager.redis_client:
+                    try:
+                        import json
+                        await websocket_manager.redis_client.publish(
+                            f"live-chunk:{meeting_id}",
+                            json.dumps(final_event, ensure_ascii=False)
+                        )
+                        logger.info(f"📡 Redis: Published live-chunk event for {meeting_id} to Redis channel 'live-chunk:{meeting_id}'")
+                    except Exception as redis_e:
+                        logger.warning(f"⚠️  Redis publish failed for {meeting_id}: {redis_e}")
+                
+                if sent_local:
+                    logger.info(f"📤 Sent V3 final caption event (local): ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
+                else:
+                    logger.info(f"📤 Published V3 final caption event (Redis): ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
             
             # ✅ Backward compatibility: Also send legacy events (for existing clients)
             # Send each segment as a legacy caption event (for backward compatibility)

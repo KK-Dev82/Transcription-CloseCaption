@@ -200,9 +200,21 @@ class WhisperService:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(
-                self.provider.transcribe(audio_path, language, model_size, initial_prompt)
-            )
+            # ตรวจสอบว่า provider รองรับ initial_prompt หรือไม่
+            import inspect
+            sig = inspect.signature(self.provider.transcribe)
+            params = list(sig.parameters.keys())
+            
+            # ถ้า provider รองรับ initial_prompt ให้ส่งไป
+            if 'initial_prompt' in params:
+                return loop.run_until_complete(
+                    self.provider.transcribe(audio_path, language, model_size, initial_prompt)
+                )
+            else:
+                # ถ้าไม่รองรับ ให้ส่งแค่ 3 parameters
+                return loop.run_until_complete(
+                    self.provider.transcribe(audio_path, language, model_size)
+                )
         finally:
             loop.close()
             asyncio.set_event_loop(None)

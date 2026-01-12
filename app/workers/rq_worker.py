@@ -142,6 +142,13 @@ async def _update_task_stage_and_webhook(
             if not task_data:
                 task_data = {}
             
+            # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
+            old_progress = task_data.get("progress", 0)
+            if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
+                # Progress ย้อนกลับ → ใช้ค่าสูงสุดระหว่าง old กับ new (ป้องกัน progress เด้งกลับ)
+                logger.warning(f"⚠️  Progress would decrease from {old_progress}% to {progress}% for {task_id}, keeping {old_progress}%")
+                progress = old_progress
+            
             # อัปเดต stage information
             task_data["progress"] = progress
             task_data["status"] = status
@@ -167,6 +174,13 @@ async def _update_task_stage_and_webhook(
                     task_data = json.load(f)
             else:
                 task_data = {}
+            
+            # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
+            old_progress = task_data.get("progress", 0)
+            if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
+                # Progress ย้อนกลับ → ใช้ค่าสูงสุดระหว่าง old กับ new (ป้องกัน progress เด้งกลับ)
+                logger.warning(f"⚠️  Progress would decrease from {old_progress}% to {progress}% for {task_id}, keeping {old_progress}%")
+                progress = old_progress
             
             # อัปเดต stage information
             task_data["progress"] = progress
@@ -209,6 +223,7 @@ async def _update_task_stage_and_webhook(
             should_notify = progress_changed or (status in ["completed", "failed", "queued", "processing"] and progress == 0)
             
             if should_notify:
+                logger.info(f"📡 WebSocket: Sending progress update for {task_id}: {progress}% - {stage or stage_description} ({status})")
                 await websocket_manager.notify_transcription_progress(
                     task_id=task_id,
                     progress=progress,
@@ -217,9 +232,12 @@ async def _update_task_stage_and_webhook(
                 )
                 # เก็บ last progress สำหรับ rate limiting
                 conn.setex(last_progress_key, 3600, str(progress))  # TTL 1 hour
+                logger.info(f"✅ WebSocket: Progress update sent for {task_id}")
+            else:
+                logger.debug(f"⏭️  WebSocket: Skipping progress update for {task_id} (rate limited: {progress}% vs {last_progress}%)")
         except Exception as e:
             # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว (non-critical)
-            logger.debug(f"WebSocket notification failed (non-critical): {e}")
+            logger.warning(f"⚠️  WebSocket notification failed (non-critical): {e}")
         
         logger.debug(f"📊 Task {task_id}: {stage} - Progress {progress}%")
         
@@ -293,14 +311,16 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                     "language": task_data.get("language", "th"),
                     "processing_time": task_data.get("processing_time", 0)
                 }
+                logger.info(f"📡 WebSocket: Sending completed notification for {task_id}")
                 await websocket_manager.notify_transcription_completed(task_id, results)
-                logger.debug(f"📡 WebSocket: Sent completed notification for {task_id}")
+                logger.info(f"✅ WebSocket: Completed notification sent for {task_id}")
             elif status == "failed":
+                logger.info(f"📡 WebSocket: Sending failed notification for {task_id}: {error_message or 'Unknown error'}")
                 await websocket_manager.notify_transcription_failed(task_id, error_message or "Unknown error")
-                logger.debug(f"📡 WebSocket: Sent failed notification for {task_id}")
+                logger.info(f"✅ WebSocket: Failed notification sent for {task_id}")
         except Exception as ws_e:
             # ไม่ให้ WebSocket notification ทำให้การบันทึกล้มเหลว (non-critical)
-            logger.debug(f"WebSocket notification failed (non-critical): {ws_e}")
+            logger.warning(f"⚠️  WebSocket notification failed (non-critical): {ws_e}")
         
         # ส่ง webhook callback (เฉพาะเมื่อมี callback_url)
         callback_url = task_data.get("callback_url")
@@ -417,6 +437,15 @@ def process_transcription_job(
             chunk_transcribe_time = t_chunk_transcribe_end - t_chunk_transcribe_start
             logger.info(f"✅ Chunk transcription completed (took {chunk_transcribe_time:.2f}s)")
             
+            # FIX: Log phase timings สำหรับ chunk job
+            phase_timings = {
+                'chunk_transcribe_time': chunk_transcribe_time,
+                't_chunk_transcribe_start': datetime.now(timezone.utc).isoformat(),
+                't_chunk_transcribe_end': datetime.now(timezone.utc).isoformat()
+            }
+            logger.info(f"📊 Chunk Phase Timings:")
+            logger.info(f"   Transcribe: {chunk_transcribe_time:.2f}s")
+            
             # Convert TranscriptionResult to dict
             if hasattr(transcription_result, 'text'):
                 result = {
@@ -451,6 +480,80 @@ def process_transcription_job(
             done_count = conn.incr(done_key)
             conn.expire(done_key, ttl_seconds)
             
+            # FIX: Decrement inflight counter เมื่อ chunk เสร็จ (atomic)
+            inflight_key = f"task:{main_task_id}:inflight_chunks"
+            guard_key = f"task:{main_task_id}:enqueued:{chunk_index}"
+            try:
+                from app.workers.lua_scripts import DECR_INFLIGHT_SCRIPT
+                decr_script = conn.register_script(DECR_INFLIGHT_SCRIPT)
+                new_inflight = decr_script(keys=[inflight_key, guard_key], args=[ttl_seconds])
+                logger.debug(f"📉 Decremented inflight counter for {main_task_id}: {new_inflight}")
+            except Exception as e:
+                # Fallback: ใช้ DECR ธรรมดา
+                logger.warning(f"⚠️  Failed to use Lua script for inflight decrement, using DECR: {e}")
+                try:
+                    new_inflight = conn.decr(inflight_key)
+                    conn.expire(inflight_key, ttl_seconds)
+                except Exception as fallback_error:
+                    logger.warning(f"⚠️  Failed to decrement inflight counter: {fallback_error}")
+            
+            # FIX: Windowed/JIT Enqueue - atomic claim next chunk index
+            # ใช้ Lua script เพื่อป้องกัน race conditions
+            chunks_metadata_key = f"task:{main_task_id}:chunks_metadata"
+            enqueued_guard_prefix = f"task:{main_task_id}:enqueued"
+            inflight_limit = int(os.getenv('CHUNK_INFLIGHT_LIMIT_PER_JOB', '2'))
+            
+            try:
+                from app.workers.lua_scripts import CLAIM_NEXT_CHUNK_INDEX_SCRIPT
+                claim_script = conn.register_script(CLAIM_NEXT_CHUNK_INDEX_SCRIPT)
+                
+                # Atomic claim next chunk index
+                result = claim_script(
+                    keys=[chunks_metadata_key, inflight_key, enqueued_guard_prefix],
+                    args=[inflight_limit, ttl_seconds]
+                )
+                
+                claimed_index = result[0] if result and len(result) >= 2 else None
+                inflight_after = result[1] if result and len(result) >= 2 else None
+                
+                if claimed_index is not None:
+                    # Claim สำเร็จ → enqueue chunk
+                    chunks_metadata_str = conn.get(chunks_metadata_key)
+                    if chunks_metadata_str:
+                        chunks_metadata = json.loads(chunks_metadata_str)
+                        chunk_paths = chunks_metadata.get("chunk_paths", [])
+                        total_chunks = chunks_metadata.get("total_chunks", 0)
+                        language = chunks_metadata.get("language", "th")
+                        model_size = chunks_metadata.get("model_size", "base")
+                        chunk_duration = chunks_metadata.get("chunk_duration", 150)
+                        
+                        if claimed_index < len(chunk_paths):
+                            from app.services.redis_queue_service import get_redis_queue_service
+                            queue_service = get_redis_queue_service()
+                            num_gpus = int(os.getenv('NUM_GPUS', '1'))
+                            
+                            # Enqueue chunk
+                            next_chunk_path = chunk_paths[claimed_index]
+                            next_chunk_task_id = f"{main_task_id}_chunk_{claimed_index}"
+                            gpu_index = claimed_index % num_gpus
+                            worker_gpu = f'gpu{gpu_index}'
+                            
+                            job_id = queue_service.enqueue_transcription(
+                                task_id=next_chunk_task_id,
+                                file_path=next_chunk_path,
+                                language=language,
+                                model_size=model_size,
+                                chunk_duration=chunk_duration,
+                                priority=False,
+                                worker_gpu=worker_gpu
+                            )
+                            
+                            logger.debug(f"📤 Windowed enqueue: chunk {claimed_index + 1}/{total_chunks} enqueued (inflight: {inflight_after}/{inflight_limit})")
+                        else:
+                            logger.warning(f"⚠️  Claimed index {claimed_index} out of bounds (chunks: {len(chunk_paths)})")
+            except Exception as e:
+                logger.warning(f"⚠️  Error in atomic windowed enqueue: {e}", exc_info=True)
+            
             # ตรวจสอบว่าทุก chunks เสร็จแล้วหรือยัง
             total_key = f"task:{main_task_id}:total_chunks"
             total_chunks = conn.get(total_key)
@@ -461,11 +564,36 @@ def process_transcription_job(
                 chunk_progress = int((done_count / total_chunks) * 50) + 40
                 chunk_progress = min(chunk_progress, 90)  # ไม่เกิน 90% (เหลือ 10% สำหรับ aggregator)
                 
+                # FIX: อัปเดต progress ใน SQLite เมื่อ chunk เสร็จ (rate limited เพื่อไม่ให้ SQLite ทำงานหนักเกินไป)
+                # Rate limiting: อัปเดตทุก 2 chunks หรือเมื่อ progress เปลี่ยน >= 5% หรือเมื่อ chunks เสร็จหมด
+                # เพื่อลด load บน SQLite แต่ยังคงให้ progress update ที่เพียงพอ
+                should_update_progress = (
+                    done_count % 2 == 0 or  # ทุก 2 chunks
+                    done_count >= total_chunks or  # เมื่อเสร็จหมด
+                    chunk_progress % 5 == 0  # เมื่อ progress เปลี่ยน >= 5%
+                )
+                
+                if should_update_progress:
+                    try:
+                        # ใช้ sync version เพื่อไม่ให้ block chunk processing
+                        _update_task_stage_sync(
+                            task_id=main_task_id,
+                            progress=chunk_progress,
+                            status="processing",
+                            stage="transcribing",
+                            stage_description=f"กำลังแปลงเสียงเป็นข้อความ ({done_count}/{total_chunks} ส่วนเสร็จ)",
+                            stage_progress=int((done_count / total_chunks) * 100),
+                            json_storage=None  # จะใช้ storage ที่ถูกต้องภายใน function
+                        )
+                        logger.debug(f"📊 Updated progress for {main_task_id}: {chunk_progress}% ({done_count}/{total_chunks} chunks)")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Failed to update progress in SQLite (non-critical): {e}")
+                
                 # ส่ง WebSocket notification สำหรับ chunk completed (optional, granular update)
-                # Rate limiting: ส่งทุก 3 chunks หรือเมื่อ chunks เสร็จหมด
+                # Rate limiting: ส่งทุก 2 chunks หรือเมื่อ chunks เสร็จหมด (ลดจาก 3 → 2 เพื่อให้ progress update บ่อยขึ้น)
                 try:
                     from app.services.websocket_service import websocket_manager
-                    if done_count % 3 == 0 or done_count >= total_chunks:
+                    if done_count % 2 == 0 or done_count >= total_chunks:
                         loop = get_event_loop()
                         loop.run_until_complete(
                             websocket_manager.broadcast_task_update(main_task_id, {
@@ -502,9 +630,16 @@ def process_transcription_job(
             
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
-            # FIX: สร้าง json_storage ก่อนใช้งาน
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
+            # FIX: ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE (ไม่ใช้ JSONStorage ถ้าใช้ SQLite)
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+                json_storage = None  # ไม่ใช้ JSONStorage
+            else:
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+                storage = None
             
             conn = get_redis_connection(decode_responses=True)
             
@@ -537,10 +672,23 @@ def process_transcription_job(
             
             logger.info(f"📊 Waiting for {total_chunks} chunks to complete (using atomic counter)...")
             
-            # อัปเดต stage: transcribing
+            # FIX: อัปเดต stage: transcribing (ไม่ hardcode progress=40 ถ้า DB ตอนนั้นสูงกว่าแล้ว)
+            # ตรวจสอบ progress ปัจจุบันก่อน
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+                existing_task = storage.load_transcription(main_task_id, skip_migration=True)
+            else:
+                existing_task = json_storage.load_transcription(main_task_id)
+            
+            # ใช้ progress สูงสุดระหว่าง 40 กับ progress ที่มีอยู่ (ป้องกัน progress ย้อนกลับ)
+            current_progress = existing_task.get("progress", 0) if existing_task else 0
+            initial_progress = max(40, current_progress)  # อย่างน้อย 40% แต่ไม่ต่ำกว่าค่าปัจจุบัน
+            
             _update_task_stage_sync(
                 task_id=main_task_id,
-                progress=40,
+                progress=initial_progress,
                 status="processing",
                 stage="transcribing",
                 stage_description=f"กำลังแปลงเสียงเป็นข้อความ (0/{total_chunks} ส่วนเสร็จ)",
@@ -790,10 +938,10 @@ def process_transcription_job(
             phase_timings['total_aggregator_time'] = t_aggregator_end - t_aggregator_start
             
             # รวม phase timings จาก preprocess (ถ้ามี)
-            if 'phase_timings' in task_data:
-                preprocess_timings = task_data['phase_timings']
+            if 'phase_timings' in task_data and isinstance(task_data.get('phase_timings'), dict):
+                preprocess_timings = task_data['phase_timings'].get('preprocess', {})
                 # คำนวณ total time จาก start ถึง aggregator end
-                if 't_start' in preprocess_timings:
+                if preprocess_timings and 't_start' in preprocess_timings:
                     try:
                         t_start_dt = datetime.fromisoformat(preprocess_timings['t_start'].replace('Z', '+00:00'))
                         t_end_dt = datetime.fromisoformat(phase_timings['t_aggregator_end'].replace('Z', '+00:00'))
@@ -853,6 +1001,8 @@ def process_transcription_job(
             import gc
             gc.collect()  # Force garbage collection
             logger.info(f"✅ Main task {main_task_id} updated in storage")
+            
+            # FIX: Log phase timings แบบละเอียดเพื่อวิเคราะห์ bottleneck
             logger.info(f"📊 Aggregator Phase Timings:")
             logger.info(f"   Wait chunks: {phase_timings.get('wait_chunks_time', 0):.2f}s")
             logger.info(f"   Fetch chunks: {phase_timings.get('fetch_chunks_time', 0):.2f}s")
@@ -862,6 +1012,35 @@ def process_transcription_job(
             logger.info(f"   Total aggregator: {phase_timings['total_aggregator_time']:.2f}s")
             if 'total_end_to_end_time' in phase_timings:
                 logger.info(f"   Total end-to-end: {phase_timings['total_end_to_end_time']:.2f}s ({phase_timings['total_end_to_end_time']/60:.2f} minutes)")
+            
+            # FIX: Log phase timings รวมจาก preprocess (ถ้ามี) เพื่อวิเคราะห์ bottleneck ทั้งหมด
+            if 'phase_timings' in task_data and isinstance(task_data.get('phase_timings'), dict):
+                preprocess_timings = task_data['phase_timings'].get('preprocess', {})
+                if preprocess_timings:
+                    logger.info(f"📊 Combined Phase Timings (Preprocess + Aggregator):")
+                    logger.info(f"   Preprocess - Extract: {preprocess_timings.get('extract_time', 0):.2f}s")
+                    logger.info(f"   Preprocess - Chunk: {preprocess_timings.get('chunk_time', 0):.2f}s")
+                    logger.info(f"   Preprocess - Enqueue: {preprocess_timings.get('enqueue_time', 0):.2f}s")
+                    logger.info(f"   Preprocess - Total: {preprocess_timings.get('total_preprocess_time', 0):.2f}s")
+                    logger.info(f"   Aggregator - Wait: {phase_timings.get('wait_chunks_time', 0):.2f}s")
+                    logger.info(f"   Aggregator - Fetch: {phase_timings.get('fetch_chunks_time', 0):.2f}s")
+                    logger.info(f"   Aggregator - Merge: {phase_timings.get('merge_time', 0):.2f}s")
+                    logger.info(f"   Aggregator - Total: {phase_timings.get('total_aggregator_time', 0):.2f}s")
+                    if 'total_end_to_end_time' in phase_timings:
+                        logger.info(f"   🎯 Total End-to-End: {phase_timings['total_end_to_end_time']:.2f}s ({phase_timings['total_end_to_end_time']/60:.2f} minutes)")
+                        
+                        # FIX: คำนวณและ log percentage ของแต่ละ phase เพื่อห bottleneck
+                        total_time = phase_timings['total_end_to_end_time']
+                        if total_time > 0:
+                            logger.info(f"📈 Phase Breakdown (% of total time):")
+                            logger.info(f"   Preprocess: {((preprocess_timings.get('total_preprocess_time', 0) / total_time) * 100):.1f}%")
+                            logger.info(f"   Wait chunks: {((phase_timings.get('wait_chunks_time', 0) / total_time) * 100):.1f}%")
+                            logger.info(f"   Fetch chunks: {((phase_timings.get('fetch_chunks_time', 0) / total_time) * 100):.1f}%")
+                            logger.info(f"   Merge: {((phase_timings.get('merge_time', 0) / total_time) * 100):.1f}%")
+                            if 'thai_processing_time' in phase_timings:
+                                logger.info(f"   Thai processing: {((phase_timings['thai_processing_time'] / total_time) * 100):.1f}%")
+                            # Note: Chunk transcription time ไม่รวมใน total_end_to_end เพราะมันทำงาน parallel
+                            logger.info(f"   (Chunk transcription runs in parallel, not included in breakdown)")
             
             # Cleanup Redis keys หลัง aggregator เสร็จ (ลด memory usage)
             logger.info(f"🧹 Cleaning up Redis keys for {main_task_id}...")
@@ -1049,23 +1228,33 @@ def process_preprocess_job(
     try:
         from app.services.video_service import VideoService
         from app.services.redis_queue_service import get_redis_queue_service
-        from app.utils.json_storage import JSONStorage
         # os already imported at top level
         import json
         from redis import Redis
         
-        json_storage = JSONStorage()
+        # FIX: ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE (ไม่ใช้ JSONStorage ถ้าใช้ SQLite)
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        if storage_type == 'sqlite':
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+            json_storage = None  # ไม่ใช้ JSONStorage
+            task_data = storage.load_transcription(task_id, skip_migration=True)
+            if not task_data:
+                task_data = {}
+        else:
+            from app.utils.json_storage import JSONStorage
+            json_storage = JSONStorage()
+            storage = None
+            task_dir = json_storage.storage_dir / "transcriptions" / task_id
+            metadata_path = task_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    task_data = json.load(f)
+            else:
+                task_data = {}
+        
         video_service = VideoService()
         queue_service = get_redis_queue_service()
-        
-        # อัปเดต progress
-        task_dir = json_storage.storage_dir / "transcriptions" / task_id
-        metadata_path = task_dir / "metadata.json"
-        if metadata_path.exists():
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                task_data = json.load(f)
-        else:
-            task_data = {}
         
         # FIX: บันทึก file_path, file_name, language, model_size ลง task_data
         task_data["file_path"] = file_path
@@ -1082,7 +1271,7 @@ def process_preprocess_job(
             stage="preprocessing",
             stage_description="กำลังเตรียมไฟล์และแยกเสียง",
             stage_progress=0,
-            json_storage=json_storage
+            json_storage=json_storage if storage_type != 'sqlite' else None
         )
         
         # 1. Extract audio
@@ -1095,7 +1284,7 @@ def process_preprocess_job(
             stage="extracting_audio",
             stage_description="กำลังแยกเสียงจากวิดีโอ",
             stage_progress=0,
-            json_storage=json_storage
+            json_storage=json_storage if storage_type != 'sqlite' else None
         )
         audio_path = video_service.extract_audio(file_path, task_id=task_id)
         t_extract_end = time.time()
@@ -1113,7 +1302,7 @@ def process_preprocess_job(
             stage="chunking",
             stage_description="กำลังแบ่งไฟล์เป็นส่วนๆ",
             stage_progress=0,
-            json_storage=json_storage
+            json_storage=json_storage if storage_type != 'sqlite' else None
         )
         chunks = video_service.create_chunks(audio_path, chunk_duration, task_id=task_id)
         total_chunks = len(chunks)
@@ -1130,12 +1319,13 @@ def process_preprocess_job(
             stage="enqueueing",
             stage_description=f"กำลังส่ง {total_chunks} ส่วนไปประมวลผล",
             stage_progress=0,
-            json_storage=json_storage
+            json_storage=json_storage if storage_type != 'sqlite' else None
         )
         
         # 3. Enqueue chunk jobs ไปยัง GPU queues (Fan-out)
+        # FIX: Windowed/JIT Enqueue - enqueue แค่ N chunks แรก แล้ว enqueue ถัดไปเมื่อ chunk เสร็จ
         t_enqueue_start = time.time()
-        logger.info(f"📝 Enqueueing {total_chunks} chunks to GPU queues...")
+        
         # FIX: ห้าม auto-detect - ใช้ NUM_GPUS อย่างเดียวเพื่อป้องกัน queue mismatch
         num_gpus = int(os.getenv('NUM_GPUS', '0'))
         if num_gpus <= 0:
@@ -1143,9 +1333,18 @@ def process_preprocess_job(
             logger.error(f"❌ {error_msg}")
             raise RuntimeError(error_msg)
         logger.info(f"📊 Using {num_gpus} GPUs from NUM_GPUS environment variable")
-        chunk_data = []
         
-        for i, chunk_path in enumerate(chunks):
+        # Windowed enqueue: enqueue แค่ N chunks แรก (ไม่ใช่ทั้งหมด)
+        # ค่าเริ่มต้น: 4 chunks (สามารถปรับได้ผ่าน env var)
+        initial_window_size = int(os.getenv('CHUNK_ENQUEUE_WINDOW_SIZE', '4'))
+        logger.info(f"📝 Enqueueing {min(initial_window_size, total_chunks)}/{total_chunks} chunks initially (windowed enqueue)...")
+        
+        chunk_data = []
+        enqueued_count = 0
+        
+        # Enqueue แค่ initial window
+        for i in range(min(initial_window_size, total_chunks)):
+            chunk_path = chunks[i]
             chunk_task_id = f"{task_id}_chunk_{i}"
             gpu_index = i % num_gpus
             worker_gpu = f'gpu{gpu_index}'
@@ -1166,12 +1365,34 @@ def process_preprocess_job(
                 "chunk_path": chunk_path,
                 "worker_gpu": worker_gpu
             })
+            enqueued_count += 1
             logger.debug(f"   Chunk {i+1}/{total_chunks} enqueued to {worker_gpu}")
+        
+        # เก็บ metadata สำหรับ windowed enqueue
+        # - next_chunk_index: chunk ถัดไปที่จะ enqueue
+        # - chunks: รายการ chunk paths ทั้งหมด
+        conn = get_redis_connection(decode_responses=True)
+        ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))  # Default: 12 hours
+        
+        # เก็บ chunk paths ทั้งหมดไว้ใน Redis (สำหรับ enqueue ถัดไป)
+        chunks_metadata = {
+            "chunk_paths": chunks,  # เก็บ paths ทั้งหมด
+            "next_chunk_index": enqueued_count,  # chunk ถัดไปที่จะ enqueue
+            "total_chunks": total_chunks,
+            "chunk_duration": chunk_duration,
+            "language": language,
+            "model_size": model_size
+        }
+        conn.setex(
+            f"task:{task_id}:chunks_metadata",
+            ttl_seconds,
+            json.dumps(chunks_metadata)
+        )
         
         t_enqueue_end = time.time()
         phase_timings['t_enqueue_chunks_end'] = datetime.now(timezone.utc).isoformat()
         phase_timings['enqueue_time'] = t_enqueue_end - t_enqueue_start
-        logger.info(f"✅ Enqueued {len(chunk_data)} chunks to GPU queues (took {phase_timings['enqueue_time']:.2f}s)")
+        logger.info(f"✅ Enqueued {enqueued_count}/{total_chunks} chunks initially (windowed, remaining will be enqueued as chunks complete)")
         
         # 4. Enqueue aggregator job
         t_aggregator_enqueue_start = time.time()
@@ -1205,12 +1426,29 @@ def process_preprocess_job(
         conn.setex(f"task:{task_id}:total_chunks", ttl_seconds, str(total_chunks))
         conn.setex(f"task:{task_id}:done_chunks", ttl_seconds, "0")  # เริ่มต้นที่ 0
         
+        # FIX: ตั้งค่า inflight counter สำหรับ fairness
+        # เริ่มต้นที่จำนวน chunks ที่ enqueue แล้ว (initial window)
+        # ใช้ SET แทน setex เพื่อให้ INCR/DECR ใช้งานได้ถูกต้อง
+        inflight_key = f"task:{task_id}:inflight_chunks"
+        conn.set(inflight_key, str(enqueued_count))
+        conn.expire(inflight_key, ttl_seconds)
+        
+        # ตั้ง guard keys สำหรับ chunks ที่ enqueue แล้ว (ป้องกัน enqueue ซ้ำ)
+        enqueued_guard_prefix = f"task:{task_id}:enqueued"
+        for i in range(enqueued_count):
+            guard_key = f"{enqueued_guard_prefix}:{i}"
+            conn.setex(guard_key, ttl_seconds, '1')
+        
+        logger.debug(f"✅ Initialized inflight counter: {enqueued_count}, guards: {enqueued_count}")
+        
         t_end = time.time()
         phase_timings['t_end'] = datetime.now(timezone.utc).isoformat()
         phase_timings['total_preprocess_time'] = t_end - t_start
         
-        # บันทึก phase timings ลง task_data
-        task_data['phase_timings'] = phase_timings
+        # FIX: บันทึก phase timings ลง task_data (เก็บไว้ใน 'preprocess' key เพื่อแยกจาก aggregator)
+        if 'phase_timings' not in task_data:
+            task_data['phase_timings'] = {}
+        task_data['phase_timings']['preprocess'] = phase_timings
         
         # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
@@ -1359,6 +1597,70 @@ try:
         logger.info("ℹ️  Model will be loaded on first job (lazy loading)")
 except Exception as e:
     logger.warning(f"⚠️  Failed to pre-load model: {e} (will load on first job)")
+
+def process_live_chunk_job(
+    session_id: str,
+    meeting_id: str,
+    chunk_index: int,
+    start_time: float,
+    duration: float,
+    audio_path: str
+) -> Dict:
+    """
+    RQ Worker function สำหรับ live chunk transcription (Priority Queue)
+    
+    Args:
+        session_id: Session ID
+        meeting_id: Meeting ID
+        chunk_index: Chunk index
+        start_time: Start time in seconds
+        duration: Duration in seconds
+        audio_path: Path to audio file
+    
+    Returns:
+        Result dictionary with status
+    """
+    logger.info(f"🚀 RQ Worker: Starting live chunk job {session_id}")
+    logger.info(f"   Meeting: {meeting_id}, Chunk: {chunk_index}, Start: {start_time}s, Duration: {duration}s")
+    logger.info(f"   Audio: {audio_path}")
+    
+    try:
+        # Import async function from API module
+        from app.api.realtime_transcription import process_live_chunk_background
+        
+        # ใช้ persistent event loop
+        loop = get_event_loop()
+        logger.info(f"✅ Using persistent event loop (instance: {id(loop)})")
+        
+        # เรียก async function
+        result = loop.run_until_complete(
+            process_live_chunk_background(
+                session_id=session_id,
+                meeting_id=meeting_id,
+                chunk_index=chunk_index,
+                start_time=start_time,
+                duration=duration,
+                audio_path=audio_path
+            )
+        )
+        
+        logger.info(f"✅ Live chunk job {session_id} completed successfully")
+        return {
+            "status": "completed",
+            "session_id": session_id,
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing live chunk job {session_id}: {e}", exc_info=True)
+        return {
+            "status": "failed",
+            "session_id": session_id,
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "error": str(e)
+        }
 
 logger.info("✅ RQ Worker module loaded")
 

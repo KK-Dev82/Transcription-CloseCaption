@@ -83,7 +83,8 @@ class SQLiteStorage:
                 stage_progress INTEGER,
                 job_id TEXT,
                 user_id TEXT,
-                callback_url TEXT
+                callback_url TEXT,
+                phase_timings_json TEXT
             )
         """)
         
@@ -196,7 +197,8 @@ class SQLiteStorage:
                     'stage_progress': 'INTEGER',
                     'job_id': 'TEXT',
                     'user_id': 'TEXT',
-                    'callback_url': 'TEXT'
+                    'callback_url': 'TEXT',
+                    'phase_timings_json': 'TEXT'
                 }
                 
                 for col_name, col_type in new_columns.items():
@@ -248,6 +250,16 @@ class SQLiteStorage:
         conn = self._get_connection()
         
         chunks_json = json.dumps(transcription_data.get("chunks", []), ensure_ascii=False)
+        
+        # FIX: เก็บ phase_timings เป็น JSON string (สำหรับวิเคราะห์ bottleneck)
+        phase_timings_json = None
+        if "phase_timings" in transcription_data:
+            phase_timings_json = json.dumps(transcription_data.get("phase_timings"), ensure_ascii=False)
+        
+        # FIX: เก็บ phase_timings เป็น JSON string (สำหรับวิเคราะห์ bottleneck)
+        phase_timings_json = None
+        if "phase_timings" in transcription_data:
+            phase_timings_json = json.dumps(transcription_data.get("phase_timings"), ensure_ascii=False)
         
         # Helper function to get UTC timestamp
         def get_utc_timestamp(value):
@@ -314,8 +326,8 @@ class SQLiteStorage:
                 chunks_json, status, progress, model_size, chunk_duration, error_message,
                 processing_time, transcription_time, audio_extraction_time, text_correction_time,
                 current_stage, current_stage_description, stage_progress,
-                job_id, user_id, callback_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                job_id, user_id, callback_url, phase_timings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
             created_at,
@@ -331,7 +343,7 @@ class SQLiteStorage:
             transcription_data.get("corrected_text"),
             transcription_data.get("partial_text"),
             chunks_json,
-            transcription_data.get("status", "completed"),
+            transcription_data.get("status", "pending"),  # FIX: เปลี่ยน default จาก "completed" → "pending" (jobs ที่ส่งเข้า queue ควรเป็น "pending" หรือ "queued")
             transcription_data.get("progress", 0),
             transcription_data.get("model_size"),
             transcription_data.get("chunk_duration"),
@@ -345,7 +357,8 @@ class SQLiteStorage:
             transcription_data.get("stage_progress"),
             transcription_data.get("job_id"),
             transcription_data.get("user_id"),
-            transcription_data.get("callback_url")
+            transcription_data.get("callback_url"),
+            phase_timings_json
         ))
         
         conn.commit()
@@ -547,7 +560,7 @@ class SQLiteStorage:
                 return default
         
         # Return format compatible กับ JSONStorage
-        return {
+        result = {
             "task_id": row['task_id'],
             "created_at": get_row_value('created_at'),
             "updated_at": get_row_value('updated_at'),
@@ -578,6 +591,26 @@ class SQLiteStorage:
             "user_id": get_row_value('user_id'),
             "callback_url": get_row_value('callback_url')
         }
+        
+        # FIX: โหลด phase_timings จาก phase_timings_json (ถ้ามี)
+        phase_timings_json = get_row_value('phase_timings_json')
+        if phase_timings_json:
+            try:
+                result["phase_timings"] = json.loads(phase_timings_json)
+            except Exception as e:
+                logger.debug(f"Error parsing phase_timings_json for {task_id}: {e}")
+        
+        return result
+        
+        # FIX: โหลด phase_timings จาก phase_timings_json (ถ้ามี)
+        phase_timings_json = get_row_value('phase_timings_json')
+        if phase_timings_json:
+            try:
+                result["phase_timings"] = json.loads(phase_timings_json)
+            except Exception as e:
+                logger.debug(f"Error parsing phase_timings_json for {task_id}: {e}")
+        
+        return result
     
     def list_all_transcriptions(self) -> List[Dict]:
         """ดึงรายการ transcription ทั้งหมด (return format compatible กับ JSONStorage)"""

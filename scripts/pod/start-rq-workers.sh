@@ -162,7 +162,7 @@ fi
 # จำนวน workers ต่อ 1 GPU (เพื่อให้ GPU utilization สูงขึ้น)
 # 4 workers = optimal สำหรับ RTX 4000 Ada (20GB VRAM) + small model
 # แต่ Pod มี 6 vCPU → ใช้ 3 workers เพื่อไม่ให้ CPU bottleneck
-GPU_WORKERS_PER_GPU=${GPU_WORKERS_PER_GPU:-4}  # เพิ่มจาก 3 เป็น 4 เพื่อความเร็ว
+GPU_WORKERS_PER_GPU=${GPU_WORKERS_PER_GPU:-3}  # ตั้งเป็น 3 เพื่อหลีกเลี่ยง model duplication ใน VRAM
 print_info "GPU Workers per GPU: $GPU_WORKERS_PER_GPU"
 
 # Set PYTHONPATH เพื่อให้ import app.* ได้
@@ -181,38 +181,38 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
         worker_name="worker-gpu${i}-w${w}"
         print_info "   Starting ${worker_name} (listening to priority + gpu$i)..."
         
-        # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
-        # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
-        # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
-        # - WHISPER_DEVICE: ต้องเป็น 'cuda'
-        # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
-        # ⚠️ สำคัญ: ต้องส่งต่อ LD_LIBRARY_PATH ให้ worker process
-        # ถ้าไม่ส่งต่อ CTranslate2 จะไม่พบ cuDNN → fallback เป็น CPU → ใช้ RAM มาก
-        # FIX: ใช้ env command เพื่อให้แน่ใจว่า environment variables ถูกส่งต่ออย่างถูกต้อง
-        # และใช้ explicit LD_LIBRARY_PATH แทน ${LD_LIBRARY_PATH:-} เพื่อป้องกัน empty value
-        env CUDA_VISIBLE_DEVICES=$i \
-            LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
-            REDIS_URL="$REDIS_URL" \
-            PYTHONPATH="$PYTHONPATH" \
-            WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
-            WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
-            WHISPER_MODEL="${WHISPER_MODEL:-base}" \
-            WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
-            WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
-            CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
-            VIDEO_WORKER_TYPE=pika \
-            RQ_PRELOAD_MODEL=true \
-            RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
-            rq worker \
-            --url "$REDIS_URL" \
-            transcription_priority \
-            transcription_gpu$i \
+    # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
+    # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
+    # - CUDNN_DISABLE: ตั้งเป็น 0 เพื่อใช้ cuDNN (ถ้าไม่ตั้งจะใช้ default จาก .env.runpod)
+    # - WHISPER_DEVICE: ต้องเป็น 'cuda'
+    # - WHISPER_COMPUTE_TYPE: ควรเป็น 'float16' สำหรับ GPU
+    # ⚠️ สำคัญ: ต้องส่งต่อ LD_LIBRARY_PATH ให้ worker process
+    # ถ้าไม่ส่งต่อ CTranslate2 จะไม่พบ cuDNN → fallback เป็น CPU → ใช้ RAM มาก
+    # FIX: ใช้ env command เพื่อให้แน่ใจว่า environment variables ถูกส่งต่ออย่างถูกต้อง
+    # และใช้ explicit LD_LIBRARY_PATH แทน ${LD_LIBRARY_PATH:-} เพื่อป้องกัน empty value
+    env CUDA_VISIBLE_DEVICES=$i \
+        LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+        REDIS_URL="$REDIS_URL" \
+        PYTHONPATH="$PYTHONPATH" \
+        WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
+        WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
+            WHISPER_MODEL="${WHISPER_MODEL:-Vinxscribe/biodatlab-whisper-th-medium-faster}" \
+        WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
+        WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
+        CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \
+        VIDEO_WORKER_TYPE=pika \
+        RQ_PRELOAD_MODEL=true \
+        RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
+        rq worker \
+        --url "$REDIS_URL" \
+        transcription_priority \
+        transcription_gpu$i \
             --name $worker_name \
             --pid /tmp/rq-${worker_name}.pid \
             > /tmp/rq-${worker_name}.log 2>&1 &
-        
-        WORKER_PID=$!
-        WORKER_PIDS+=($WORKER_PID)
+    
+    WORKER_PID=$!
+    WORKER_PIDS+=($WORKER_PID)
         print_success "✅ ${worker_name} started (PID: $WORKER_PID)"
     done
     

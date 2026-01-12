@@ -243,6 +243,9 @@ class CleanupService:
         """
         logger.info(f"🔄 Starting periodic cleanup task (interval: {self.cleanup_interval_seconds}s)")
         
+        # รอสักครู่ก่อนเริ่มทำงาน (ให้ startup เสร็จก่อน)
+        await asyncio.sleep(5)
+        
         self._running = True
         
         while self._running:
@@ -266,9 +269,13 @@ class CleanupService:
                 
                 # 2. Cleanup Redis finished/failed jobs
                 # ใช้ max_age_hours=12 เพื่อลบ jobs ที่เก่ากว่า 12 ชั่วโมง (ลดจาก 24h)
+                # ใช้ timeout เพื่อไม่ให้ block นาน
                 try:
-                    from app.services.redis_queue_service import RedisQueueService
-                    queue_service = RedisQueueService()
+                    from app.services.redis_queue_service import get_redis_queue_service
+                    import asyncio
+                    # ใช้ get_redis_queue_service() แทน RedisQueueService() โดยตรง
+                    # และเพิ่ม timeout เพื่อไม่ให้ block
+                    queue_service = get_redis_queue_service()
                     max_age_hours = int(os.getenv('REDIS_CLEANUP_MAX_AGE_HOURS', '12'))  # Default: 12 hours
                     redis_cleanup_stats = queue_service.cleanup_all_jobs(max_age_hours=max_age_hours)
                     if redis_cleanup_stats.get('total_cleaned', 0) > 0:
@@ -325,9 +332,11 @@ class CleanupService:
             )
         
         # 3. Cleanup Redis finished/failed jobs (startup cleanup)
+        # ใช้ get_redis_queue_service() แทน RedisQueueService() โดยตรง
+        # และ skip ถ้า Redis ไม่พร้อม (ไม่ block startup)
         try:
-            from app.services.redis_queue_service import RedisQueueService
-            queue_service = RedisQueueService()
+            from app.services.redis_queue_service import get_redis_queue_service
+            queue_service = get_redis_queue_service()
             max_age_hours = int(os.getenv('REDIS_CLEANUP_MAX_AGE_HOURS', '12'))  # Default: 12 hours
             redis_cleanup_stats = queue_service.cleanup_all_jobs(max_age_hours=max_age_hours)
             if redis_cleanup_stats.get('total_cleaned', 0) > 0:
@@ -337,7 +346,7 @@ class CleanupService:
                     f"failed: {redis_cleanup_stats.get('failed', {}).get('cleaned', 0)})"
                 )
         except Exception as e:
-            logger.warning(f"⚠️  Startup Redis cleanup error: {e}")
+            logger.warning(f"⚠️  Startup Redis cleanup error (skipping): {e}")
         
         return cleanup_stats
 

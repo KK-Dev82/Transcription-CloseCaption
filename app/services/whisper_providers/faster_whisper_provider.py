@@ -138,12 +138,31 @@ class FasterWhisperProvider(WhisperProvider):
             start_time = time.time()
             
             # Run transcription (faster-whisper is synchronous)
-            # ปรับแต่ง parameters เพื่อความเร็วสูงสุด
-            vad_filter = os.getenv('WHISPER_VAD_FILTER', 'true').lower() == 'true'  # เปิด VAD เพื่อตัดช่วงเงียบ (เร็วขึ้น)
-            beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))  # greedy (เร็วสุด)
-            best_of = int(os.getenv('WHISPER_BEST_OF', '1'))
-            word_timestamps = os.getenv('WHISPER_WORD_TIMESTAMPS', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
-            condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'  # ปิดเพื่อความเร็ว
+            # ✅ CloseCaption: ใช้ CC_* env variables ถ้าเปิดใช้งาน CloseCaption
+            # ถ้าไม่มี CC_* → fallback ไปใช้ WHISPER_* (backward compatible)
+            cc_enabled = os.getenv('CC_ENABLED', 'false').lower() == 'true'
+            
+            if cc_enabled:
+                # ใช้ CloseCaption config
+                vad_filter = os.getenv('CC_VAD_FILTER', 'true').lower() == 'true'
+                beam_size = int(os.getenv('CC_BEAM_SIZE', '3'))  # 3 สำหรับความแม่น (Profile TH-CC-RT v1)
+                best_of = int(os.getenv('CC_BEST_OF', '1'))
+                word_timestamps = os.getenv('CC_WORD_TIMESTAMPS', 'false').lower() == 'true'
+                condition_on_previous_text = os.getenv('CC_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'
+                temperature = float(os.getenv('CC_TEMPERATURE', '0.0'))
+                no_speech_threshold = float(os.getenv('CC_NO_SPEECH_THRESHOLD', '0.6'))
+                log_prob_threshold = float(os.getenv('CC_LOG_PROB_THRESHOLD', '-1.0'))
+                logger.info(f"[Faster Whisper] 🎯 Using CloseCaption config: beam_size={beam_size}, temp={temperature}, vad={vad_filter}")
+            else:
+                # ใช้ default config (backward compatible)
+                vad_filter = os.getenv('WHISPER_VAD_FILTER', 'true').lower() == 'true'
+                beam_size = int(os.getenv('WHISPER_BEAM_SIZE', '1'))  # greedy (เร็วสุด)
+                best_of = int(os.getenv('WHISPER_BEST_OF', '1'))
+                word_timestamps = os.getenv('WHISPER_WORD_TIMESTAMPS', 'false').lower() == 'true'
+                condition_on_previous_text = os.getenv('WHISPER_CONDITION_ON_PREVIOUS_TEXT', 'false').lower() == 'true'
+                temperature = float(os.getenv('WHISPER_TEMPERATURE', '0.0'))
+                no_speech_threshold = float(os.getenv('WHISPER_NO_SPEECH_THRESHOLD', '0.6'))
+                log_prob_threshold = float(os.getenv('WHISPER_LOG_PROB_THRESHOLD', '-1.0'))
             
             # ใช้ BatchedInferencePipeline ถ้าเปิดใช้งาน
             use_batched = os.getenv('WHISPER_USE_BATCHED', 'false').lower() == 'true'
@@ -163,6 +182,9 @@ class FasterWhisperProvider(WhisperProvider):
                     best_of=best_of,
                     word_timestamps=word_timestamps,
                     condition_on_previous_text=condition_on_previous_text,
+                    temperature=temperature,
+                    no_speech_threshold=no_speech_threshold,
+                    log_prob_threshold=log_prob_threshold,
                     batch_size=batch_size
                 )
             else:
@@ -175,7 +197,10 @@ class FasterWhisperProvider(WhisperProvider):
                     beam_size=beam_size,
                     best_of=best_of,
                     word_timestamps=word_timestamps,
-                    condition_on_previous_text=condition_on_previous_text
+                    condition_on_previous_text=condition_on_previous_text,
+                    temperature=temperature,
+                    no_speech_threshold=no_speech_threshold,
+                    log_prob_threshold=log_prob_threshold
                 )
             
             # Convert segments to list (this is where it might crash if cuDNN is wrong)

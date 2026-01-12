@@ -313,6 +313,45 @@ class RedisQueueService:
         logger.info(f"✅ Aggregator job {task_id} enqueued to CPU queue (Job ID: {job.id})")
         return job.id
     
+    def enqueue_live_chunk(
+        self,
+        session_id: str,
+        meeting_id: str,
+        chunk_index: int,
+        start_time: float,
+        duration: float,
+        audio_path: str
+    ) -> str:
+        """
+        Enqueue live chunk job ไปยัง priority queue (สูงสุด)
+        
+        Args:
+            session_id: Session ID
+            meeting_id: Meeting ID
+            chunk_index: Chunk index
+            start_time: Start time in seconds
+            duration: Duration in seconds
+            audio_path: Path to audio file
+        
+        Returns:
+            Job ID
+        """
+        # ใช้ priority queue สำหรับ live-chunk (สูงสุด)
+        job = self.priority_queue.enqueue(
+            'app.workers.rq_worker.process_live_chunk_job',
+            session_id,
+            meeting_id,
+            chunk_index,
+            start_time,
+            duration,
+            audio_path,
+            job_id=f"live-chunk-{meeting_id}-{chunk_index}",
+            job_timeout=300,  # 5 minutes timeout (สำหรับ real-time)
+            result_ttl=3600,  # Keep result for 1 hour (shorter than normal jobs)
+        )
+        logger.info(f"📌 Live chunk job {session_id} enqueued to PRIORITY queue (Job ID: {job.id})")
+        return job.id
+    
     def get_job_status(self, job_id: str) -> Dict:
         """Get job status"""
         try:
