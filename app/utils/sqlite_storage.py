@@ -168,6 +168,46 @@ class SQLiteStorage:
             ON segments(task_id, start_time)
         """)
         
+        # Uploaded files table - สำหรับเก็บ metadata ของไฟล์ที่อัปโหลด
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS uploaded_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL UNIQUE,
+                file_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                duration REAL,
+                duration_minutes REAL,
+                duration_formatted TEXT,
+                video_info_json TEXT,
+                audio_info_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deleted_at TIMESTAMP,
+                user_id TEXT,
+                tags TEXT,
+                description TEXT
+            )
+        """)
+        
+        # Indexes สำหรับ uploaded_files
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploaded_files_file_path 
+            ON uploaded_files(file_path)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploaded_files_file_type 
+            ON uploaded_files(file_type)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploaded_files_created_at 
+            ON uploaded_files(created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_uploaded_files_deleted_at 
+            ON uploaded_files(deleted_at)
+        """)
+        
         # Migrate existing table schema (add new columns if they don't exist)
         # ต้องทำก่อนสร้าง indexes เพื่อไม่ให้เกิด error
         try:
@@ -1171,6 +1211,411 @@ class SQLiteStorage:
             )
         
         return highlighted
+    
+    # ============================================================================
+    # Uploaded Files Methods
+    # ============================================================================
+    
+    def save_uploaded_file(
+        self,
+        filename: str,
+        file_path: str,
+        file_type: str,
+        file_size: int,
+        duration: Optional[float] = None,
+        duration_minutes: Optional[float] = None,
+        duration_formatted: Optional[str] = None,
+        video_info: Optional[Dict] = None,
+        audio_info: Optional[Dict] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> int:
+        """
+        บันทึกข้อมูลไฟล์ที่อัปโหลด
+        
+        Returns:
+            int: ID ของไฟล์ที่บันทึก
+        """
+        conn = self._get_connection()
+        
+        # ตรวจสอบว่ามีไฟล์นี้อยู่แล้วหรือไม่ (ตาม file_path)
+        cursor = conn.execute(
+            "SELECT id FROM uploaded_files WHERE file_path = ? AND deleted_at IS NULL",
+            (file_path,)
+        )
+        existing = cursor.fetchone()
+        
+        if existing:
+            # อัปเดตข้อมูลที่มีอยู่
+            file_id = existing[0]
+            video_info_json = json.dumps(video_info) if video_info else None
+            audio_info_json = json.dumps(audio_info) if audio_info else None
+            
+            conn.execute("""
+                UPDATE uploaded_files 
+                SET filename = ?, file_type = ?, file_size = ?, 
+                    duration = ?, duration_minutes = ?, duration_formatted = ?,
+                    video_info_json = ?, audio_info_json = ?,
+                    updated_at = CURRENT_TIMESTAMP,
+                    user_id = ?, tags = ?, description = ?
+                WHERE id = ?
+            """, (
+                filename, file_type, file_size,
+                duration, duration_minutes, duration_formatted,
+                video_info_json, audio_info_json,
+                user_id, tags, description,
+                file_id
+            ))
+            conn.commit()
+            logger.debug(f"Updated uploaded file: {file_id} - {filename}")
+            return file_id
+        else:
+            # สร้างใหม่
+            video_info_json = json.dumps(video_info) if video_info else None
+            audio_info_json = json.dumps(audio_info) if audio_info else None
+            
+            cursor = conn.execute("""
+                INSERT INTO uploaded_files (
+                    filename, file_path, file_type, file_size,
+                    duration, duration_minutes, duration_formatted,
+                    video_info_json, audio_info_json,
+                    user_id, tags, description
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                filename, file_path, file_type, file_size,
+                duration, duration_minutes, duration_formatted,
+                video_info_json, audio_info_json,
+                user_id, tags, description
+            ))
+            conn.commit()
+            file_id = cursor.lastrowid
+            logger.debug(f"Saved uploaded file: {file_id} - {filename}")
+            return file_id
+    
+    def get_uploaded_file(self, file_id: int) -> Optional[Dict]:
+        """ดึงข้อมูลไฟล์ตาม ID"""
+        conn = self._get_connection()
+        cursor = conn.execute("""
+            SELECT * FROM uploaded_files 
+            WHERE id = ? AND deleted_at IS NULL
+        """, (file_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return self._row_to_uploaded_file_dict(row)
+    
+    def get_uploaded_file_by_path(self, file_path: str) -> Optional[Dict]:
+        """ดึงข้อมูลไฟล์ตาม file_path"""
+        conn = self._get_connection()
+        cursor = conn.execute("""
+            SELECT * FROM uploaded_files 
+            WHERE file_path = ? AND deleted_at IS NULL
+        """, (file_path,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        return self._row_to_uploaded_file_dict(row)
+    
+    def list_uploaded_files(
+        self,
+        file_type: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        order_by: str = "created_at",
+        order_desc: bool = True
+    ) -> List[Dict]:
+        """
+        ดึงรายการไฟล์ที่อัปโหลด
+        
+        Args:
+            file_type: กรองตามประเภทไฟล์ (video/audio) หรือ None สำหรับทั้งหมด
+            limit: จำนวนสูงสุด
+            offset: offset สำหรับ pagination
+            order_by: field ที่ใช้เรียงลำดับ
+            order_desc: เรียงจากมากไปน้อย (True) หรือน้อยไปมาก (False)
+        """
+        conn = self._get_connection()
+        
+        order_direction = "DESC" if order_desc else "ASC"
+        query = f"""
+            SELECT * FROM uploaded_files 
+            WHERE deleted_at IS NULL
+        """
+        params = []
+        
+        if file_type:
+            query += " AND file_type = ?"
+            params.append(file_type)
+        
+        query += f" ORDER BY {order_by} {order_direction} LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+        
+        return [self._row_to_uploaded_file_dict(row) for row in rows]
+    
+    def count_uploaded_files(self, file_type: Optional[str] = None) -> int:
+        """นับจำนวนไฟล์ที่อัปโหลด"""
+        conn = self._get_connection()
+        
+        if file_type:
+            cursor = conn.execute("""
+                SELECT COUNT(*) FROM uploaded_files 
+                WHERE deleted_at IS NULL AND file_type = ?
+            """, (file_type,))
+        else:
+            cursor = conn.execute("""
+                SELECT COUNT(*) FROM uploaded_files 
+                WHERE deleted_at IS NULL
+            """)
+        
+        return cursor.fetchone()[0]
+    
+    def delete_uploaded_file(self, file_id: int, soft_delete: bool = True) -> bool:
+        """
+        ลบไฟล์ (soft delete โดยตั้ง deleted_at)
+        
+        Args:
+            file_id: ID ของไฟล์
+            soft_delete: True = soft delete (ตั้ง deleted_at), False = hard delete (ลบจริง)
+        """
+        conn = self._get_connection()
+        
+        if soft_delete:
+            cursor = conn.execute("""
+                UPDATE uploaded_files 
+                SET deleted_at = CURRENT_TIMESTAMP 
+                WHERE id = ? AND deleted_at IS NULL
+            """, (file_id,))
+        else:
+            cursor = conn.execute("""
+                DELETE FROM uploaded_files 
+                WHERE id = ?
+            """, (file_id,))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+    
+    def cleanup_deleted_files(self, max_age_hours: int = 24) -> Dict:
+        """
+        ลบไฟล์ที่ถูก soft delete แล้วและเก่ากว่า max_age_hours
+        
+        Returns:
+            Dict with cleanup statistics
+        """
+        conn = self._get_connection()
+        
+        # หาไฟล์ที่ถูก soft delete และเก่ากว่า max_age_hours
+        cursor = conn.execute("""
+            SELECT id, file_path FROM uploaded_files 
+            WHERE deleted_at IS NOT NULL 
+            AND datetime(deleted_at) < datetime('now', '-' || ? || ' hours')
+        """, (max_age_hours,))
+        
+        files_to_delete = cursor.fetchall()
+        deleted_count = 0
+        errors = []
+        
+        for row in files_to_delete:
+            file_id = row[0]
+            file_path = row[1]
+            
+            try:
+                # ลบไฟล์จริงจาก filesystem
+                path = Path(file_path)
+                if path.exists():
+                    path.unlink()
+                    logger.debug(f"Deleted file: {file_path}")
+                
+                # ลบ record จาก database
+                conn.execute("DELETE FROM uploaded_files WHERE id = ?", (file_id,))
+                deleted_count += 1
+            except Exception as e:
+                error_msg = f"Error deleting file {file_id} ({file_path}): {e}"
+                errors.append(error_msg)
+                logger.warning(f"⚠️ {error_msg}")
+        
+        conn.commit()
+        
+        return {
+            "deleted_count": deleted_count,
+            "errors": errors
+        }
+    
+    def sync_uploaded_files(self) -> Dict:
+        """
+        Sync ข้อมูลใน database กับ filesystem
+        - เพิ่มไฟล์ใหม่ที่ยังไม่มีใน database
+        - ลบไฟล์ที่ไม่มีใน filesystem แล้ว (soft delete)
+        
+        Returns:
+            Dict with sync statistics
+        """
+        from app.services.file_service import FileService
+        from app.services.video_service import VideoService
+        from datetime import datetime
+        
+        file_service = FileService()
+        video_service = VideoService()
+        
+        upload_dir = Path("uploads")
+        if not upload_dir.exists():
+            return {
+                "added": 0,
+                "marked_deleted": 0,
+                "errors": []
+            }
+        
+        added = 0
+        marked_deleted = 0
+        errors = []
+        
+        # 1. หาไฟล์ใน filesystem ที่ยังไม่มีใน database
+        conn = self._get_connection()
+        cursor = conn.execute("""
+            SELECT file_path FROM uploaded_files 
+            WHERE deleted_at IS NULL
+        """)
+        existing_paths = {row[0] for row in cursor.fetchall()}
+        
+        for file_path in upload_dir.iterdir():
+            if not file_path.is_file():
+                continue
+            
+            file_path_str = str(file_path)
+            is_video = file_service.is_video_file(file_path_str)
+            is_audio = file_service.is_audio_file(file_path_str)
+            
+            if not (is_video or is_audio):
+                continue
+            
+            # ถ้ายังไม่มีใน database ให้เพิ่ม
+            if file_path_str not in existing_paths:
+                try:
+                    stat = file_path.stat()
+                    file_type = "video" if is_video else "audio"
+                    duration_seconds = 0
+                    duration_minutes = 0
+                    duration_formatted = "0:00"
+                    video_info = None
+                    audio_info = None
+                    
+                    if is_video:
+                        video_info = video_service.get_video_info(file_path_str)
+                        duration_seconds = video_info.get("duration", 0)
+                    elif is_audio:
+                        file_info = file_service.get_file_info(file_path_str)
+                        duration_seconds = file_info.get("duration", 0) or 0
+                        
+                        try:
+                            import ffmpeg
+                            probe = ffmpeg.probe(file_path_str)
+                            audio_stream = next(
+                                (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
+                                None
+                            )
+                            if audio_stream:
+                                audio_info = {
+                                    "audio_codec": audio_stream.get('codec_name', 'unknown'),
+                                    "sample_rate": int(audio_stream.get('sample_rate', 0)),
+                                    "channels": int(audio_stream.get('channels', 0)),
+                                    "bitrate": int(audio_stream.get('bit_rate', 0)) if audio_stream.get('bit_rate') else None
+                                }
+                        except Exception:
+                            pass
+                    
+                    duration_minutes = round(duration_seconds / 60, 2) if duration_seconds > 0 else 0
+                    minutes = int(duration_seconds // 60)
+                    seconds = int(duration_seconds % 60)
+                    duration_formatted = f"{minutes}:{seconds:02d}"
+                    
+                    self.save_uploaded_file(
+                        filename=file_path.name,
+                        file_path=file_path_str,
+                        file_type=file_type,
+                        file_size=stat.st_size,
+                        duration=duration_seconds,
+                        duration_minutes=duration_minutes,
+                        duration_formatted=duration_formatted,
+                        video_info=video_info,
+                        audio_info=audio_info
+                    )
+                    added += 1
+                    logger.debug(f"Synced new file: {file_path.name}")
+                except Exception as e:
+                    error_msg = f"Error syncing file {file_path.name}: {e}"
+                    errors.append(error_msg)
+                    logger.warning(f"⚠️ {error_msg}")
+        
+        # 2. ตรวจสอบไฟล์ใน database ที่ไม่มีใน filesystem แล้ว
+        cursor = conn.execute("""
+            SELECT id, file_path FROM uploaded_files 
+            WHERE deleted_at IS NULL
+        """)
+        
+        for row in cursor.fetchall():
+            file_id = row[0]
+            file_path = row[1]
+            
+            if not Path(file_path).exists():
+                # Soft delete ไฟล์ที่ไม่มีใน filesystem แล้ว
+                self.delete_uploaded_file(file_id, soft_delete=True)
+                marked_deleted += 1
+                logger.debug(f"Marked as deleted (file not found): {file_path}")
+        
+        return {
+            "added": added,
+            "marked_deleted": marked_deleted,
+            "errors": errors
+        }
+    
+    def _row_to_uploaded_file_dict(self, row) -> Dict:
+        """แปลง row เป็น dict"""
+        # sqlite3.Row supports both index and key access
+        result = {
+            "id": row["id"],
+            "filename": row["filename"],
+            "file_path": row["file_path"],
+            "file_type": row["file_type"],
+            "file_size": row["file_size"],
+            "duration": row["duration"],
+            "duration_minutes": row["duration_minutes"],
+            "duration_formatted": row["duration_formatted"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "deleted_at": row["deleted_at"],
+            "user_id": row.get("user_id") if hasattr(row, 'get') else (row["user_id"] if row["user_id"] else None),
+            "tags": row.get("tags") if hasattr(row, 'get') else (row["tags"] if row["tags"] else None),
+            "description": row.get("description") if hasattr(row, 'get') else (row["description"] if row["description"] else None)
+        }
+        
+        # Parse JSON fields
+        video_info_json = row["video_info_json"]
+        audio_info_json = row["audio_info_json"]
+        
+        if video_info_json:
+            try:
+                result["video_info"] = json.loads(video_info_json)
+            except:
+                result["video_info"] = None
+        else:
+            result["video_info"] = None
+        
+        if audio_info_json:
+            try:
+                result["audio_info"] = json.loads(audio_info_json)
+            except:
+                result["audio_info"] = None
+        else:
+            result["audio_info"] = None
+        
+        return result
     
     def get_database_stats(self) -> Dict:
         """ดึงสถิติ database"""

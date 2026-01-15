@@ -24,7 +24,9 @@ pip install -q -r requirements.txt
 # Load environment variables from parent .env.runpod if exists
 if [ -f "../.env.runpod" ]; then
     echo "📋 Loading environment from ../.env.runpod..."
-    export $(grep -v '^#' ../.env.runpod | xargs)
+    set -a  # Automatically export all variables
+    source ../.env.runpod 2>/dev/null || true
+    set +a  # Stop automatically exporting
 fi
 
 # Set default port if not set

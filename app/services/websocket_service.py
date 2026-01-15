@@ -81,16 +81,20 @@ class WebSocketManager:
     async def send_to_user(self, user_id: str, message: dict) -> bool:
         conns = self.user_connections.get(user_id)
         if not conns:
+            logger.warning(f"⚠️  send_to_user: No connections for user_id={user_id} (available users: {list(self.user_connections.keys())})")
             return False
 
         msg = json.dumps(message, ensure_ascii=False)
         dead = set()
 
+        logger.info(f"📤 Sending message to user_id={user_id} (connections: {len(conns)})")
         for ws in list(conns):
             try:
                 await ws.send_text(msg)
                 self.total_messages_sent += 1
-            except Exception:
+                logger.debug(f"✅ Message sent to user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to send message to user_id={user_id}: {e}")
                 dead.add(ws)
 
         for ws in dead:
@@ -118,7 +122,26 @@ class WebSocketManager:
         """
         payload = dict(message)
         payload.setdefault("timestamp", datetime.now().isoformat())
-        await self.send_to_user(meeting_id, payload)
+        
+        # ✅ Detailed logging
+        message_type = payload.get("type", "unknown")
+        logger.info(f"📡 Broadcasting to meeting: {meeting_id}, type={message_type}")
+        
+        result = await self.send_to_user(meeting_id, payload)
+        
+        if result:
+            connections_count = len(self.user_connections.get(meeting_id, []))
+            logger.info(f"✅ Broadcasted to meeting {meeting_id}: type={message_type}, connections={connections_count}")
+            if message_type == "final":
+                chunk_index = payload.get("chunk_index", -1)
+                text_length = len(payload.get("text", ""))
+                segments_count = len(payload.get("segments", []))
+                logger.info(f"   ChunkIndex: {chunk_index}, TextLength: {text_length}, Segments: {segments_count}")
+        else:
+            logger.warning(f"⚠️  No connections for meeting {meeting_id}, message not sent: type={message_type}")
+        
+        if not result:
+            logger.warning(f"⚠️  broadcast_to_meeting failed: No connections for meeting_id={meeting_id}")
 
     def get_stats(self) -> dict:
         return {

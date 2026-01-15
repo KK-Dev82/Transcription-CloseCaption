@@ -365,7 +365,7 @@ def main():
     parser.add_argument(
         "--meeting-id",
         type=str,
-        default="test-live-chunk-fixed",
+        default="test-live-chunk-fixed-room",
         help="Meeting ID (ใช้ fixed meeting_id เพื่อทดสอบ)"
     )
     parser.add_argument(

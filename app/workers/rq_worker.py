@@ -6,7 +6,9 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Dict, Optional
+from datetime import datetime, timezone
 from redis import Redis
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,51 @@ def get_event_loop():
 # ============================================================================
 # Helper Functions for Webhook & Stage Reporting
 # ============================================================================
+
+async def send_ws_event_via_http(task_id: str = None, meeting_id: str = None, message: dict = None):
+    """
+    Send WebSocket event via HTTP callback to Main API
+    
+    Args:
+        task_id: Task ID (for transcription tasks)
+        meeting_id: Meeting ID (for live-chunk events)
+        message: Message payload
+    """
+    if not task_id and not meeting_id:
+        logger.warning("⚠️  send_ws_event_via_http: missing task_id or meeting_id")
+        return
+    
+    if not message:
+        logger.warning("⚠️  send_ws_event_via_http: missing message")
+        return
+    
+    try:
+        import aiohttp
+        from datetime import datetime
+        
+        MAIN_API_URL = os.getenv('MAIN_API_URL', 'http://localhost:8010')
+        
+        payload = {
+            "message": message
+        }
+        if task_id:
+            payload["task_id"] = task_id
+        if meeting_id:
+            payload["meeting_id"] = meeting_id
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{MAIN_API_URL}/api/internal/ws-event",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5.0)
+            ) as response:
+                if response.status == 200:
+                    logger.info(f"✅ WS event sent via HTTP: {task_id or meeting_id}")
+                else:
+                    response_text = await response.text()
+                    logger.warning(f"⚠️  WS event failed: {response.status} - {response_text}")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to send WS event via HTTP: {e}", exc_info=True)
 
 async def _update_task_stage_and_webhook(
     task_id: str,
@@ -1604,7 +1651,8 @@ def process_live_chunk_job(
     chunk_index: int,
     start_time: float,
     duration: float,
-    audio_path: str
+    audio_path: str,
+    model_size: Optional[str] = None
 ) -> Dict:
     """
     RQ Worker function สำหรับ live chunk transcription (Priority Queue)
@@ -1616,13 +1664,22 @@ def process_live_chunk_job(
         start_time: Start time in seconds
         duration: Duration in seconds
         audio_path: Path to audio file
+        model_size: Model size (optional, will use default if not provided)
     
     Returns:
         Result dictionary with status
     """
+    import time
+    job_start_time = time.time()
+    
+    # ใช้ default model ถ้าไม่ได้ระบุ
+    if not model_size:
+        model_size = "Vinxscribe/biodatlab-whisper-th-medium-faster"
+    
     logger.info(f"🚀 RQ Worker: Starting live chunk job {session_id}")
     logger.info(f"   Meeting: {meeting_id}, Chunk: {chunk_index}, Start: {start_time}s, Duration: {duration}s")
-    logger.info(f"   Audio: {audio_path}")
+    logger.info(f"   Audio: {audio_path}, Model: {model_size}")
+    logger.info(f"   Timestamp: {datetime.now(timezone.utc).isoformat()}")
     
     try:
         # Import async function from API module
@@ -1640,26 +1697,39 @@ def process_live_chunk_job(
                 chunk_index=chunk_index,
                 start_time=start_time,
                 duration=duration,
-                audio_path=audio_path
+                audio_path=audio_path,
+                model_size=model_size  # ส่ง model_size ไป background function
             )
         )
         
+        job_end_time = time.time()
+        job_duration = job_end_time - job_start_time
+        
         logger.info(f"✅ Live chunk job {session_id} completed successfully")
+        logger.info(f"   Duration: {job_duration:.2f}s, Meeting: {meeting_id}, Chunk: {chunk_index}")
+        
         return {
             "status": "completed",
             "session_id": session_id,
             "meeting_id": meeting_id,
-            "chunk_index": chunk_index
+            "chunk_index": chunk_index,
+            "duration": job_duration
         }
         
     except Exception as e:
+        job_end_time = time.time()
+        job_duration = job_end_time - job_start_time
+        
         logger.error(f"❌ Error processing live chunk job {session_id}: {e}", exc_info=True)
+        logger.error(f"   Duration: {job_duration:.2f}s, Meeting: {meeting_id}, Chunk: {chunk_index}")
+        
         return {
             "status": "failed",
             "session_id": session_id,
             "meeting_id": meeting_id,
             "chunk_index": chunk_index,
-            "error": str(e)
+            "error": str(e),
+            "duration": job_duration
         }
 
 logger.info("✅ RQ Worker module loaded")

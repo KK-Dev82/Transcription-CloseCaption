@@ -102,7 +102,7 @@ class TranscriptionRequest(BaseModel):
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     language: str = "th"
-    model_size: str = "base"
+    model_size: str = "Vinxscribe/biodatlab-whisper-th-medium-faster"
     chunk_duration: Optional[int] = None
     use_chunking: bool = False
     callback_url: Optional[str] = None

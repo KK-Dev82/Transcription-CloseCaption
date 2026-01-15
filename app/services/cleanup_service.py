@@ -287,6 +287,20 @@ class CleanupService:
                 except Exception as e:
                     logger.warning(f"⚠️  Redis cleanup error: {e}")
                 
+                # 3. Cleanup deleted uploaded files (ถ้าใช้ SQLite)
+                try:
+                    from app.utils.storage_factory import get_storage
+                    storage = get_storage()
+                    if hasattr(storage, 'cleanup_deleted_files'):
+                        max_age_hours = int(os.getenv('UPLOADED_FILES_CLEANUP_MAX_AGE_HOURS', '24'))  # Default: 24 hours
+                        cleanup_stats = storage.cleanup_deleted_files(max_age_hours=max_age_hours)
+                        if cleanup_stats.get('deleted_count', 0) > 0:
+                            logger.info(
+                                f"🧹 Cleanup deleted uploaded files: {cleanup_stats['deleted_count']} files deleted"
+                            )
+                except Exception as e:
+                    logger.warning(f"⚠️  Uploaded files cleanup error: {e}")
+                
                 # 3. Wait for next interval
                 await asyncio.sleep(self.cleanup_interval_seconds)
                 

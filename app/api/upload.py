@@ -7,6 +7,7 @@ from datetime import datetime
 import uuid
 
 from ..models.upload import UploadResponse
+from ..utils.storage_factory import get_storage
 
 # 🧪 MOCK MODE: Skip FileService import
 import os
@@ -14,12 +15,15 @@ MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
 if not MOCK_MODE:
     from ..services.file_service import FileService
+    from ..services.video_service import VideoService
     file_service = FileService()
+    video_service = VideoService()
 else:
     # MOCK MODE: Create dummy FileService
     class FileService:
         pass
     file_service = FileService()
+    video_service = None
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -111,9 +115,57 @@ async def upload_file(
                     # ดึงข้อมูลไฟล์
                     file_info = file_service.get_file_info(file_path)
                     
+                    # บันทึกข้อมูลลง database
+                    file_id = None
+                    if not MOCK_MODE:
+                        try:
+                            storage = get_storage()
+                            if hasattr(storage, 'save_uploaded_file'):
+                                duration_seconds = file_info.get("duration", 0) or 0
+                                duration_minutes = round(duration_seconds / 60, 2) if duration_seconds > 0 else 0
+                                minutes = int(duration_seconds // 60)
+                                seconds = int(duration_seconds % 60)
+                                duration_formatted = f"{minutes}:{seconds:02d}"
+                                
+                                video_info = None
+                                audio_info = None
+                                if file_service.is_video_file(file_path):
+                                    video_info = video_service.get_video_info(file_path)
+                                elif file_service.is_audio_file(file_path):
+                                    try:
+                                        import ffmpeg
+                                        probe = ffmpeg.probe(file_path)
+                                        audio_stream = next(
+                                            (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
+                                            None
+                                        )
+                                        if audio_stream:
+                                            audio_info = {
+                                                "audio_codec": audio_stream.get('codec_name', 'unknown'),
+                                                "sample_rate": int(audio_stream.get('sample_rate', 0)),
+                                                "channels": int(audio_stream.get('channels', 0)),
+                                                "bitrate": int(audio_stream.get('bit_rate', 0)) if audio_stream.get('bit_rate') else None
+                                            }
+                                    except Exception:
+                                        pass
+                                
+                                file_id = storage.save_uploaded_file(
+                                    filename=filename,
+                                    file_path=file_path,
+                                    file_type=file_info["file_type"],
+                                    file_size=file_info["file_size"],
+                                    duration=duration_seconds,
+                                    duration_minutes=duration_minutes,
+                                    duration_formatted=duration_formatted,
+                                    video_info=video_info,
+                                    audio_info=audio_info
+                                )
+                        except Exception as e:
+                            logger.warning(f"Failed to save file to database: {e}")
+                    
                     # สร้าง response
                     response_obj = UploadResponse(
-                        file_id=str(uuid.uuid4()),
+                        file_id=str(file_id) if file_id else str(uuid.uuid4()),
                         filename=filename,
                         file_path=file_path,
                         file_size=file_info["file_size"],
@@ -123,7 +175,7 @@ async def upload_file(
                         status="uploaded"
                     )
                     
-                    logger.info(f"ดาวน์โหลดไฟล์จาก URL สำเร็จ: {url} -> {file_path}")
+                    logger.info(f"ดาวน์โหลดไฟล์จาก URL สำเร็จ: {url} -> {file_path} (DB ID: {file_id})")
                     
                     return response_obj
                     
@@ -174,9 +226,57 @@ async def upload_file(
         # ดึงข้อมูลไฟล์
         file_info = file_service.get_file_info(file_path)
         
+        # บันทึกข้อมูลลง database
+        file_id = None
+        if not MOCK_MODE:
+            try:
+                storage = get_storage()
+                if hasattr(storage, 'save_uploaded_file'):
+                    duration_seconds = file_info.get("duration", 0) or 0
+                    duration_minutes = round(duration_seconds / 60, 2) if duration_seconds > 0 else 0
+                    minutes = int(duration_seconds // 60)
+                    seconds = int(duration_seconds % 60)
+                    duration_formatted = f"{minutes}:{seconds:02d}"
+                    
+                    video_info = None
+                    audio_info = None
+                    if file_service.is_video_file(file_path):
+                        video_info = video_service.get_video_info(file_path)
+                    elif file_service.is_audio_file(file_path):
+                        try:
+                            import ffmpeg
+                            probe = ffmpeg.probe(file_path)
+                            audio_stream = next(
+                                (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
+                                None
+                            )
+                            if audio_stream:
+                                audio_info = {
+                                    "audio_codec": audio_stream.get('codec_name', 'unknown'),
+                                    "sample_rate": int(audio_stream.get('sample_rate', 0)),
+                                    "channels": int(audio_stream.get('channels', 0)),
+                                    "bitrate": int(audio_stream.get('bit_rate', 0)) if audio_stream.get('bit_rate') else None
+                                }
+                        except Exception:
+                            pass
+                    
+                    file_id = storage.save_uploaded_file(
+                        filename=file.filename,
+                        file_path=file_path,
+                        file_type=file_info["file_type"],
+                        file_size=file_info["file_size"],
+                        duration=duration_seconds,
+                        duration_minutes=duration_minutes,
+                        duration_formatted=duration_formatted,
+                        video_info=video_info,
+                        audio_info=audio_info
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to save file to database: {e}")
+        
         # สร้าง response
         response = UploadResponse(
-            file_id=str(uuid.uuid4()),
+            file_id=str(file_id) if file_id else str(uuid.uuid4()),
             filename=file.filename,
             file_path=file_path,
             file_size=file_info["file_size"],
@@ -186,7 +286,7 @@ async def upload_file(
             status="uploaded"
         )
         
-        logger.info(f"อัปโหลดไฟล์สำเร็จ: {file.filename} -> {file_path}")
+        logger.info(f"อัปโหลดไฟล์สำเร็จ: {file.filename} -> {file_path} (DB ID: {file_id})")
         
         return response
         

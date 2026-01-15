@@ -56,7 +56,7 @@ class RealtimeChunkRequest(BaseModel):
     start_time: Optional[float] = 0.0
     duration: Optional[float] = 5.0
     language: str = "th"
-    model_size: str = "base"
+    model_size: str = "Vinxscribe/biodatlab-whisper-th-medium-faster"
 
 
 class LiveChunkRequest(BaseModel):
@@ -65,7 +65,7 @@ class LiveChunkRequest(BaseModel):
     start_time: Optional[float] = 0.0
     duration: Optional[float] = 3.0
     language: str = "th"
-    model_size: str = "base"
+    model_size: str = "Vinxscribe/biodatlab-whisper-th-medium-faster"
     session_id: Optional[str] = None
     meeting_id: Optional[str] = None
 
@@ -349,6 +349,7 @@ async def process_live_chunk(
     x_audio_format: Optional[str] = Header(None, alias="X-Audio-Format"),
     x_sample_rate: Optional[str] = Header(None, alias="X-Sample-Rate"),
     x_channels: Optional[str] = Header(None, alias="X-Channels"),
+    x_model_size: Optional[str] = Header(None, alias="X-Model-Size"),
     background_tasks: BackgroundTasks = None
 ):
     """
@@ -363,10 +364,15 @@ async def process_live_chunk(
         x_chunk_index: Chunk index (header)
         x_start_time: Start time in seconds (header)
         x_duration: Duration in seconds (header)
+        x_model_size: Model size (optional header, default: "Vinxscribe/biodatlab-whisper-th-medium-faster")
         background_tasks: Background tasks
     
     Returns:
         202 Accepted (process in background)
+    
+    Note:
+        - model_size ไม่จำเป็นต้องส่ง (ใช้ default อัตโนมัติ)
+        - สามารถ override ได้ผ่าน X-Model-Size header
     """
     try:
         # Parse headers
@@ -377,6 +383,7 @@ async def process_live_chunk(
         audio_format = x_audio_format or "s16le"
         sample_rate = int(x_sample_rate) if x_sample_rate and x_sample_rate.isdigit() else 16000
         channels = int(x_channels) if x_channels and x_channels.isdigit() else 1
+        model_size = x_model_size or "Vinxscribe/biodatlab-whisper-th-medium-faster"  # Default model
         
         # Generate session ID
         session_id = f"live-{meeting_id}-{chunk_index}"
@@ -458,7 +465,8 @@ async def process_live_chunk(
                 chunk_index=chunk_index,
                 start_time=start_time,
                 duration=duration,
-                audio_path=temp_path if not MOCK_MODE else None  # Skip saving file in MOCK_MODE
+                audio_path=temp_path if not MOCK_MODE else None,  # Skip saving file in MOCK_MODE
+                model_size=model_size  # ส่ง model_size ไป worker
             )
             logger.info(f"📌 Live chunk enqueued to PRIORITY queue (Job ID: {job_id})")
             
@@ -485,7 +493,8 @@ async def process_live_chunk(
                     chunk_index=chunk_index,
                     start_time=start_time,
                     duration=duration,
-                    audio_path=temp_path if not MOCK_MODE else None  # Skip saving file in MOCK_MODE
+                    audio_path=temp_path if not MOCK_MODE else None,  # Skip saving file in MOCK_MODE
+                    model_size=model_size  # ส่ง model_size ไป background task
                 )
             
             return {
@@ -515,7 +524,8 @@ async def process_live_chunk_background(
     chunk_index: int,
     start_time: float,
     duration: float,
-    audio_path: Optional[str] = None
+    audio_path: Optional[str] = None,
+    model_size: Optional[str] = None
 ):
     """
     ประมวลผล live chunk ใน background (transcription + WebSocket)
@@ -551,13 +561,6 @@ async def process_live_chunk_background(
             # 🧪 MOCK MODE: ส่ง mock caption events แทน transcription
             logger.info(f"🧪 MOCK MODE: Generating mock caption events for chunk {chunk_index}")
             
-            # Import websocket_manager (try to import even in MOCK_MODE)
-            try:
-                from ..services.websocket_service import websocket_manager
-            except ImportError:
-                logger.warning("⚠️ websocket_manager not available in MOCK_MODE")
-                websocket_manager = None
-            
             # ✅ V3 Compliant: Calculate chunk timing in milliseconds
             chunk_start_ms = int(start_time * 1000)  # Convert seconds to milliseconds
             chunk_duration_ms = int(duration * 1000)
@@ -566,6 +569,8 @@ async def process_live_chunk_background(
             mock_text = f"[MOCK] Audio chunk {chunk_index} received ({duration}s, start={start_time:.1f}s)"
             
             # ✅ V3 Compliant: Create "final" event with V3 schema
+            # ใช้ default model สำหรับ mock mode
+            default_model = "Vinxscribe/biodatlab-whisper-th-medium-faster"
             final_event = {
                 "type": "final",
                 "meeting_id": meeting_id,
@@ -576,7 +581,7 @@ async def process_live_chunk_background(
                 "chunk_start_ms": chunk_start_ms,
                 "chunk_duration_ms": chunk_duration_ms,
                 "language": "th",
-                "model": "base",
+                "model": default_model,  # Mock mode ใช้ default model
                 "provider": "mock",
                 "text": mock_text,
                 "segments": [
@@ -592,12 +597,16 @@ async def process_live_chunk_background(
                 ]
             }
             
-            # Send via WebSocket (use meeting_id as user_id)
-            if websocket_manager:
-                await websocket_manager.send_to_user(meeting_id, final_event)
-                logger.info(f"📤 Sent V3 MOCK final event: ChunkIndex={chunk_index}, Text={mock_text}")
-            else:
-                logger.info(f"📤 MOCK final event (WebSocket not available): ChunkIndex={chunk_index}, Text={mock_text}")
+            # Send via HTTP callback (Worker → Main API)
+            try:
+                from app.workers.rq_worker import send_ws_event_via_http
+                await send_ws_event_via_http(
+                    meeting_id=meeting_id,
+                    message=final_event
+                )
+                logger.info(f"📤 Sent V3 MOCK final event via HTTP: ChunkIndex={chunk_index}, Text={mock_text}")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to send MOCK event via HTTP: {e}")
             
             # ✅ Update chunk metadata status
             chunk_metadata["status"] = "completed"
@@ -616,14 +625,19 @@ async def process_live_chunk_background(
             # ✅ CloseCaption: ใช้ config จาก CloseCaptionConfig ถ้าเปิดใช้งาน
             if CloseCaptionConfig.is_enabled():
                 cc_config = CloseCaptionConfig.get_whisper_params()
-                model_size = cc_config["model_size"]
+                model_size = model_size or cc_config["model_size"]
                 language = cc_config["language"]
                 logger.info(f"🎯 Using CloseCaption Profile (TH-CC-RT v1): model={model_size}, language={language}")
                 logger.info(CloseCaptionConfig.get_summary())
             else:
-                # ใช้ default config
-                model_size = "base"
+                # ใช้ default config (ถ้าไม่ได้ส่งมา)
+                model_size = model_size or "Vinxscribe/biodatlab-whisper-th-medium-faster"
                 language = "th"
+            
+            # ✅ Detailed logging: เริ่ม transcription
+            transcribe_start_time = datetime.now(timezone.utc)
+            logger.info(f"🎤 Starting transcription: audio_path={temp_path}, model={model_size}, language={language}")
+            logger.info(f"   Chunk: {chunk_index}, StartTime: {start_time}s, Duration: {duration}s")
             
             transcription_result = whisper_service.transcribe_file(
                 audio_path=temp_path,
@@ -632,12 +646,25 @@ async def process_live_chunk_background(
                 use_thai_processor=True
             )
             
+            transcribe_end_time = datetime.now(timezone.utc)
+            transcribe_duration = (transcribe_end_time - transcribe_start_time).total_seconds()
+            
             transcription_text = transcription_result.get('text', '')
-            logger.info(f"✅ Transcription completed: {len(transcription_text)} characters")
+            segments = transcription_result.get('segments', [])
+            
+            # ✅ Detailed logging: ผลลัพธ์ transcription
+            logger.info(f"✅ Transcription completed: {len(transcription_text)} characters, {len(segments)} segments")
+            logger.info(f"   Duration: {transcribe_duration:.2f}s, Text: {transcription_text[:100]}..." if len(transcription_text) > 100 else f"   Duration: {transcribe_duration:.2f}s, Text: {transcription_text}")
+            if segments:
+                logger.info(f"   Segments: {len(segments)} segments (first: {segments[0].get('text', '')[:50]}...)")
             
             # ✅ CloseCaption: Dedupe ข้อความ (ตัดส่วนซ้ำจาก overlap)
             if CloseCaptionConfig.is_enabled() and CloseCaptionConfig.DEDUPE_ENABLED:
                 last_text = _last_emitted_text.get(meeting_id, "")
+                original_length = len(transcription_text)
+                
+                logger.info(f"🔍 Dedupe: original_text_length={original_length}, last_emitted_length={len(last_text)}")
+                
                 deduped_text = dedupe_text(
                     transcription_text,
                     last_text,
@@ -645,21 +672,38 @@ async def process_live_chunk_background(
                 )
                 
                 if deduped_text != transcription_text:
-                    logger.info(f"🔍 Dedupe: removed {len(transcription_text) - len(deduped_text)} chars overlap")
+                    removed_chars = original_length - len(deduped_text)
+                    logger.info(f"🔍 Dedupe: removed {removed_chars} chars overlap (before: {original_length}, after: {len(deduped_text)})")
+                    logger.info(f"   Original: {transcription_text[:100]}..." if len(transcription_text) > 100 else f"   Original: {transcription_text}")
+                    logger.info(f"   Deduped: {deduped_text[:100]}..." if len(deduped_text) > 100 else f"   Deduped: {deduped_text}")
                     transcription_text = deduped_text
+                else:
+                    logger.info(f"🔍 Dedupe: no overlap found, keeping original text")
                 
                 # เก็บข้อความที่ emit แล้ว
                 _last_emitted_text[meeting_id] = transcription_text
             
             # ✅ CloseCaption: Postprocess ข้อความภาษาไทย
             if CloseCaptionConfig.is_enabled() and CloseCaptionConfig.POSTPROCESS_ENABLED:
+                preprocess_text = transcription_text
+                postprocess_start_time = datetime.now(timezone.utc)
+                
+                logger.info(f"🔧 Postprocessing: normalize={CloseCaptionConfig.POSTPROCESS_NORMALIZE}, word_seg={CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION}")
+                
                 transcription_text = postprocess_thai_text(
                     transcription_text,
                     normalize=CloseCaptionConfig.POSTPROCESS_NORMALIZE,
                     fix_words=True,
                     word_segmentation=CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION
                 )
-                logger.info(f"🔧 Postprocessed text: {len(transcription_text)} characters")
+                
+                postprocess_end_time = datetime.now(timezone.utc)
+                postprocess_duration = (postprocess_end_time - postprocess_start_time).total_seconds()
+                
+                logger.info(f"🔧 Postprocessed: {len(transcription_text)} characters (took {postprocess_duration:.3f}s)")
+                if preprocess_text != transcription_text:
+                    logger.info(f"   Before: {preprocess_text[:100]}..." if len(preprocess_text) > 100 else f"   Before: {preprocess_text}")
+                    logger.info(f"   After: {transcription_text[:100]}..." if len(transcription_text) > 100 else f"   After: {transcription_text}")
             
             # ✅ Update chunk metadata status
             chunk_metadata["status"] = "completed"
@@ -668,15 +712,12 @@ async def process_live_chunk_background(
             chunk_metadata["segments_count"] = len(transcription_result.get("segments", []))
             
             # Send caption events via WebSocket
-            segments = transcription_result.get("segments", [])
+            # segments already extracted above
             
             # ✅ V3 Compliant: Calculate chunk timing in milliseconds
             chunk_start_ms = int(start_time * 1000)  # Convert seconds to milliseconds
             chunk_duration_ms = int(duration * 1000)
             chunk_end_ms = chunk_start_ms + chunk_duration_ms
-            
-            # Import websocket_manager
-            from ..services.websocket_service import websocket_manager
             
             # ✅ V3 Compliant: Send single "final" event with all segments (not per-segment)
             # Build segments array with V3 format
@@ -724,44 +765,36 @@ async def process_live_chunk_background(
                 "chunk_index": chunk_index,
                 "chunk_start_ms": chunk_start_ms,
                 "chunk_duration_ms": chunk_duration_ms,
-                "language": "th",
-                "model": "base",
+                "language": language,
+                "model": model_size,  # ใช้ค่าจากการประมวลผลจริง (ไม่ hardcode)
                 "provider": provider_name,
                 "text": transcription_text,  # Full text
                 "segments": v3_segments
             }
             
-            # Send via WebSocket (use meeting_id as user_id)
-            # ✅ สำคัญ: Worker process ไม่มี WebSocket connections → ต้อง publish ไปยัง Redis
-            if websocket_manager:
-                # ลองส่งไปยัง local connections ก่อน (ถ้าเป็น main API process)
-                sent_local = await websocket_manager.send_to_user(meeting_id, final_event)
+            # ✅ Detailed logging: ส่ง WebSocket event
+            logger.info(f"📤 Preparing to send V3 final caption event:")
+            logger.info(f"   MeetingId: {meeting_id}, ChunkIndex: {chunk_index}")
+            logger.info(f"   Segments: {len(v3_segments)}, TextLength: {len(transcription_text)}")
+            logger.info(f"   Text: {transcription_text[:100]}..." if len(transcription_text) > 100 else f"   Text: {transcription_text}")
+            
+            # Send via HTTP callback (Worker → Main API)
+            try:
+                from app.workers.rq_worker import send_ws_event_via_http
+                http_start_time = datetime.now(timezone.utc)
                 
-                # ✅ Publish ไปยัง Redis เพื่อให้ main API process รับและส่ง WebSocket
-                # ใช้ channel pattern: "live-chunk:{meeting_id}"
-                # ✅ Initialize Redis client ถ้ายังไม่มี (สำหรับ worker process)
-                if not websocket_manager.redis_client:
-                    try:
-                        await websocket_manager.connect_redis()
-                        logger.info(f"✅ Redis client initialized for live-chunk worker")
-                    except Exception as redis_init_e:
-                        logger.warning(f"⚠️  Failed to initialize Redis client: {redis_init_e}")
+                await send_ws_event_via_http(
+                    meeting_id=meeting_id,
+                    message=final_event
+                )
                 
-                if websocket_manager.redis_client:
-                    try:
-                        import json
-                        await websocket_manager.redis_client.publish(
-                            f"live-chunk:{meeting_id}",
-                            json.dumps(final_event, ensure_ascii=False)
-                        )
-                        logger.info(f"📡 Redis: Published live-chunk event for {meeting_id} to Redis channel 'live-chunk:{meeting_id}'")
-                    except Exception as redis_e:
-                        logger.warning(f"⚠️  Redis publish failed for {meeting_id}: {redis_e}")
+                http_end_time = datetime.now(timezone.utc)
+                http_duration = (http_end_time - http_start_time).total_seconds()
                 
-                if sent_local:
-                    logger.info(f"📤 Sent V3 final caption event (local): ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
-                else:
-                    logger.info(f"📤 Published V3 final caption event (Redis): ChunkIndex={chunk_index}, Segments={len(v3_segments)}, TextLength={len(transcription_text)}")
+                logger.info(f"📤 ✅ Sent V3 final caption event via HTTP: ChunkIndex={chunk_index}, Duration={http_duration:.3f}s")
+                logger.info(f"   MeetingId: {meeting_id}, Segments: {len(v3_segments)}, TextLength: {len(transcription_text)}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send final event via HTTP: {e}", exc_info=True)
             
             # ✅ Backward compatibility: Also send legacy events (for existing clients)
             # Send each segment as a legacy caption event (for backward compatibility)
@@ -798,10 +831,16 @@ async def process_live_chunk_background(
                     "ts": datetime.now(timezone.utc).isoformat()
                 }
                 
-                # Send legacy event (for backward compatibility)
-                if websocket_manager:
-                    await websocket_manager.send_to_user(meeting_id, legacy_event)
-                    logger.debug(f"📤 Sent legacy caption event: ChunkIndex={chunk_index}, Segment={idx}, Text={segment.get('text', '')[:50]}...")
+                # Send legacy event via HTTP callback (for backward compatibility)
+                try:
+                    from app.workers.rq_worker import send_ws_event_via_http
+                    await send_ws_event_via_http(
+                        meeting_id=meeting_id,
+                        message=legacy_event
+                    )
+                    logger.debug(f"📤 Sent legacy caption event via HTTP: ChunkIndex={chunk_index}, Segment={idx}, Text={segment.get('text', '')[:50]}...")
+                except Exception as e:
+                    logger.debug(f"⚠️  Failed to send legacy event via HTTP: {e}")
         
     except Exception as e:
         logger.error(f"❌ Error processing live chunk: {e}", exc_info=True)

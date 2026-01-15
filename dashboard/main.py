@@ -42,6 +42,11 @@ if sqlite_admin_dir.exists() and (sqlite_admin_dir / "phpliteadmin.php").exists(
 
 # Import and include routers
 # Support both relative (package) and absolute (direct run) imports
+server_routes = None
+batch_routes = None
+cleanup_routes = None
+management_routes = None
+
 try:
     from .routes import server_routes, batch_routes, cleanup_routes, management_routes
 except ImportError:
@@ -54,9 +59,23 @@ except ImportError:
     try:
         from routes import server_routes, batch_routes, cleanup_routes, management_routes
     except ImportError:
-        # management_routes might not exist yet
-        from routes import server_routes, batch_routes, cleanup_routes
-        management_routes = None
+        # Try importing individually
+        try:
+            from routes import server_routes
+        except ImportError:
+            server_routes = None
+        try:
+            from routes import batch_routes
+        except ImportError:
+            batch_routes = None
+        try:
+            from routes import cleanup_routes
+        except ImportError:
+            cleanup_routes = None
+        try:
+            from routes import management_routes
+        except ImportError:
+            management_routes = None
 
 # Try to import sqlite_admin_routes (optional)
 try:
@@ -94,11 +113,18 @@ except ImportError:
     except ImportError:
         webhook_routes = None
 
-app.include_router(server_routes.router)
-app.include_router(batch_routes.router)
-app.include_router(cleanup_routes.router)
+if server_routes:
+    app.include_router(server_routes.router)
+    logger.info("✅ Server routes included")
+if batch_routes:
+    app.include_router(batch_routes.router)
+    logger.info("✅ Batch routes included")
+if cleanup_routes:
+    app.include_router(cleanup_routes.router)
+    logger.info("✅ Cleanup routes included")
 if management_routes:
     app.include_router(management_routes.router)
+    logger.info("✅ Management routes included")
 
 # Include Webhook router (for receiving callbacks)
 if webhook_routes:

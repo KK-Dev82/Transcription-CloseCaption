@@ -60,6 +60,12 @@ try:
 except ImportError:
     realtime_audio_stream_router = None
 
+# Video router
+try:
+    from .video import router as video_router
+except ImportError:
+    video_router = None
+
 __all__ = [
     "upload_router",
     "caption_router", 
@@ -77,3 +83,6 @@ if realtime_transcription_router:
 
 if realtime_caption_router:
     __all__.append("realtime_caption_router") 
+
+if video_router:
+    __all__.append("video_router") 

@@ -14,11 +14,22 @@ try:
     env_file = Path(__file__).parent.parent / ".env.runpod"
     if env_file.exists():
         load_dotenv(env_file)
-        logging.getLogger(__name__).info(f"✅ Loaded environment from {env_file}")
 except ImportError:
     pass  # python-dotenv not installed, will use system env vars
 except Exception as e:
-    logging.getLogger(__name__).warning(f"⚠️  Failed to load .env.runpod: {e}")
+    pass
+
+# ✅ Setup logging with rotation (ต้องทำก่อน import services)
+try:
+    from app.utils.logging_config import setup_logging
+    setup_logging()
+except Exception as e:
+    # Fallback to basic logging if setup fails
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logging.getLogger(__name__).warning(f"⚠️  Failed to setup logging config: {e}")
 
 # Create necessary directories
 Path("uploads").mkdir(exist_ok=True)
@@ -26,6 +37,7 @@ Path("temp").mkdir(exist_ok=True)
 Path("storage").mkdir(exist_ok=True)
 Path("models").mkdir(exist_ok=True)
 Path("static").mkdir(exist_ok=True)
+Path("logs").mkdir(exist_ok=True)
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +128,11 @@ MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 from app.api import websocket_router
 
 if not MOCK_MODE:
-    from app.api import upload_router, caption_router
+    from app.api import upload_router, caption_router, video_router
     app.include_router(upload_router, prefix="/api", tags=["upload"])
     app.include_router(caption_router, prefix="/api", tags=["caption"])
+    if video_router:
+        app.include_router(video_router, prefix="/api", tags=["video"])
 
 # WebSocket router is needed for realtime audio stream (even in MOCK MODE)
 app.include_router(websocket_router, tags=["websocket"])
@@ -186,9 +200,11 @@ except ImportError as e:
 try:
     from app.api import internal_router
     if internal_router:
-        app.include_router(internal_router, prefix="/api", tags=["internal"])
-except ImportError:
-    pass
+        # Internal router already has prefix="/api/internal", so don't add another /api
+        app.include_router(internal_router, tags=["internal"])
+        logger.info("✅ Internal router included")
+except ImportError as e:
+    logger.warning(f"Internal router not available: {e}")
 
 # Include other API routers
 # Include tasks router (important - must be included)

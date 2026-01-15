@@ -8,6 +8,7 @@ import uuid
 from ..services.video_service import VideoService
 from ..services.file_service import FileService
 from ..utils.json_storage import JSONStorage
+from ..utils.storage_factory import get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,303 @@ router = APIRouter(prefix="/video", tags=["Video Processing"])
 video_service = VideoService()
 file_service = FileService()
 json_storage = JSONStorage()
+
+@router.get("/")
+@router.get("/list")
+async def list_video_files(
+    use_database: bool = Query(True, description="ใช้ database (True) หรือ scan filesystem (False)")
+):
+    """
+    ดึงรายการไฟล์วิดีโอและไฟล์ audio (.wav) ทั้งหมดพร้อมข้อมูล duration (นาที)
+    
+    Args:
+        use_database: ใช้ database (True) หรือ scan filesystem (False)
+    
+    Returns:
+        List ของไฟล์วิดีโอและ audio พร้อมข้อมูล:
+        - id: ID ใน database (ถ้าใช้ database)
+        - filename: ชื่อไฟล์
+        - file_path: path ไปยังไฟล์
+        - file_size: ขนาดไฟล์ (bytes)
+        - file_type: ประเภทไฟล์ (video/audio)
+        - duration: ความยาวไฟล์ (วินาที)
+        - duration_minutes: ความยาวไฟล์ (นาที)
+        - duration_formatted: ความยาวไฟล์ (รูปแบบ MM:SS)
+        - video_info: ข้อมูลวิดีโอเพิ่มเติม (width, height, codec, etc.) - สำหรับไฟล์วิดีโอเท่านั้น
+        - audio_info: ข้อมูล audio เพิ่มเติม - สำหรับไฟล์ audio เท่านั้น
+    """
+    try:
+        # ใช้ database ถ้ามีและ use_database=True
+        storage = get_storage()
+        use_db = use_database and hasattr(storage, 'list_uploaded_files')
+        
+        if use_db:
+            # อ่านจาก database
+            try:
+                all_files = storage.list_uploaded_files(limit=1000, order_by="created_at", order_desc=True)
+                
+                videos = []
+                audios = []
+                
+                for file_data in all_files:
+                    file_data_copy = file_data.copy()
+                    # แปลง modified_at จาก created_at ถ้าไม่มี
+                    if "modified_at" not in file_data_copy:
+                        file_data_copy["modified_at"] = file_data_copy.get("created_at", "")
+                    
+                    if file_data["file_type"] == "video":
+                        videos.append(file_data_copy)
+                    elif file_data["file_type"] == "audio":
+                        audios.append(file_data_copy)
+                
+                return {
+                    "videos": videos,
+                    "audios": audios,
+                    "total": len(videos) + len(audios),
+                    "total_videos": len(videos),
+                    "total_audios": len(audios),
+                    "source": "database"
+                }
+            except Exception as e:
+                logger.warning(f"Failed to read from database, falling back to filesystem: {e}")
+                use_db = False
+        
+        # Fallback: scan filesystem
+        from datetime import datetime
+        import ffmpeg
+        
+        upload_dir = Path("uploads")
+        if not upload_dir.exists():
+            return {
+                "videos": [],
+                "audios": [],
+                "total": 0,
+                "message": "ไม่พบโฟลเดอร์ uploads",
+                "source": "filesystem"
+            }
+        
+        videos = []
+        audios = []
+        
+        for file_path in upload_dir.iterdir():
+            if not file_path.is_file():
+                continue
+                
+            is_video = file_service.is_video_file(str(file_path))
+            is_audio = file_service.is_audio_file(str(file_path))
+            
+            if not (is_video or is_audio):
+                continue
+            
+            try:
+                stat = file_path.stat()
+                duration_seconds = 0
+                video_info = None
+                audio_info = None
+                
+                if is_video:
+                    # ดึงข้อมูลวิดีโอ
+                    video_info = video_service.get_video_info(str(file_path))
+                    duration_seconds = video_info.get("duration", 0)
+                elif is_audio:
+                    # ดึงข้อมูล audio
+                    try:
+                        file_info = file_service.get_file_info(str(file_path))
+                        duration_seconds = file_info.get("duration", 0) or 0
+                        
+                        # ดึงข้อมูล audio เพิ่มเติมด้วย ffmpeg
+                        try:
+                            probe = ffmpeg.probe(str(file_path))
+                            audio_stream = next(
+                                (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
+                                None
+                            )
+                            if audio_stream:
+                                audio_info = {
+                                    "audio_codec": audio_stream.get('codec_name', 'unknown'),
+                                    "sample_rate": int(audio_stream.get('sample_rate', 0)),
+                                    "channels": int(audio_stream.get('channels', 0)),
+                                    "bitrate": int(audio_stream.get('bit_rate', 0)) if audio_stream.get('bit_rate') else None
+                                }
+                        except Exception as e:
+                            logger.debug(f"ไม่สามารถดึงข้อมูล audio stream สำหรับ {file_path.name}: {e}")
+                    except Exception as e:
+                        logger.warning(f"ไม่สามารถดึงข้อมูล audio สำหรับ {file_path.name}: {e}")
+                
+                # คำนวณ duration เป็นนาที
+                duration_minutes = round(duration_seconds / 60, 2) if duration_seconds > 0 else 0
+                
+                # Format duration เป็น MM:SS
+                minutes = int(duration_seconds // 60)
+                seconds = int(duration_seconds % 60)
+                duration_formatted = f"{minutes}:{seconds:02d}"
+                
+                file_data = {
+                    "filename": file_path.name,
+                    "file_path": str(file_path),
+                    "file_size": stat.st_size,
+                    "file_type": "video" if is_video else "audio",
+                    "duration": duration_seconds,
+                    "duration_minutes": duration_minutes,
+                    "duration_formatted": duration_formatted,
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                }
+                
+                if is_video:
+                    file_data["video_info"] = video_info
+                    videos.append(file_data)
+                elif is_audio:
+                    if audio_info:
+                        file_data["audio_info"] = audio_info
+                    audios.append(file_data)
+                    
+            except Exception as e:
+                logger.warning(f"ไม่สามารถดึงข้อมูลสำหรับ {file_path.name}: {e}")
+                # เพิ่มไฟล์แม้จะดึงข้อมูลไม่ได้ แต่ duration จะเป็น 0
+                stat = file_path.stat()
+                file_data = {
+                    "filename": file_path.name,
+                    "file_path": str(file_path),
+                    "file_size": stat.st_size,
+                    "file_type": "video" if is_video else "audio",
+                    "duration": 0,
+                    "duration_minutes": 0,
+                    "duration_formatted": "0:00",
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "error": str(e)
+                }
+                
+                if is_video:
+                    file_data["video_info"] = None
+                    videos.append(file_data)
+                elif is_audio:
+                    audios.append(file_data)
+        
+        # เรียงตามวันที่แก้ไขล่าสุด
+        videos.sort(key=lambda x: x["modified_at"], reverse=True)
+        audios.sort(key=lambda x: x["modified_at"], reverse=True)
+        
+        return {
+            "videos": videos,
+            "audios": audios,
+            "total": len(videos) + len(audios),
+            "total_videos": len(videos),
+            "total_audios": len(audios),
+            "upload_directory": str(upload_dir),
+            "source": "filesystem"
+        }
+        
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการดึงรายการไฟล์: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึงรายการไฟล์: {str(e)}"
+        )
+
+@router.post("/sync")
+async def sync_uploaded_files():
+    """
+    Sync ข้อมูลใน database กับ filesystem
+    - เพิ่มไฟล์ใหม่ที่ยังไม่มีใน database
+    - ลบไฟล์ที่ไม่มีใน filesystem แล้ว (soft delete)
+    """
+    try:
+        storage = get_storage()
+        if not hasattr(storage, 'sync_uploaded_files'):
+            raise HTTPException(
+                status_code=501,
+                detail="Storage backend ไม่รองรับ sync function"
+            )
+        
+        result = storage.sync_uploaded_files()
+        
+        return {
+            "message": "Sync สำเร็จ",
+            "added": result["added"],
+            "marked_deleted": result["marked_deleted"],
+            "errors": result.get("errors", [])
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการ sync: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการ sync: {str(e)}"
+        )
+
+@router.post("/cleanup-deleted")
+async def cleanup_deleted_files(
+    max_age_hours: int = Query(24, description="อายุไฟล์ที่ถูก soft delete (ชั่วโมง)")
+):
+    """
+    ลบไฟล์ที่ถูก soft delete แล้วและเก่ากว่า max_age_hours
+    (ลบทั้งจาก database และ filesystem)
+    """
+    try:
+        storage = get_storage()
+        if not hasattr(storage, 'cleanup_deleted_files'):
+            raise HTTPException(
+                status_code=501,
+                detail="Storage backend ไม่รองรับ cleanup function"
+            )
+        
+        result = storage.cleanup_deleted_files(max_age_hours=max_age_hours)
+        
+        return {
+            "message": "Cleanup สำเร็จ",
+            "deleted_count": result["deleted_count"],
+            "errors": result.get("errors", []),
+            "max_age_hours": max_age_hours
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการ cleanup: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการ cleanup: {str(e)}"
+        )
+
+@router.delete("/{file_id}")
+async def delete_file(file_id: int, soft_delete: bool = Query(True, description="Soft delete (True) หรือ hard delete (False)")):
+    """
+    ลบไฟล์ (soft delete หรือ hard delete)
+    """
+    try:
+        storage = get_storage()
+        if not hasattr(storage, 'delete_uploaded_file'):
+            raise HTTPException(
+                status_code=501,
+                detail="Storage backend ไม่รองรับ delete function"
+            )
+        
+        success = storage.delete_uploaded_file(file_id, soft_delete=soft_delete)
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="ไม่พบไฟล์"
+            )
+        
+        return {
+            "message": "ลบไฟล์สำเร็จ" if soft_delete else "ลบไฟล์ถาวรสำเร็จ",
+            "file_id": file_id,
+            "soft_delete": soft_delete
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"เกิดข้อผิดพลาดในการลบไฟล์: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการลบไฟล์: {str(e)}"
+        )
 
 @router.post("/upload")
 async def upload_video(file: UploadFile = File(...)):

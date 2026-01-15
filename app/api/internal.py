@@ -5,7 +5,9 @@ Internal API Endpoint สำหรับ Worker
 """
 
 import logging
+import json
 from typing import Dict, Any
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -57,15 +59,33 @@ async def ws_event(payload: Dict[str, Any]):
         task_id = payload.get("task_id")
         meeting_id = payload.get("meeting_id")
         message = payload.get("message", payload)
+        
+        message_type = message.get("type", "unknown") if isinstance(message, dict) else "unknown"
+
+        logger.info(f"📥 Received ws-event callback: task_id={task_id}, meeting_id={meeting_id}, type={message_type}")
+        logger.debug(f"   Message: {json.dumps(message, ensure_ascii=False)[:200]}..." if isinstance(message, dict) else f"   Message: {str(message)[:200]}...")
 
         if task_id:
             await websocket_manager.broadcast_task_update(str(task_id), message)
+            logger.info(f"✅ Broadcasted task update: {task_id}, type={message_type}")
             return {"ok": True, "type": "task_update", "task_id": str(task_id)}
 
         if meeting_id:
+            broadcast_start_time = datetime.now(timezone.utc)
             await websocket_manager.broadcast_to_meeting(str(meeting_id), message)
+            broadcast_end_time = datetime.now(timezone.utc)
+            broadcast_duration = (broadcast_end_time - broadcast_start_time).total_seconds()
+            
+            logger.info(f"✅ Broadcasted meeting update: {meeting_id}, type={message_type}, duration={broadcast_duration:.3f}s")
+            if isinstance(message, dict) and message.get("type") == "final":
+                chunk_index = message.get("chunk_index", -1)
+                text_length = len(message.get("text", ""))
+                segments_count = len(message.get("segments", []))
+                logger.info(f"   ChunkIndex: {chunk_index}, TextLength: {text_length}, Segments: {segments_count}")
+            
             return {"ok": True, "type": "meeting_update", "meeting_id": str(meeting_id)}
 
+        logger.warning(f"⚠️  ws-event: missing task_id or meeting_id")
         return {"ok": False, "error": "missing task_id or meeting_id"}
 
     except Exception as e:

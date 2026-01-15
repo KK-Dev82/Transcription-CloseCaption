@@ -320,7 +320,8 @@ class RedisQueueService:
         chunk_index: int,
         start_time: float,
         duration: float,
-        audio_path: str
+        audio_path: str,
+        model_size: Optional[str] = None
     ) -> str:
         """
         Enqueue live chunk job ไปยัง priority queue (สูงสุด)
@@ -332,6 +333,7 @@ class RedisQueueService:
             start_time: Start time in seconds
             duration: Duration in seconds
             audio_path: Path to audio file
+            model_size: Model size (optional, will use default if not provided)
         
         Returns:
             Job ID
@@ -345,6 +347,7 @@ class RedisQueueService:
             start_time,
             duration,
             audio_path,
+            model_size,  # ส่ง model_size ไป worker
             job_id=f"live-chunk-{meeting_id}-{chunk_index}",
             job_timeout=300,  # 5 minutes timeout (สำหรับ real-time)
             result_ttl=3600,  # Keep result for 1 hour (shorter than normal jobs)
