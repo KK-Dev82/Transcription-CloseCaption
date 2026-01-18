@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/webhook", tags=["Webhook"])
@@ -55,7 +55,7 @@ async def receive_transcription_webhook(
             webhook_events[task_id] = []
         
         event = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "payload": payload
         }
         

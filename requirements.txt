@@ -8,7 +8,7 @@ redis[hiredis]==5.0.1
 # FFmpeg สำหรับ video processing
 ffmpeg-python==0.2.0
 # ⚠️  หมายเหตุ: ffmpeg-python ต้องการ FFmpeg binary อยู่ด้วย
-#   - ติดตั้ง FFmpeg binary: apt-get install -y ffmpeg
+#   - ติดตั้ง FFmpeg binary: apt update && apt-get install -y ffmpeg
 #   - หรือใช้จาก base image ที่มี FFmpeg อยู่แล้ว
 #   - FFmpeg binary ใช้สำหรับ: audio extraction, chunking, video processing
 

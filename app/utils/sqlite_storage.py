@@ -884,6 +884,9 @@ class SQLiteStorage:
         
         segments_json = json.dumps(caption_data.get("segments", []), ensure_ascii=False)
         
+        # ใช้ UTC time สำหรับ updated_at
+        updated_at = datetime.now(timezone.utc).isoformat()
+        
         conn.execute("""
             INSERT OR REPLACE INTO captions (
                 task_id, updated_at, file_path, language, subtitle_format,
@@ -891,7 +894,7 @@ class SQLiteStorage:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
-            datetime.now().isoformat(),
+            updated_at,
             caption_data.get("file_path"),
             caption_data.get("language"),
             caption_data.get("subtitle_format"),
@@ -943,11 +946,14 @@ class SQLiteStorage:
         operations_json = json.dumps(video_data.get("operations", []), ensure_ascii=False)
         results_json = json.dumps(video_data.get("results", {}), ensure_ascii=False)
         
+        # ใช้ UTC time สำหรับ timestamps
+        updated_at = datetime.now(timezone.utc).isoformat()
+        
         completed_at = None
         if video_data.get("completed_at"):
             completed_at = video_data["completed_at"]
         elif video_data.get("status") == "completed":
-            completed_at = datetime.now().isoformat()
+            completed_at = datetime.now(timezone.utc).isoformat()
         
         conn.execute("""
             INSERT OR REPLACE INTO video_tasks (
@@ -958,7 +964,7 @@ class SQLiteStorage:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
-            datetime.now().isoformat(),
+            updated_at,
             completed_at,
             video_data.get("type"),
             video_data.get("status"),
@@ -1073,11 +1079,14 @@ class SQLiteStorage:
             ensure_ascii=False
         )
         
+        # ใช้ UTC time สำหรับ timestamps
+        updated_at = datetime.now(timezone.utc).isoformat()
+        
         ended_at = None
         if stream_data.get("ended_at"):
             ended_at = stream_data["ended_at"]
         elif stream_data.get("status") == "completed":
-            ended_at = datetime.now().isoformat()
+            ended_at = datetime.now(timezone.utc).isoformat()
         
         conn.execute("""
             INSERT OR REPLACE INTO live_streams (
@@ -1087,7 +1096,7 @@ class SQLiteStorage:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             stream_id,
-            datetime.now().isoformat(),
+            updated_at,
             ended_at,
             stream_data.get("status", "active"),
             stream_data.get("language"),
@@ -1135,8 +1144,9 @@ class SQLiteStorage:
     def cleanup_old_files(self, max_age_hours: int = 24):
         """ลบข้อมูลเก่า"""
         conn = self._get_connection()
-        cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
-        cutoff_datetime = datetime.fromtimestamp(cutoff_time).isoformat()
+        # ใช้ UTC time สำหรับ cutoff
+        cutoff_time = datetime.now(timezone.utc).timestamp() - (max_age_hours * 3600)
+        cutoff_datetime = datetime.fromtimestamp(cutoff_time, tz=timezone.utc).isoformat()
         
         # ลบ transcriptions เก่า
         cursor = conn.execute(
@@ -1252,18 +1262,22 @@ class SQLiteStorage:
             video_info_json = json.dumps(video_info) if video_info else None
             audio_info_json = json.dumps(audio_info) if audio_info else None
             
+            # ใช้ UTC time สำหรับ updated_at
+            updated_at = datetime.now(timezone.utc).isoformat()
+            
             conn.execute("""
                 UPDATE uploaded_files 
                 SET filename = ?, file_type = ?, file_size = ?, 
                     duration = ?, duration_minutes = ?, duration_formatted = ?,
                     video_info_json = ?, audio_info_json = ?,
-                    updated_at = CURRENT_TIMESTAMP,
+                    updated_at = ?,
                     user_id = ?, tags = ?, description = ?
                 WHERE id = ?
             """, (
                 filename, file_type, file_size,
                 duration, duration_minutes, duration_formatted,
                 video_info_json, audio_info_json,
+                updated_at,
                 user_id, tags, description,
                 file_id
             ))
@@ -1388,11 +1402,13 @@ class SQLiteStorage:
         conn = self._get_connection()
         
         if soft_delete:
+            # ใช้ UTC time สำหรับ deleted_at
+            deleted_at = datetime.now(timezone.utc).isoformat()
             cursor = conn.execute("""
                 UPDATE uploaded_files 
-                SET deleted_at = CURRENT_TIMESTAMP 
+                SET deleted_at = ? 
                 WHERE id = ? AND deleted_at IS NULL
-            """, (file_id,))
+            """, (deleted_at, file_id))
         else:
             cursor = conn.execute("""
                 DELETE FROM uploaded_files 
