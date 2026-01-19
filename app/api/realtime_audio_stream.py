@@ -567,11 +567,13 @@ async def process_audio_chunk_transcription(
         )
         
         # Send caption events via WebSocket (ถ้าไม่ใช่ MOCK_MODE)
+        # ✅ IMPORTANT: /api/ws/captions ใช้ meeting_id เป็น user_id โดยตรง
+        # ห้าม prefix เป็น user-{meeting_id} ไม่งั้นผู้ชมจะไม่รับ event
         if not MOCK_MODE and websocket_manager is not None:
             if meeting_id and meeting_id != "unknown":
-                user_id = f"user-{meeting_id}"
+                user_id = meeting_id
             else:
-                user_id = f"stream-{session_id}"
+                user_id = session_id
             
             # ✅ Calculate timing using epoch_ms (milliseconds since epoch)
             # ใช้ session start time + chunk offset
