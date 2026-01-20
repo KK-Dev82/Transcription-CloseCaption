@@ -31,11 +31,13 @@ _PRODUCER_TTL_SECONDS = float(os.getenv("FE_CC_PRODUCER_TTL_SECONDS", "20"))
 # Rolling window inference parameters (server-side)
 _DEFAULT_SAMPLE_RATE = 16000
 _DEFAULT_CHANNELS = 1
-_WINDOW_SECONDS = float(os.getenv("FE_CC_WINDOW_SECONDS", "2.0"))          # ขนาดหน้าต่างเสียง
-_STEP_SECONDS = float(os.getenv("FE_CC_STEP_SECONDS", "0.5"))              # ความถี่ในการยิง inference
-_MIN_WINDOW_SECONDS = float(os.getenv("FE_CC_MIN_WINDOW_SECONDS", "1.2"))  # ต้องมีเสียงอย่างน้อยเท่านี้ก่อนเริ่ม infer
+_WINDOW_SECONDS = float(os.getenv("FE_CC_WINDOW_SECONDS", "3.0"))          # ✅ เพิ่มจาก 2.0 เป็น 3.0 เพื่อให้ได้ประโยคสมบูรณ์ขึ้น
+_STEP_SECONDS = float(os.getenv("FE_CC_STEP_SECONDS", "1.0"))              # ✅ เพิ่มจาก 0.5 เป็น 1.0 เพื่อลด requests และรอประโยคสมบูรณ์
+_MIN_WINDOW_SECONDS = float(os.getenv("FE_CC_MIN_WINDOW_SECONDS", "2.0"))  # ✅ เพิ่มจาก 1.2 เป็น 2.0 เพื่อให้มีเสียงพอสำหรับประโยค
+_SILENCE_THRESHOLD_SECONDS = float(os.getenv("FE_CC_SILENCE_THRESHOLD", "0.8"))  # ✅ รอ silence 0.8s ก่อนส่ง final (sentence boundary)
 
 _last_emitted_text_by_meeting: dict[str, str] = {}
+_last_silence_time_by_meeting: dict[str, float] = {}  # ✅ เก็บเวลาที่มีเสียงล่าสุด
 
 _whisper_service_singleton = None
 
@@ -479,6 +481,9 @@ async def websocket_audio_ingest_endpoint(
 
     async def infer_loop():
         nonlocal seq_counter, min_bytes, window_bytes
+        pending_text = ""  # ✅ เก็บข้อความที่รอส่ง (รอ silence ก่อน)
+        pending_start_ms = None
+        
         while not stop_event.is_set():
             try:
                 await asyncio.sleep(_STEP_SECONDS)
@@ -488,6 +493,62 @@ async def websocket_audio_ingest_endpoint(
                 # Take the latest window
                 chunk = bytes(ring[-window_bytes:]) if len(ring) >= window_bytes else bytes(ring)
 
+                # ✅ Simple VAD: ตรวจสอบว่า chunk มีเสียงหรือไม่ (ตรวจจาก amplitude)
+                # ถ้าไม่มีเสียง → ตรวจสอบ silence duration
+                has_audio = False
+                if len(chunk) >= 2:
+                    # ตรวจสอบ amplitude (PCM16: -32768 to 32767)
+                    samples = []
+                    for i in range(0, min(len(chunk) - 1, 1600), 2):  # sample ทุก 0.1s
+                        val = int.from_bytes(chunk[i:i+2], byteorder='little', signed=True)
+                        samples.append(abs(val))
+                    avg_amplitude = sum(samples) / len(samples) if samples else 0
+                    has_audio = avg_amplitude > 500  # threshold สำหรับเสียง (ปรับได้)
+
+                now_s = _now_s()
+                if has_audio:
+                    _last_silence_time_by_meeting[meeting_id] = now_s
+                else:
+                    # ไม่มีเสียง → ตรวจสอบ silence duration
+                    last_silence = _last_silence_time_by_meeting.get(meeting_id, now_s)
+                    silence_duration = now_s - last_silence
+                    
+                    # ✅ ถ้ามี pending text และ silence นานพอ → ส่ง final
+                    if pending_text and silence_duration >= _SILENCE_THRESHOLD_SECONDS:
+                        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                        event = {
+                            "type": "final",
+                            "meeting_id": meeting_id,
+                            "session_id": producer_session_id,
+                            "seq": seq_counter,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "chunk_index": seq_counter,
+                            "chunk_start_ms": pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)),
+                            "chunk_duration_ms": max(1, now_ms - (pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)))),
+                            "language": language,
+                            "model": model_size,
+                            "provider": "faster-whisper" if not MOCK_MODE else "mock",
+                            "text": pending_text,
+                            "segments": [
+                                {
+                                    "id": f"seg-{seq_counter}-0",
+                                    "t0_ms": pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)),
+                                    "t1_ms": now_ms,
+                                    "text": pending_text,
+                                    "confidence": 0.0,
+                                    "is_final": True,
+                                    "speaker": None
+                                }
+                            ]
+                        }
+                        await websocket_manager.broadcast_to_meeting(meeting_id, event)
+                        _last_emitted_text_by_meeting[meeting_id] = pending_text
+                        pending_text = ""
+                        pending_start_ms = None
+                        seq_counter += 1
+                        continue
+
+                # ✅ ถ้ายังไม่มีเสียง หรือ silence ยังไม่พอ → ทำ transcription (partial)
                 # MOCK: emit basic telemetry as caption
                 if MOCK_MODE:
                     text = f"[MOCK] pcm_bytes={len(chunk)}"
@@ -522,7 +583,7 @@ async def websocket_audio_ingest_endpoint(
                 if not text:
                     continue
 
-                # Postprocess + dedupe to simulate incremental updates
+                # Postprocess
                 if CloseCaptionConfig.POSTPROCESS_ENABLED and language == "th":
                     try:
                         text = postprocess_thai_text(
@@ -534,49 +595,41 @@ async def websocket_audio_ingest_endpoint(
                     except Exception:
                         pass
 
-                if CloseCaptionConfig.DEDUPE_ENABLED:
-                    last = _last_emitted_text_by_meeting.get(meeting_id, "")
-                    try:
-                        text = dedupe_text(text, last, max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH).strip()
-                    except Exception:
-                        pass
-
                 if not text:
                     continue
 
-                _last_emitted_text_by_meeting[meeting_id] = (_last_emitted_text_by_meeting.get(meeting_id, "") + " " + text).strip()
+                # ✅ ใช้ dedupe เพื่อหาข้อความใหม่ (ไม่ซ้ำกับที่ส่งไปแล้ว)
+                last_emitted = _last_emitted_text_by_meeting.get(meeting_id, "")
+                if CloseCaptionConfig.DEDUPE_ENABLED:
+                    try:
+                        new_text = dedupe_text(text, last_emitted, max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH).strip()
+                    except Exception:
+                        new_text = text
+                else:
+                    # ถ้าไม่ใช้ dedupe → เปรียบเทียบแบบง่าย
+                    if text.startswith(last_emitted):
+                        new_text = text[len(last_emitted):].strip()
+                    else:
+                        new_text = text
 
-                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-                start_ms = now_ms - int(_WINDOW_SECONDS * 1000)
-                event = {
-                    "type": "final",
-                    "meeting_id": meeting_id,
-                    "session_id": producer_session_id,
-                    "seq": seq_counter,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "chunk_index": seq_counter,  # monotonically increasing for client convenience
-                    "chunk_start_ms": start_ms,
-                    "chunk_duration_ms": max(1, now_ms - start_ms),
-                    "language": language,
-                    "model": model_size,
-                    "provider": "faster-whisper" if not MOCK_MODE else "mock",
-                    "text": text,
-                    "segments": [
-                        {
-                            "id": f"seg-{seq_counter}-0",
-                            "t0_ms": start_ms,
-                            "t1_ms": now_ms,
-                            "text": text,
-                            "confidence": 0.0,
-                            "is_final": True,
-                            "speaker": None
-                        }
-                    ]
-                }
-
-                # Broadcast to meeting viewers (IMPORTANT: meeting_id key must match /api/ws/captions)
-                await websocket_manager.broadcast_to_meeting(meeting_id, event)
-                seq_counter += 1
+                if new_text:
+                    # ✅ เก็บ pending text (รอ silence ก่อนส่ง final)
+                    if not pending_text:
+                        pending_start_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - int(_WINDOW_SECONDS * 1000)
+                    pending_text = (pending_text + " " + new_text).strip()
+                    
+                    # ✅ ส่ง partial event ทันที (เพื่อให้เห็นข้อความแบบ realtime)
+                    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                    partial_event = {
+                        "type": "partial",
+                        "meeting_id": meeting_id,
+                        "session_id": producer_session_id,
+                        "seq": seq_counter,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "text": pending_text,
+                        "is_final": False
+                    }
+                    await websocket_manager.broadcast_to_meeting(meeting_id, partial_event)
             except Exception as e:
                 logger.warning(f"[WS ingest] infer_loop error meeting_id={meeting_id}: {e}")
 
