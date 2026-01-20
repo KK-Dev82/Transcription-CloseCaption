@@ -456,6 +456,8 @@ async def websocket_audio_ingest_endpoint(
         await websocket.close(code=4009)
         return
 
+    logger.info(f"[WS ingest] ✅ Producer connected: meeting_id={meeting_id}, session_id={producer_session_id}")
+    
     await _safe_send_json(websocket, {
         "type": "status",
         "meeting_id": meeting_id,
@@ -618,18 +620,22 @@ async def websocket_audio_ingest_endpoint(
                         pending_start_ms = int(datetime.now(timezone.utc).timestamp() * 1000) - int(_WINDOW_SECONDS * 1000)
                     pending_text = (pending_text + " " + new_text).strip()
                     
-                    # ✅ ส่ง partial event ทันที (เพื่อให้เห็นข้อความแบบ realtime)
-                    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-                    partial_event = {
-                        "type": "partial",
-                        "meeting_id": meeting_id,
-                        "session_id": producer_session_id,
-                        "seq": seq_counter,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "text": pending_text,
-                        "is_final": False
-                    }
-                    await websocket_manager.broadcast_to_meeting(meeting_id, partial_event)
+                # ✅ ส่ง partial event ทันที (เพื่อให้เห็นข้อความแบบ realtime)
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                partial_event = {
+                    "type": "partial",
+                    "meeting_id": meeting_id,
+                    "session_id": producer_session_id,
+                    "seq": seq_counter,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "text": pending_text,
+                    "is_final": False
+                }
+                await websocket_manager.broadcast_to_meeting(meeting_id, partial_event)
+                logger.debug(
+                    f"[WS ingest] 📤 Broadcast partial: meeting_id={meeting_id}, "
+                    f"text_length={len(pending_text)}, seq={seq_counter}"
+                )
             except Exception as e:
                 logger.warning(f"[WS ingest] infer_loop error meeting_id={meeting_id}: {e}")
 
@@ -663,6 +669,18 @@ async def websocket_audio_ingest_endpoint(
                     # Only PCM16LE supported in v1
                     continue
                 ring.extend(b)
+                total_bytes_received += len(b)
+                total_frames_received += 1
+                last_frame_time = _now_s()
+                
+                # ✅ Log ทุก 100 frames (ลด log noise)
+                if total_frames_received % 100 == 0:
+                    logger.info(
+                        f"[WS ingest] 📥 Received: meeting_id={meeting_id}, "
+                        f"frames={total_frames_received}, bytes={total_bytes_received}, "
+                        f"ring_size={len(ring)}, buffered={len(ring) / _pcm16_bytes_per_second(sample_rate, channels):.2f}s"
+                    )
+                
                 # Keep only last ~10 seconds to cap memory
                 max_keep = _pcm16_bytes_per_second(sample_rate, channels) * 10
                 if len(ring) > max_keep:
@@ -672,7 +690,16 @@ async def websocket_audio_ingest_endpoint(
                 # disconnect
                 break
     except WebSocketDisconnect:
-        pass
+        logger.info(
+            f"[WS ingest] 🔌 Disconnected: meeting_id={meeting_id}, "
+            f"session_id={producer_session_id}, "
+            f"total_frames={total_frames_received}, total_bytes={total_bytes_received}"
+        )
+    except Exception as e:
+        logger.error(
+            f"[WS ingest] ❌ Error: meeting_id={meeting_id}, session_id={producer_session_id}, error={e}",
+            exc_info=True
+        )
     finally:
         stop_event.set()
         try:
@@ -680,6 +707,11 @@ async def websocket_audio_ingest_endpoint(
         except Exception:
             pass
         _release_producer_lock_if_owner(meeting_id, producer_session_id)
+        logger.info(
+            f"[WS ingest] 🧹 Cleanup: meeting_id={meeting_id}, "
+            f"session_id={producer_session_id}, "
+            f"total_frames={total_frames_received}, total_bytes={total_bytes_received}"
+        )
         try:
             await websocket.close()
         except Exception:
