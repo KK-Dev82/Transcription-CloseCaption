@@ -657,6 +657,188 @@ async def get_tasks_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{task_id}/retry")
+async def retry_task(task_id: str) -> Dict:
+    """
+    🔄 **Retry Stuck Task**
+    
+    Retry task ที่ stuck โดยใช้ stuck task monitor
+    
+    **Parameters:**
+    - `task_id`: Task ID ที่ต้องการ retry
+    
+    **Returns:**
+    - `success`: True ถ้าสำเร็จ
+    - `message`: ข้อความอธิบาย
+    - `fixed`: True ถ้า task ถูก fix แล้ว
+    
+    **Examples:**
+    ```
+    POST /api/v2/tasks/dc534414-5fef-49b9-a5aa-4f597396d16d/retry
+    ```
+    """
+    try:
+        from app.services.stuck_task_monitor import StuckTaskMonitor
+        
+        monitor = StuckTaskMonitor()
+        
+        # ตรวจสอบว่า task นี้ stuck หรือไม่
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        is_stuck, reason = monitor.is_task_really_stuck(task_id, task_data)
+        
+        if not is_stuck:
+            return {
+                "success": True,
+                "message": f"Task {task_id} is not stuck",
+                "fixed": False,
+                "reason": None,
+                "status": task_data.get('status'),
+                "progress": task_data.get('progress', 0)
+            }
+        
+        # Fix stuck task
+        fixed = monitor.fix_stuck_task(task_id, reason)
+        
+        if fixed:
+            logger.info(f"✅ Successfully retried stuck task {task_id}: {reason}")
+            return {
+                "success": True,
+                "message": f"Task {task_id} retry initiated",
+                "fixed": True,
+                "reason": reason,
+                "status": task_data.get('status'),
+                "progress": task_data.get('progress', 0)
+            }
+        else:
+            logger.warning(f"⚠️  Could not fix stuck task {task_id}: {reason}")
+            return {
+                "success": False,
+                "message": f"Could not fix task {task_id}",
+                "fixed": False,
+                "reason": reason,
+                "status": task_data.get('status'),
+                "progress": task_data.get('progress', 0)
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{task_id}/resubmit")
+async def resubmit_task(task_id: str) -> Dict:
+    """
+    🔄 **Resubmit Task (Send New Transcription)**
+    
+    ส่งการแปลงใหม่โดยใช้ไฟล์เดิม (สร้าง task ใหม่)
+    
+    **Parameters:**
+    - `task_id`: Task ID ที่ต้องการ resubmit
+    
+    **Returns:**
+    - `success`: True ถ้าสำเร็จ
+    - `new_task_id`: Task ID ใหม่
+    - `message`: ข้อความอธิบาย
+    
+    **Examples:**
+    ```
+    POST /api/v2/tasks/dc534414-5fef-49b9-a5aa-4f597396d16d/resubmit
+    ```
+    """
+    try:
+        # ดึง task เดิม
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        # ตรวจสอบ file_path
+        file_path = task_data.get('file_path')
+        if not file_path:
+            raise HTTPException(status_code=400, detail="Original task has no file_path")
+        
+        # ตรวจสอบว่าไฟล์ยังมีอยู่หรือไม่
+        from pathlib import Path
+        if not Path(file_path).exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        
+        # ใช้ logic จาก transcribe.py
+        from app.api.transcribe import TranscriptionRequest
+        import uuid
+        from datetime import datetime, timezone
+        from app.services.redis_queue_service import get_redis_queue_service
+        
+        new_task_id = str(uuid.uuid4())
+        
+        # สร้าง request ใหม่
+        request = TranscriptionRequest(
+            file_path=file_path,
+            language=task_data.get('language', 'th'),
+            model_size=task_data.get('model_size', 'base'),
+            chunk_duration=task_data.get('chunk_duration', 150),
+            use_chunking=task_data.get('use_chunking', True)
+        )
+        
+        # สร้าง task และบันทึกลง storage
+        sqlite_storage, json_storage = _get_storage()
+        storage = sqlite_storage  # ใช้ SQLite เป็นหลัก
+        task_dict = {
+            "task_id": new_task_id,
+            "status": "queued",
+            "progress": 0,
+            "file_path": file_path,
+            "language": request.language,
+            "model_size": request.model_size,
+            "chunk_duration": request.chunk_duration or 150,
+            "use_chunking": request.use_chunking,
+            "full_text": "",
+            "chunks": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        storage.save_transcription(new_task_id, task_dict)
+        
+        # Enqueue preprocessing job
+        queue_service = get_redis_queue_service()
+        try:
+            preprocess_job_id = queue_service.enqueue_preprocess(
+                task_id=new_task_id,
+                file_path=file_path,
+                language=request.language,
+                model_size=request.model_size,
+                chunk_duration=request.chunk_duration or 150
+            )
+            
+            logger.info(f"✅ Resubmitted task {task_id} as new task {new_task_id}")
+            
+            return {
+                "success": True,
+                "message": f"Task resubmitted successfully",
+                "original_task_id": task_id,
+                "new_task_id": new_task_id,
+                "status": "queued",
+                "file_path": file_path,
+                "preprocess_job_id": preprocess_job_id
+            }
+        except Exception as e:
+            logger.error(f"❌ Error enqueueing resubmit job: {e}", exc_info=True)
+            # Update task status to failed
+            task_dict["status"] = "failed"
+            task_dict["error_message"] = str(e)
+            storage.save_transcription(new_task_id, task_dict)
+            raise HTTPException(status_code=500, detail=f"Failed to enqueue resubmit job: {str(e)}")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resubmitting task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/stats/available-dates")
 async def get_available_dates():
     """

@@ -234,11 +234,37 @@ class FasterWhisperProvider(WhisperProvider):
             logger.error(f"[Faster Whisper] ❌ Error transcribing: {e}", exc_info=True)
             raise
     
+    def _normalize_model_id(self, model_size: str) -> str:
+        """
+        แปลง cache directory name เป็น HuggingFace model ID
+        
+        รองรับทั้ง:
+        - Cache directory name: models--Vinxscribe--biodatlab-whisper-th-medium-faster
+        - HuggingFace model ID: Vinxscribe/biodatlab-whisper-th-medium-faster
+        - Standard model size: tiny, base, small, medium, large
+        """
+        # ถ้าเป็น cache directory name (รูปแบบ models--{org}--{model-name})
+        if model_size.startswith("models--"):
+            # แปลง models--Vinxscribe--biodatlab-whisper-th-medium-faster
+            # เป็น Vinxscribe/biodatlab-whisper-th-medium-faster
+            parts = model_size.replace("models--", "").split("--", 1)
+            if len(parts) == 2:
+                org, model_name = parts
+                normalized = f"{org}/{model_name}"
+                logger.info(f"[Faster Whisper] 🔄 Normalized model ID: {model_size} → {normalized}")
+                return normalized
+        
+        # ถ้าเป็น HuggingFace model ID หรือ standard model size อยู่แล้ว → คืนค่าตรงๆ
+        return model_size
+    
     async def _get_model(self, model_size: str):
         """Get or load model (singleton pattern) - รองรับ multi-GPU"""
+        # แปลง model_size เป็น HuggingFace model ID (ถ้าจำเป็น)
+        normalized_model_id = self._normalize_model_id(model_size)
+        
         # อ่าน device ปัจจุบัน (อาจเปลี่ยนตาม WHISPER_DEVICE_ID)
         current_device = self._get_device()
-        cache_key = f"{model_size}_{current_device}_{self.compute_type}"
+        cache_key = f"{normalized_model_id}_{current_device}_{self.compute_type}"
         
         if cache_key in self._model_cache:
             logger.info(f"[Faster Whisper] ✅ Using cached model: {cache_key}")
@@ -246,14 +272,14 @@ class FasterWhisperProvider(WhisperProvider):
         
         # Load model
         # FIX: เพิ่ม log เพื่อตรวจสอบ device จริง
-        logger.info(f"[Faster Whisper] 🔄 Loading model: {model_size} (device: {current_device}, compute_type: {self.compute_type})")
+        logger.info(f"[Faster Whisper] 🔄 Loading model: {normalized_model_id} (original: {model_size}, device: {current_device}, compute_type: {self.compute_type})")
         logger.info(f"[Faster Whisper]    Cache key: {cache_key}")
         logger.info(f"[Faster Whisper]    ENV WHISPER_DEVICE={os.getenv('WHISPER_DEVICE', 'not set')}")
         logger.info(f"[Faster Whisper]    ENV CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES', 'not set')}")
         
         try:
             model = WhisperModel(
-                model_size,
+                normalized_model_id,  # ใช้ normalized model ID
                 device=current_device,
                 compute_type=self.compute_type,
                 download_root=self.download_root

@@ -116,7 +116,32 @@ Models จะถูกดาวน์โหลดอัตโนมัติเ�
 
 เมื่อ restart pod container ใหม่ ต้องทำตามขั้นตอนนี้:
 
-### 1. ติดตั้ง System Dependencies
+### 1. ตรวจสอบและปรับ NUM_GPUS ใน .env.runpod
+
+⚠️ **สำคัญ**: ต้องตรวจสอบว่า `NUM_GPUS` ใน `.env.runpod` ตรงกับจำนวน GPU ที่ใช้จริง
+
+```bash
+# ตรวจสอบจำนวน GPU จริง
+nvidia-smi -L
+
+# ตรวจสอบค่า NUM_GPUS ใน .env.runpod
+grep NUM_GPUS .env.runpod
+
+# ตรวจสอบ CUDA_VISIBLE_DEVICES
+grep CUDA_VISIBLE_DEVICES .env.runpod
+```
+
+**ตัวอย่าง**:
+- ถ้ามี 2 GPUs: `NUM_GPUS=2` และ `CUDA_VISIBLE_DEVICES=0,1`
+- ถ้ามี 1 GPU: `NUM_GPUS=1` และ `CUDA_VISIBLE_DEVICES=0`
+
+**หมายเหตุ**: 
+- `start-rq-workers.sh` จะอ่าน `NUM_GPUS` จาก `.env.runpod` อัตโนมัติ
+- ถ้า `NUM_GPUS` ไม่ตรงกับจำนวน GPU จริง จะเกิดปัญหา:
+  - ถ้าน้อยเกินไป: จะไม่ใช้ GPU บางตัว
+  - ถ้ามากเกินไป: จะพยายามใช้ GPU ที่ไม่มี → error
+
+### 2. ติดตั้ง System Dependencies
 
 ```bash
 # อัปเดต package list (ใน container - ไม่ต้องใช้ sudo)
@@ -140,7 +165,7 @@ ffmpeg -version
   apt-get install -y ffmpeg
   ```
 
-### 2. ติดตั้ง Python Dependencies
+### 3. ติดตั้ง Python Dependencies
 
 ```bash
 cd /workspace/transcription-service
@@ -152,7 +177,27 @@ pip install -r requirements.txt
 - cuDNN 8.9.0.2 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
 - `whisper_api.py` จะตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
 
-### 3. Start Services
+### 4. ตั้งค่า GPU/CUDA (แนะนำ)
+
+⚠️ **สำคัญ**: ขั้นตอนนี้แนะนำให้ทำเพื่อตรวจสอบว่า GPU/CUDA ทำงานได้ถูกต้อง
+
+```bash
+# วิธีที่ 1: ใช้ fix-ctranslate2-gpu.sh (แนะนำ - มีการตรวจสอบ CUDA support)
+bash scripts/utility/fix-ctranslate2-gpu.sh
+
+# หรือ วิธีที่ 2: ใช้ setup-cudnn-env.sh (เบื้องต้น - แค่ตั้งค่า environment)
+bash scripts/pod/setup-cudnn-env.sh
+```
+
+**หมายเหตุ**: 
+- `fix-ctranslate2-gpu.sh` จะ:
+  - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ cuDNN และ CTranslate2
+  - ✅ ตรวจสอบ cuDNN libraries
+  - ✅ ตรวจสอบ CTranslate2 CUDA support
+  - ✅ ทดสอบ WhisperModel กับ CUDA
+- `setup-cudnn-env.sh` จะแค่ตั้งค่า `LD_LIBRARY_PATH` เท่านั้น
+
+### 5. Start Services
 
 ```bash
 bash scripts/pod/start-pod.sh
@@ -163,24 +208,32 @@ Script นี้จะ:
 - ✅ ตรวจสอบ GPU
 - ✅ สร้าง directories ที่จำเป็น
 - ✅ โหลด environment variables จาก `.env.runpod`
+- ✅ ตรวจสอบและติดตั้ง FFmpeg (ถ้ายังไม่มี)
+- ✅ ตรวจสอบและติดตั้ง Python dependencies (ถ้ายังไม่มี)
 - ✅ Start Whisper API (port 8002) พร้อม cuDNN support
 - ✅ Start Main API (port 8010)
 
-### 4. Start RQ Workers
+### 6. Start RQ Workers
 
 ```bash
+# สำหรับ start ครั้งแรก (หรือถ้าไม่มี workers ทำงานอยู่)
+bash scripts/pod/start-rq-workers.sh
+
+# หรือ สำหรับ restart workers (หยุด workers เดิมก่อน แล้ว start ใหม่)
 bash scripts/pod/restart-rq-workers.sh
 ```
 
 Script นี้จะ:
-- ✅ หยุด workers เดิม (ถ้ามี)
+- ✅ หยุด workers เดิม (ถ้ามี - สำหรับ `restart-rq-workers.sh`)
 - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ CUDA, cuDNN และ CTranslate2
   - **Order**: cuDNN → System path (`/usr/lib/x86_64-linux-gnu`) → CUDA → CTranslate2
   - ⚠️ **สำคัญ**: System path จำเป็นเพื่อให้ CTranslate2 หา `libcudnn_ops_infer.so.8` ได้
+- ✅ อ่าน `NUM_GPUS` จาก `.env.runpod` อัตโนมัติ
 - ✅ Start workers สำหรับทุก queue:
-  - `transcription_preprocess` (6 workers)
-  - `transcription_gpu0`, `transcription_gpu1` (2 workers)
-  - `transcription_cpu` (2 workers)
+  - `transcription_priority` (priority queue สำหรับ realtime chunks)
+  - `transcription_gpu0`, `transcription_gpu1`, ... (ตาม `NUM_GPUS`)
+  - `transcription_preprocess` (สำหรับ audio extraction + chunking)
+  - `transcription_cpu` (สำหรับ aggregator jobs)
 
 ---
 
@@ -218,12 +271,24 @@ Scripts และ code จัดการ cuDNN และ CTranslate2 ให้�
 ### ตรวจสอบว่าใช้งานได้
 
 ```bash
-# ตรวจสอบ Worker Health
+# 1. ทดสอบ CTranslate2 GPU Support และ GPU Visibility (แนะนำ - ทดสอบครบถ้วน)
+bash scripts/utility/test-ctranslate2-gpu.sh
+
+# 2. ตรวจสอบ Worker Health
 bash scripts/pod/check-worker-health.sh
 
-# ตรวจสอบ GPU Usage
+# 3. ตรวจสอบ GPU Usage
 bash scripts/pod/check-gpu-usage.sh
 ```
+
+**สคริปต์ทดสอบ `test-ctranslate2-gpu.sh` จะตรวจสอบ:**
+- ✅ nvidia-smi (GPU hardware)
+- ✅ PyTorch CUDA support
+- ✅ CTranslate2 installation และ CUDA module
+- ✅ CTranslate2 CUDA compute types
+- ✅ LD_LIBRARY_PATH และ cuDNN libraries
+- ✅ WhisperModel กับ CUDA (ทดสอบสร้าง model)
+- ✅ GPU visibility ใน process
 
 ---
 
@@ -537,12 +602,46 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
    bash scripts/pod/check-worker-health.sh
    ```
 
-2. Restart Workers:
+2. ตรวจสอบ NUM_GPUS:
    ```bash
+   # ตรวจสอบจำนวน GPU จริง
+   nvidia-smi -L
+   
+   # ตรวจสอบค่า NUM_GPUS ใน .env.runpod
+   grep NUM_GPUS .env.runpod
+   
+   # ตรวจสอบ CUDA_VISIBLE_DEVICES
+   grep CUDA_VISIBLE_DEVICES .env.runpod
+   ```
+   ⚠️ **สำคัญ**: `NUM_GPUS` ต้องตรงกับจำนวน GPU จริง
+
+3. Restart Workers:
+   ```bash
+   # สำหรับ start ครั้งแรก
+   bash scripts/pod/start-rq-workers.sh
+   
+   # หรือสำหรับ restart
    bash scripts/pod/restart-rq-workers.sh
    ```
 
 ### cuDNN/CTranslate2 Issues
+
+**🔍 วิธีทดสอบ CTranslate2 และ GPU:**
+
+ก่อนแก้ไขปัญหา ให้ทดสอบก่อน:
+```bash
+# ทดสอบครบถ้วน: CTranslate2 GPU support และ GPU visibility
+bash scripts/utility/test-ctranslate2-gpu.sh
+```
+
+สคริปต์นี้จะตรวจสอบ:
+- ✅ nvidia-smi (GPU hardware)
+- ✅ PyTorch CUDA support
+- ✅ CTranslate2 installation และ CUDA module
+- ✅ CTranslate2 CUDA compute types
+- ✅ LD_LIBRARY_PATH และ cuDNN libraries
+- ✅ WhisperModel กับ CUDA (ทดสอบสร้าง model)
+- ✅ GPU visibility ใน process
 
 ⚠️ **ปัญหาเรื่อง LD_LIBRARY_PATH ที่เคยพบ**:
 - CTranslate2 ต้องการ cuDNN libraries (`libcudnn_ops_infer.so.8`) ใน `LD_LIBRARY_PATH`
@@ -552,7 +651,18 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
 
 **วิธีแก้ไข**:
 
-1. ตรวจสอบ cuDNN installation:
+1. **ใช้ fix-ctranslate2-gpu.sh (แนะนำ)**:
+   ```bash
+   # Script นี้จะตรวจสอบและตั้งค่าทุกอย่างให้อัตโนมัติ
+   bash scripts/utility/fix-ctranslate2-gpu.sh
+   ```
+   Script นี้จะ:
+   - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ cuDNN และ CTranslate2
+   - ✅ ตรวจสอบ cuDNN libraries
+   - ✅ ตรวจสอบ CTranslate2 CUDA support
+   - ✅ ทดสอบ WhisperModel กับ CUDA
+
+2. ตรวจสอบ cuDNN installation (ถ้าต้องการตรวจสอบเอง):
    ```bash
    # ตรวจสอบ cuDNN ใน PyTorch path (หลัก)
    ls -la /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/libcudnn_ops_infer.so.8
@@ -562,7 +672,7 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
    # ⚠️ ถ้าไม่มีใน system path ไม่เป็นปัญหา - scripts จะเพิ่ม path นี้เข้าไปใน LD_LIBRARY_PATH
    ```
 
-2. ตรวจสอบ `LD_LIBRARY_PATH` ใน workers:
+3. ตรวจสอบ `LD_LIBRARY_PATH` ใน workers:
    ```bash
    # ตรวจสอบ LD_LIBRARY_PATH ใน worker process
    ps aux | grep "rq worker" | grep -v grep | head -1 | awk '{print $2}' | xargs -I {} cat /proc/{}/environ | tr '\0' '\n' | grep LD_LIBRARY_PATH
@@ -582,17 +692,26 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
    # ถ้าไม่เห็น processes = workers ใช้ CPU (ช้ามาก!)
    ```
 
-4. ตรวจสอบ Libraries:
+5. ตรวจสอบ Libraries:
    ```bash
    ls -la /usr/lib/x86_64-linux-gnu/libcudnn*.so.8  # อาจไม่มี - ไม่เป็นปัญหา
    ls -la /usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib/
    ls -la /usr/local/lib/python3.10/dist-packages/ctranslate2.libs/
    ```
 
-5. Restart Services:
+5. ตั้งค่า GPU/CUDA (แนะนำ):
+   ```bash
+   # ใช้ fix-ctranslate2-gpu.sh (แนะนำ - มีการตรวจสอบ CUDA support)
+   bash scripts/utility/fix-ctranslate2-gpu.sh
+   
+   # หรือใช้ setup-cudnn-env.sh (เบื้องต้น)
+   bash scripts/pod/setup-cudnn-env.sh
+   ```
+
+6. Restart Services:
    ```bash
    bash scripts/pod/start-pod.sh
-   bash scripts/pod/restart-rq-workers.sh
+   bash scripts/pod/start-rq-workers.sh  # หรือ restart-rq-workers.sh
    ```
 
 6. ตรวจสอบ Worker logs:
@@ -649,21 +768,30 @@ CUDNN_DISABLE=0
 
 ## ✅ Checklist หลัง Restart Pod
 
-- [ ] ติดตั้ง FFmpeg: `apt-get update && apt-get install -y ffmpeg` (ใน container ไม่ต้องใช้ sudo)
-- [ ] ตรวจสอบ FFmpeg: `ffmpeg -version`
-- [ ] `pip install -r requirements.txt`
-- [ ] `bash scripts/pod/start-pod.sh`
-- [ ] `bash scripts/pod/restart-rq-workers.sh`
-- [ ] ตรวจสอบ Worker Health: `bash scripts/pod/check-worker-health.sh`
-- [ ] ตรวจสอบ GPU Usage: `nvidia-smi --query-compute-apps` (ควรเห็น processes เมื่อ transcription ทำงาน)
-- [ ] ตรวจสอบ LD_LIBRARY_PATH ใน workers:
+- [ ] **ตรวจสอบและปรับ NUM_GPUS**: ตรวจสอบว่า `NUM_GPUS` ใน `.env.runpod` ตรงกับจำนวน GPU จริง
+  ```bash
+  nvidia-smi -L  # ตรวจสอบจำนวน GPU จริง
+  grep NUM_GPUS .env.runpod  # ตรวจสอบค่าใน .env.runpod
+  ```
+- [ ] **ติดตั้ง FFmpeg**: `apt-get update && apt-get install -y ffmpeg` (ใน container ไม่ต้องใช้ sudo)
+- [ ] **ตรวจสอบ FFmpeg**: `ffmpeg -version`
+- [ ] **ติดตั้ง Python Dependencies**: `pip install -r requirements.txt`
+- [ ] **ตั้งค่า GPU/CUDA** (แนะนำ): `bash scripts/utility/fix-ctranslate2-gpu.sh`
+- [ ] **ทดสอบ CTranslate2 และ GPU**: `bash scripts/utility/test-ctranslate2-gpu.sh` (ตรวจสอบว่าทุกอย่างทำงานได้)
+- [ ] **Start Services**: `bash scripts/pod/start-pod.sh`
+- [ ] **Start RQ Workers**: `bash scripts/pod/start-rq-workers.sh` (หรือ `restart-rq-workers.sh` สำหรับ restart)
+- [ ] **ตรวจสอบ Worker Health**: `bash scripts/pod/check-worker-health.sh`
+- [ ] **ตรวจสอบ GPU Usage**: `nvidia-smi --query-compute-apps` (ควรเห็น processes เมื่อ transcription ทำงาน)
+- [ ] **ตรวจสอบ LD_LIBRARY_PATH ใน workers**:
   ```bash
   ps aux | grep "rq worker" | grep -v grep | head -1 | awk '{print $2}' | xargs -I {} cat /proc/{}/environ | tr '\0' '\n' | grep LD_LIBRARY_PATH
   # ควรมี: /usr/lib/x86_64-linux-gnu (system path) ⚠️ สำคัญ!
   ```
-- [ ] ทดสอบ API: `curl https://0b3x44foetagtu-8010.proxy.runpod.net/health`
+- [ ] **ทดสอบ API**: `curl https://0b3x44foetagtu-8010.proxy.runpod.net/health`
 
-**หมายเหตุ**: Scripts (`start-rq-workers.sh`) จะตั้งค่า LD_LIBRARY_PATH อัตโนมัติ (รวม system path) - ไม่ต้องตั้งค่าเอง
+**หมายเหตุ**: 
+- Scripts (`start-rq-workers.sh`) จะตั้งค่า LD_LIBRARY_PATH อัตโนมัติ (รวม system path) - ไม่ต้องตั้งค่าเอง
+- `start-rq-workers.sh` จะอ่าน `NUM_GPUS` จาก `.env.runpod` อัตโนมัติ - ต้องตรวจสอบให้ตรงกับจำนวน GPU จริง
 
 ---
 

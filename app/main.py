@@ -8,6 +8,27 @@ from pathlib import Path
 import logging
 import os
 
+# ⚠️ สำคัญ: ตั้งค่า LD_LIBRARY_PATH ก่อน import services ที่ใช้ ctranslate2
+# CTranslate2 ต้องการ cuDNN libraries ใน LD_LIBRARY_PATH เพื่อใช้ GPU
+if not os.getenv('LD_LIBRARY_PATH') or 'cudnn' not in os.getenv('LD_LIBRARY_PATH', '').lower():
+    cudnn_path = "/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+    system_path = "/usr/lib/x86_64-linux-gnu"
+    cuda_path = "/usr/local/cuda-12.1/lib64"
+    ctranslate2_path = "/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+    
+    # สร้าง LD_LIBRARY_PATH ใหม่ (order สำคัญ: cuDNN → system → CUDA → CTranslate2)
+    new_ld_path_parts = []
+    for path in [cudnn_path, system_path, cuda_path, ctranslate2_path]:
+        if os.path.exists(path):
+            new_ld_path_parts.append(path)
+    
+    if new_ld_path_parts:
+        new_ld_path = ":".join(new_ld_path_parts)
+        if os.getenv('LD_LIBRARY_PATH'):
+            new_ld_path = f"{new_ld_path}:{os.getenv('LD_LIBRARY_PATH')}"
+        os.environ['LD_LIBRARY_PATH'] = new_ld_path
+        logging.info(f"✅ Set LD_LIBRARY_PATH for cuDNN and CTranslate2: {new_ld_path[:100]}...")
+
 # Load .env.runpod if exists (ต้องทำก่อน import services ที่ใช้ environment variables)
 try:
     from dotenv import load_dotenv
@@ -90,6 +111,20 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"⚠️  Failed to start periodic cleanup: {e}")
         except Exception as e:
             logger.warning(f"⚠️  Failed to import cleanup service: {e}")
+        
+        # Start stuck task monitor (after uvicorn is running)
+        async def start_stuck_task_monitor():
+            try:
+                from app.services.stuck_task_monitor import StuckTaskMonitor
+                monitor = StuckTaskMonitor()
+                logger.info("✅ Stuck task monitor initialized")
+                await monitor.run_periodic_check()
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to start stuck task monitor: {e}")
+        
+        # Start stuck task monitor in background
+        asyncio.create_task(start_stuck_task_monitor())
+        logger.info("✅ Stuck task monitor task created")
     else:
         logger.info("🧪 MOCK MODE: Skipping WebSocket and cleanup initialization")
     
@@ -152,6 +187,14 @@ try:
         app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 except ImportError:
     pass
+
+# Include stuck task monitor router
+try:
+    from app.api.stuck_task_monitor import router as stuck_task_monitor_router
+    app.include_router(stuck_task_monitor_router)
+    logger.info("✅ Stuck task monitor API included")
+except ImportError as e:
+    logger.warning(f"Stuck task monitor API not available: {e}")
 
 # Include enhanced transcription router
 try:

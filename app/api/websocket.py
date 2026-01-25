@@ -470,11 +470,26 @@ async def websocket_audio_ingest_endpoint(
     sample_rate = _DEFAULT_SAMPLE_RATE
     channels = _DEFAULT_CHANNELS
     audio_format = "s16le"
-    model_size = CloseCaptionConfig.MODEL_SIZE
+    # ✅ แปลง cache directory name เป็น HuggingFace model ID (ถ้าจำเป็น)
+    raw_model_size = CloseCaptionConfig.MODEL_SIZE
+    # ถ้าเป็น cache directory name (models--*) ให้แปลงเป็น HuggingFace model ID
+    if raw_model_size.startswith("models--"):
+        parts = raw_model_size.replace("models--", "").split("--", 1)
+        if len(parts) == 2:
+            org, model_name = parts
+            model_size = f"{org}/{model_name}"
+            logger.info(f"[WS ingest] 🔄 Normalized model ID: {raw_model_size} → {model_size}")
+        else:
+            model_size = raw_model_size
+    else:
+        model_size = raw_model_size
     language = CloseCaptionConfig.LANGUAGE
 
     ring = bytearray()
     seq_counter = 1
+    total_bytes_received = 0  # ✅ เพิ่มตัวแปรสำหรับนับ bytes ที่รับมา
+    total_frames_received = 0  # ✅ เพิ่มตัวแปรสำหรับนับ frames ที่รับมา
+    last_frame_time = 0.0  # ✅ เพิ่มตัวแปรสำหรับเก็บเวลาที่รับ frame ล่าสุด
 
     min_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _MIN_WINDOW_SECONDS)
     window_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _WINDOW_SECONDS)
@@ -486,18 +501,27 @@ async def websocket_audio_ingest_endpoint(
         pending_text = ""  # ✅ เก็บข้อความที่รอส่ง (รอ silence ก่อน)
         pending_start_ms = None
         
+        logger.info(f"[WS ingest] 🔄 infer_loop started: meeting_id={meeting_id}, min_bytes={min_bytes}, window_bytes={window_bytes}")
+        
         while not stop_event.is_set():
             try:
                 await asyncio.sleep(_STEP_SECONDS)
-                if len(ring) < max(1, min_bytes):
+                ring_size = len(ring)
+                if ring_size < max(1, min_bytes):
+                    logger.debug(f"[WS ingest] ⏳ Waiting for more audio: ring_size={ring_size}, min_bytes={min_bytes}")
                     continue
+                
+                logger.debug(f"[WS ingest] 🎯 Processing audio chunk: ring_size={ring_size}, min_bytes={min_bytes}, window_bytes={window_bytes}")
 
                 # Take the latest window
                 chunk = bytes(ring[-window_bytes:]) if len(ring) >= window_bytes else bytes(ring)
+                chunk_duration = len(chunk) / _pcm16_bytes_per_second(sample_rate, channels)
+                logger.debug(f"[WS ingest] 📦 Audio chunk: size={len(chunk)} bytes, duration={chunk_duration:.2f}s")
 
                 # ✅ Simple VAD: ตรวจสอบว่า chunk มีเสียงหรือไม่ (ตรวจจาก amplitude)
                 # ถ้าไม่มีเสียง → ตรวจสอบ silence duration
                 has_audio = False
+                avg_amplitude = 0
                 if len(chunk) >= 2:
                     # ตรวจสอบ amplitude (PCM16: -32768 to 32767)
                     samples = []
@@ -506,6 +530,7 @@ async def websocket_audio_ingest_endpoint(
                         samples.append(abs(val))
                     avg_amplitude = sum(samples) / len(samples) if samples else 0
                     has_audio = avg_amplitude > 500  # threshold สำหรับเสียง (ปรับได้)
+                    logger.debug(f"[WS ingest] 🔊 VAD check: avg_amplitude={avg_amplitude:.1f}, has_audio={has_audio}")
 
                 now_s = _now_s()
                 if has_audio:
@@ -544,6 +569,10 @@ async def websocket_audio_ingest_endpoint(
                             ]
                         }
                         await websocket_manager.broadcast_to_meeting(meeting_id, event)
+                        logger.info(
+                            f"[WS ingest] 📤 Broadcast final: meeting_id={meeting_id}, "
+                            f"text_length={len(pending_text)}, seq={seq_counter}, text={pending_text[:50]}"
+                        )
                         _last_emitted_text_by_meeting[meeting_id] = pending_text
                         pending_text = ""
                         pending_start_ms = None
@@ -569,6 +598,7 @@ async def websocket_audio_ingest_endpoint(
                         whisper_service = _get_whisper_service()
                         if whisper_service is None:
                             continue
+                        logger.info(f"[WS ingest] 🎤 Starting transcription: audio_path={tmp_path}, model={model_size}, language={language}, chunk_size={len(chunk)} bytes")
                         result = whisper_service.transcribe_file(
                             audio_path=tmp_path,
                             model_size=model_size,
@@ -576,6 +606,8 @@ async def websocket_audio_ingest_endpoint(
                             use_thai_processor=(language == "th")
                         )
                         text = (result.get("text") or "").strip()
+                        segments = result.get("segments", [])
+                        logger.info(f"[WS ingest] ✅ Transcription result: text_length={len(text)}, segments_count={len(segments)}, text_preview={text[:50] if text else '(empty)'}")
                     finally:
                         try:
                             os.unlink(tmp_path)
@@ -592,12 +624,16 @@ async def websocket_audio_ingest_endpoint(
                             text,
                             normalize=CloseCaptionConfig.POSTPROCESS_NORMALIZE,
                             fix_words=True,
-                            word_segmentation=False  # FE overlay จะจัดรูปแบบเอง
+                            word_segmentation=False,  # FE overlay จะจัดรูปแบบเอง
+                            improve_spacing=True  # ✅ เพิ่มการเว้นวรรค (ตัวเลข, ชื่อ-นามสกุล, คำติดกัน)
                         ).strip()
-                    except Exception:
+                        logger.debug(f"[WS ingest] 🔧 Postprocessed text: {text[:50]}")
+                    except Exception as e:
+                        logger.warning(f"[WS ingest] ⚠️ Postprocess error: {e}")
                         pass
 
                 if not text:
+                    logger.debug(f"[WS ingest] ⚠️  No text after postprocess, skipping")
                     continue
 
                 # ✅ ใช้ dedupe เพื่อหาข้อความใหม่ (ไม่ซ้ำกับที่ส่งไปแล้ว)
@@ -632,9 +668,9 @@ async def websocket_audio_ingest_endpoint(
                     "is_final": False
                 }
                 await websocket_manager.broadcast_to_meeting(meeting_id, partial_event)
-                logger.debug(
+                logger.info(
                     f"[WS ingest] 📤 Broadcast partial: meeting_id={meeting_id}, "
-                    f"text_length={len(pending_text)}, seq={seq_counter}"
+                    f"text_length={len(pending_text)}, seq={seq_counter}, text={pending_text[:50]}"
                 )
             except Exception as e:
                 logger.warning(f"[WS ingest] infer_loop error meeting_id={meeting_id}: {e}")
@@ -655,7 +691,18 @@ async def websocket_audio_ingest_endpoint(
                     sample_rate = int(payload.get("sample_rate") or sample_rate)
                     channels = int(payload.get("channels") or channels)
                     audio_format = str(payload.get("format") or audio_format)
-                    model_size = str(payload.get("model_size") or model_size)
+                    raw_model_size = str(payload.get("model_size") or model_size)
+                    # ✅ แปลง cache directory name เป็น HuggingFace model ID (ถ้าจำเป็น)
+                    if raw_model_size.startswith("models--"):
+                        parts = raw_model_size.replace("models--", "").split("--", 1)
+                        if len(parts) == 2:
+                            org, model_name = parts
+                            model_size = f"{org}/{model_name}"
+                            logger.info(f"[WS ingest] 🔄 Normalized model ID from init: {raw_model_size} → {model_size}")
+                        else:
+                            model_size = raw_model_size
+                    else:
+                        model_size = raw_model_size
                     language = str(payload.get("language") or language)
                     min_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _MIN_WINDOW_SECONDS)
                     window_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _WINDOW_SECONDS)

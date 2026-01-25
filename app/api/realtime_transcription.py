@@ -649,7 +649,7 @@ async def process_live_chunk_background(
             transcribe_end_time = datetime.now(timezone.utc)
             transcribe_duration = (transcribe_end_time - transcribe_start_time).total_seconds()
             
-            transcription_text = transcription_result.get('text', '')
+            transcription_text = (transcription_result.get('text', '') or '').strip()
             segments = transcription_result.get('segments', [])
             
             # ✅ Detailed logging: ผลลัพธ์ transcription
@@ -738,7 +738,7 @@ async def process_live_chunk_background(
                     "id": f"seg-{chunk_index}-{idx}",
                     "t0_ms": segment_t0_ms,  # Absolute time (meeting timeline)
                     "t1_ms": segment_t1_ms,
-                    "text": segment.get("text", ""),
+                    "text": (segment.get("text", "") or "").strip(),
                     "confidence": segment.get("confidence", 0.0) if isinstance(segment.get("confidence"), (int, float)) else 0.0,
                     "is_final": True,
                     "speaker": None
@@ -756,6 +756,9 @@ async def process_live_chunk_background(
                 pass
             
             # Create V3 compliant final event
+            # ✅ Strip whitespace จาก text ก่อนส่ง
+            final_text = transcription_text.strip() if transcription_text else ""
+            
             final_event = {
                 "type": "final",
                 "meeting_id": meeting_id,
@@ -768,15 +771,18 @@ async def process_live_chunk_background(
                 "language": language,
                 "model": model_size,  # ใช้ค่าจากการประมวลผลจริง (ไม่ hardcode)
                 "provider": provider_name,
-                "text": transcription_text,  # Full text
+                "text": final_text,  # Full text (stripped)
                 "segments": v3_segments
             }
             
             # ✅ Detailed logging: ส่ง WebSocket event
+            # Log final_text ที่ strip แล้ว (ไม่ใช่ transcription_text)
             logger.info(f"📤 Preparing to send V3 final caption event:")
             logger.info(f"   MeetingId: {meeting_id}, ChunkIndex: {chunk_index}")
-            logger.info(f"   Segments: {len(v3_segments)}, TextLength: {len(transcription_text)}")
-            logger.info(f"   Text: {transcription_text[:100]}..." if len(transcription_text) > 100 else f"   Text: {transcription_text}")
+            logger.info(f"   Segments: {len(v3_segments)}, TextLength: {len(final_text)} (original: {len(transcription_text)})")
+            logger.info(f"   Text (stripped): {final_text[:100]}..." if len(final_text) > 100 else f"   Text (stripped): {final_text}")
+            if final_text != transcription_text:
+                logger.debug(f"   ⚠️  Text was stripped: original_length={len(transcription_text)}, stripped_length={len(final_text)}")
             
             # Send via HTTP callback (Worker → Main API)
             try:
@@ -808,6 +814,9 @@ async def process_live_chunk_background(
                 end_epoch_ms = base_epoch_ms + int(segment_end_s * 1000)
                 
                 # Create legacy caption event (for backward compatibility)
+                # ✅ Strip whitespace จาก segment text ก่อนส่ง
+                segment_text = (segment.get("text", "") or "").strip()
+                
                 legacy_event = {
                     "type": "caption",
                     "session_id": session_id,
@@ -818,7 +827,7 @@ async def process_live_chunk_background(
                         "start": start_epoch_ms,
                         "end": end_epoch_ms
                     },
-                    "text": segment.get("text", ""),
+                    "text": segment_text,  # Stripped text
                     "lang": "th",
                     "is_final": True,
                     "tokens": [],
@@ -838,7 +847,7 @@ async def process_live_chunk_background(
                         meeting_id=meeting_id,
                         message=legacy_event
                     )
-                    logger.debug(f"📤 Sent legacy caption event via HTTP: ChunkIndex={chunk_index}, Segment={idx}, Text={segment.get('text', '')[:50]}...")
+                    logger.debug(f"📤 Sent legacy caption event via HTTP: ChunkIndex={chunk_index}, Segment={idx}, Text (stripped): {segment_text[:50]}...")
                 except Exception as e:
                     logger.debug(f"⚠️  Failed to send legacy event via HTTP: {e}")
         
