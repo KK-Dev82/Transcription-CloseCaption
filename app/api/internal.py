@@ -82,6 +82,17 @@ async def ws_event(payload: Dict[str, Any]):
                 text_length = len(message.get("text", ""))
                 segments_count = len(message.get("segments", []))
                 logger.info(f"   ChunkIndex: {chunk_index}, TextLength: {text_length}, Segments: {segments_count}")
+                # เก็บ metrics สำหรับ chunk-metrics endpoint (เวลาแปลง chunk → ส่งคำกลับ)
+                meta = message.get("meta") or {}
+                transcribe_duration = meta.get("transcribe_duration_seconds")
+                if transcribe_duration is not None:
+                    from app.utils.live_chunk_metrics import append_metrics
+                    append_metrics(str(meeting_id), {
+                        "chunk_index": chunk_index,
+                        "transcribe_duration_seconds": transcribe_duration,
+                        "text_length": text_length,
+                        "segments_count": segments_count,
+                    })
             
             return {"ok": True, "type": "meeting_update", "meeting_id": str(meeting_id)}
 

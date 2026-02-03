@@ -26,13 +26,13 @@ def clear_redis_queues():
     try:
         r = redis.from_url(REDIS_URL, decode_responses=True)
         
+        num_gpus = int(os.getenv('NUM_GPUS', '2'))
         queues = [
             'transcription_preprocess',
             'transcription_priority',
-            'transcription_gpu0',
             'transcription_cpu',
             'transcription_aggregator'
-        ]
+        ] + [f'transcription_gpu{i}' for i in range(num_gpus)]
         
         total_cleared = 0
         for queue_name in queues:

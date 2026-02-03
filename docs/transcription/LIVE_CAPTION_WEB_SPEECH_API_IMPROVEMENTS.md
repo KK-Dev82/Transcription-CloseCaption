@@ -464,5 +464,39 @@ fi
 
 ---
 
-**Last Updated:** 2026-01-26  
-**Status:** ⚠️ Discarded (รอ re-implement)
+**Last Updated:** 2026-01-29  
+**Status:** ⚠️ Discarded (บางส่วน re-implement แล้ว: non-blocking, keepalive, uvicorn WS ping)
+
+---
+
+## 📌 Single Model + 2 GPU (2026-01-29)
+
+### ใช้โมเดลเดียวได้ไหม (faster-whisper + close-caption)?
+
+**ได้** — ตั้งค่าให้ทั้ง transcription และ close-caption ใช้โมเดลเดียวกัน:
+
+1. **WHISPER_MODEL** (เช่น `.env.runpod` บรรทัด 48–49): ใช้เป็นโมเดลหลัก  
+   - ตัวอย่าง: `WHISPER_MODEL=models--Vinxscribe--biodatlab-whisper-th-medium-faster`
+
+2. **CC_MODEL_SIZE**:  
+   - **ถ้าตั้งค่า** → ใช้ค่านี้สำหรับ close-caption (สามารถใช้ชื่อเดียวกับ `WHISPER_MODEL` ได้)  
+   - **ถ้าไม่ตั้ง** → ระบบใช้ `WHISPER_MODEL` เป็น fallback (โมเดลเดียวทั้ง transcription และ close-caption)
+
+ดังนั้นถ้าต้องการโมเดลเดียว: ตั้ง `WHISPER_MODEL` อย่างเดียว แล้วไม่ตั้ง `CC_MODEL_SIZE` หรือตั้ง `CC_MODEL_SIZE` ให้เท่ากับ `WHISPER_MODEL` ก็ได้
+
+### Worker โหลดโมเดลทุกครั้งหรือไม่?
+
+- **Main API (WebSocket ingest)**: โหลดโมเดลครั้งเดียวต่อ process (singleton / cache ใน faster-whisper)
+- **RQ Workers**: แต่ละ worker process โหลดโมเดลของตัวเอง  
+  - `RQ_PRELOAD_MODEL=true` → โหลดตอน start (ครั้งเดียวต่อ process)  
+  - `RQ_PRELOAD_MODEL=false` → โหลดเมื่อ job แรกมาถึง (lazy)
+
+ถ้าใช้ **2 GPU** และ `GPU_WORKERS_PER_GPU=10` จะมี 20 worker processes → โมเดลถูกโหลด 20 ครั้ง (RAM/VRAM คูณตามจำนวน process)
+
+**ทางเลือกเพื่อลดการโหลดโมเดลซ้ำ:**
+
+1. **ใช้โมเดลเดียวแต่ลดจำนวน workers**: เช่น `GPU_WORKERS_PER_GPU=2` หรือ 3 แล้วใช้ `CHUNK_INFLIGHT_LIMIT` จัด throughput แทน (เอกสารเดิมแนะนำ 2–3 ต่อ GPU)
+2. **ใช้ Whisper API แยก (builtin provider)**: รัน whisper service ตัวเดียว (โหลดโมเดลครั้งเดียว) แล้วให้ทั้ง Main API และ RQ workers เรียก HTTP ไปที่ service นั้น — ต้องเปลี่ยนเป็น `WHISPER_PROVIDER=builtin` และให้ process เดียวโหลดโมเดล
+3. **คง faster-whisper in-process แต่ลด workers**: ใช้ `RQ_PRELOAD_MODEL=true` เพื่อไม่ให้โหลดซ้ำในแต่ละ job ภายใน process เดียวกัน แต่ยังคงโหลดต่อ process ตามจำนวน worker
+
+สรุป: **ใช้โมเดลเดียวได้** ผ่าน `WHISPER_MODEL` + fallback ใน CloseCaptionConfig; การที่ worker “ไม่โหลดทุกครั้ง” หมายถึงไม่โหลดซ้ำในแต่ละ job ภายใน process เดียว (preload) ไม่ได้หมายถึงโมเดลแชร์ข้าม process — ถ้าต้องการโหลดจริงๆ แค่ครั้งเดียวให้ใช้ whisper API แยกหรือลดจำนวน worker

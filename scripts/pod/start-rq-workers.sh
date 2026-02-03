@@ -9,6 +9,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
+# โหลด LD_LIBRARY_PATH ที่ persist จาก setup-cudnn-env.sh (ถ้ามี)
+if [ -f "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh" ]; then
+    set -a
+    source "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh"
+    set +a
+    echo "✅ Loaded LD_LIBRARY_PATH from scripts/utility/.cudnn-ldpath.sh"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -161,25 +169,45 @@ fi
 
 # จำนวน workers ต่อ 1 GPU (เพื่อให้ GPU utilization สูงขึ้น)
 # 4 workers = optimal สำหรับ RTX 4000 Ada (20GB VRAM) + small model
-# แต่ Pod มี 6 vCPU → ใช้ 3 workers เพื่อไม่ให้ CPU bottleneck
+# แต่ Pod มี 6 vCPU → ใช้ 3 workers เพื่อหลีกเลี่ยง model duplication ใน VRAM
 GPU_WORKERS_PER_GPU=${GPU_WORKERS_PER_GPU:-3}  # ตั้งเป็น 3 เพื่อหลีกเลี่ยง model duplication ใน VRAM
-print_info "GPU Workers per GPU: $GPU_WORKERS_PER_GPU"
+# กี่ตัวต่อ GPU ที่ฟัง priority (CC) — ต้องอย่างน้อย 1 และต้องน้อยกว่าครึ่งหนึ่งเพื่อให้ Transcription เยอะกว่า CC
+GPU_WORKERS_FOR_CC_PER_GPU=${GPU_WORKERS_FOR_CC_PER_GPU:-2}
+if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -lt 1 ]; then
+    GPU_WORKERS_FOR_CC_PER_GPU=1
+    print_warning "GPU_WORKERS_FOR_CC_PER_GPU ต่ำกว่า 1 → ตั้งเป็น 1 (ต้องมี worker สำหรับ CC เสมอ)"
+fi
+# ให้ file-only > CC: CC < ครึ่งหนึ่งของ PER_GPU (ปัดลง)
+MAX_CC=$(( (GPU_WORKERS_PER_GPU - 1) / 2 ))
+if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -gt "$MAX_CC" ]; then
+    GPU_WORKERS_FOR_CC_PER_GPU=$MAX_CC
+    print_warning "GPU_WORKERS_FOR_CC_PER_GPU มากเกินไป → ตั้งเป็น $MAX_CC เพื่อให้ Transcription (file-only) เยอะกว่า CC"
+fi
+if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -gt "$GPU_WORKERS_PER_GPU" ]; then
+    GPU_WORKERS_FOR_CC_PER_GPU=$GPU_WORKERS_PER_GPU
+fi
+FILE_ONLY=$((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU))
+print_info "GPU Workers per GPU: $GPU_WORKERS_PER_GPU (CC+file: $GPU_WORKERS_FOR_CC_PER_GPU, file-only: $FILE_ONLY — Transcription เยอะกว่า CC)"
 
 # Set PYTHONPATH เพื่อให้ import app.* ได้
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 
-# เริ่ม RQ Workers สำหรับแต่ละ GPU (multiple workers per GPU)
-# แต่ละ worker ฟัง priority queue ก่อน แล้วค่อย gpu queue ของตัวเอง
-# เพื่อให้ priority jobs ได้ GPU ทันทีโดยไม่แย่ง GPU0
-# 🚀 OPTIMIZATION: Multiple workers per GPU = concurrent GPU utilization
+# เริ่ม RQ Workers สำหรับแต่ละ GPU
+# - workers 0..(CC-1): ฟัง transcription_priority + transcription_gpu$i (CC + file)
+# - workers CC..(PER_GPU-1): ฟังแค่ transcription_gpu$i (file เท่านั้น — จัดสรรให้ Transcription)
 WORKER_PIDS=()
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "Starting $GPU_WORKERS_PER_GPU RQ Workers for GPU $i..."
+    print_info "Starting $GPU_WORKERS_PER_GPU RQ Workers for GPU $i (CC: $GPU_WORKERS_FOR_CC_PER_GPU, file-only: $((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU)))..."
     
-    # Start multiple workers for this GPU (each in separate process)
     for w in $(seq 0 $((GPU_WORKERS_PER_GPU - 1))); do
         worker_name="worker-gpu${i}-w${w}"
-        print_info "   Starting ${worker_name} (listening to priority + gpu$i)..."
+        if [ "$w" -lt "$GPU_WORKERS_FOR_CC_PER_GPU" ]; then
+            RQ_QUEUES="transcription_priority transcription_gpu$i"
+            print_info "   Starting ${worker_name} (CC+file: priority + gpu$i)..."
+        else
+            RQ_QUEUES="transcription_gpu$i"
+            print_info "   Starting ${worker_name} (file-only: gpu$i)..."
+        fi
         
     # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
     # - LD_LIBRARY_PATH: สำหรับ CUDA/cuDNN libraries
@@ -205,8 +233,7 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
         RQ_DEFAULT_RESULT_TTL="${RQ_DEFAULT_RESULT_TTL:-43200}" \
         rq worker \
         --url "$REDIS_URL" \
-        transcription_priority \
-        transcription_gpu$i \
+        $RQ_QUEUES \
             --name $worker_name \
             --pid /tmp/rq-${worker_name}.pid \
             > /tmp/rq-${worker_name}.log 2>&1 &
@@ -265,15 +292,12 @@ done
 print_success "✅ RQ Workers started successfully!"
 print_info "Workers:"
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "  - GPU $i: transcription_priority + transcription_gpu$i (priority first)"
+    print_info "  - GPU $i: ${GPU_WORKERS_FOR_CC_PER_GPU} CC+file (priority + gpu$i), $((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU)) file-only (gpu$i)"
 done
 print_info "  - Preprocess: ${NUM_PREPROCESS_WORKERS} workers (transcription_preprocess)"
 print_info "  - CPU: ${NUM_CPU_WORKERS} workers (transcription_cpu for aggregator)"
 print_info ""
-print_info "Logs:"
-for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "  - GPU $i: tail -f /tmp/rq-worker-gpu$i.log"
-done
+print_info "Logs: /tmp/rq-worker-gpu{i}-w{w}.log (e.g. tail -f /tmp/rq-worker-gpu0-w0.log)"
 for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
     print_info "  - Preprocess $i: tail -f /tmp/rq-worker-preprocess-$i.log"
 done

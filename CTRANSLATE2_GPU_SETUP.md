@@ -90,7 +90,13 @@ export LD_LIBRARY_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib
 
 ## 🔧 Quick Fix Script
 
-สร้างไฟล์ `scripts/fix-ctranslate2-gpu.sh`:
+**ปัจจุบันใช้ไฟล์เดียว:** `scripts/utility/setup-cudnn-env.sh` (persist LD_LIBRARY_PATH + ตรวจสอบ GPU)
+
+```bash
+./scripts/utility/setup-cudnn-env.sh
+```
+
+ทางเลือกแบบ manual (อ้างอิง) — สร้างไฟล์ `scripts/fix-ctranslate2-gpu.sh`:
 
 ```bash
 #!/bin/bash

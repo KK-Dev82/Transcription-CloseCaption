@@ -22,7 +22,7 @@ import aiofiles
 MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
 # CloseCaption Configuration
-from ..services.close_caption_config import CloseCaptionConfig
+from ..services.close_caption_config import CloseCaptionConfig, get_default_whisper_model_display
 from ..utils.overlap_buffer import OverlapBuffer
 from ..utils.dedupe_text import dedupe_text, dedupe_segments
 from ..utils.thai_postprocess import postprocess_thai_text
@@ -46,6 +46,15 @@ _overlap_buffers: Dict[str, OverlapBuffer] = {}
 
 # Last emitted text per meeting (สำหรับ dedupe)
 _last_emitted_text: Dict[str, str] = {}
+
+
+@router.get("/config")
+async def get_transcription_config():
+    """
+    คืนค่า config การแปลง (โมเดลที่ backend ใช้จริงจาก env)
+    ให้ frontend เรียกเพื่อแสดงและบันทึกชื่อโมเดลได้ถูกต้อง
+    """
+    return {"whisper_model": get_default_whisper_model_display()}
 
 
 class RealtimeChunkRequest(BaseModel):
@@ -306,8 +315,9 @@ async def process_realtime_chunk_endpoint(
         logger.info(f"   Task ID: {task_id}")
         logger.info(f"   Audio URL: {request.audio_url}")
         logger.info(f"   Callback URL: {request.callback_url}")
+        model_size = request.model_size or get_default_whisper_model_display()
         logger.info(f"   Chunk Index: {request.chunk_index}")
-        logger.info(f"   Language: {request.language}, Model: {request.model_size}")
+        logger.info(f"   Language: {request.language}, Model: {model_size}")
         
         # Add background task
         background_tasks.add_task(
@@ -319,7 +329,7 @@ async def process_realtime_chunk_endpoint(
             start_time=request.start_time,
             duration=request.duration,
             language=request.language,
-            model_size=request.model_size
+            model_size=model_size
         )
         
         return RealtimeChunkResponse(
@@ -364,7 +374,7 @@ async def process_live_chunk(
         x_chunk_index: Chunk index (header)
         x_start_time: Start time in seconds (header)
         x_duration: Duration in seconds (header)
-        x_model_size: Model size (optional header, default: "Vinxscribe/biodatlab-whisper-th-medium-faster")
+        x_model_size: Model size (optional header, ไม่ส่ง = ใช้จาก env)
         background_tasks: Background tasks
     
     Returns:
@@ -383,7 +393,7 @@ async def process_live_chunk(
         audio_format = x_audio_format or "s16le"
         sample_rate = int(x_sample_rate) if x_sample_rate and x_sample_rate.isdigit() else 16000
         channels = int(x_channels) if x_channels and x_channels.isdigit() else 1
-        model_size = x_model_size or "Vinxscribe/biodatlab-whisper-th-medium-faster"  # Default model
+        model_size = x_model_size or get_default_whisper_model_display()
         
         # Generate session ID
         session_id = f"live-{meeting_id}-{chunk_index}"
@@ -631,7 +641,7 @@ async def process_live_chunk_background(
                 logger.info(CloseCaptionConfig.get_summary())
             else:
                 # ใช้ default config (ถ้าไม่ได้ส่งมา)
-                model_size = model_size or "Vinxscribe/biodatlab-whisper-th-medium-faster"
+                model_size = model_size or get_default_whisper_model_display()
                 language = "th"
             
             # ✅ Detailed logging: เริ่ม transcription
@@ -772,7 +782,12 @@ async def process_live_chunk_background(
                 "model": model_size,  # ใช้ค่าจากการประมวลผลจริง (ไม่ hardcode)
                 "provider": provider_name,
                 "text": final_text,  # Full text (stripped)
-                "segments": v3_segments
+                "segments": v3_segments,
+                "meta": {
+                    "transcribe_duration_seconds": round(transcribe_duration, 3),
+                    "text_length": len(final_text),
+                    "segments_count": len(v3_segments),
+                },
             }
             
             # ✅ Detailed logging: ส่ง WebSocket event
@@ -870,6 +885,32 @@ async def process_live_chunk_background(
 
 # ✅ In-memory chunk metadata tracking (แทนการแสดง files ที่ถูก cleanup แล้ว)
 _chunk_metadata_store: dict[str, list[dict]] = {}  # meeting_id -> list of chunk metadata
+
+
+@router.get("/chunk-metrics")
+async def get_chunk_metrics(meeting_id: Optional[str] = Query(None, description="Filter by meeting ID")):
+    """
+    ✅ ดูเวลาแปลง Chunk ถึงส่งคำกลับ (และสรุป) สำหรับ Live Caption
+    
+    ข้อมูลมาจาก final event ที่ Worker ส่งกลับผ่าน ws-event
+    ใช้ transcribe_duration_seconds = เวลาใน Worker ตั้งแต่เริ่ม transcription จนส่งผลกลับ
+    
+    Args:
+        meeting_id: Optional meeting ID (เช่น 3a1f78df-8336-4b98-b2d4-0a746c8773e6)
+    
+    Returns:
+        chunks: รายการ chunk พร้อม transcribe_duration_seconds, received_at
+        summary: ค่าเฉลี่ย/ min/ max ของเวลาแปลง (วินาที)
+    """
+    try:
+        from ..utils.live_chunk_metrics import get_metrics
+        return get_metrics(meeting_id=meeting_id)
+    except Exception as e:
+        logger.error(f"❌ Error getting chunk metrics: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"เกิดข้อผิดพลาดในการดึง chunk metrics: {str(e)}"
+        )
 
 
 @router.get("/chunk-metadata")

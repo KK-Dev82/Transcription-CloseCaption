@@ -6,7 +6,7 @@ SSH_USER="root"
 SSH_HOME="/root"
 AUTHORIZED_KEYS="${SSH_HOME}/.ssh/authorized_keys"
 SSHD_CONFIG="/etc/ssh/sshd_config"
-KEY_CONTENT='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICsF/zoSGze7Ty995PGsVQRK65N4c3ZtW0b1pWz+F+tu goataog@gmail.com'
+KEY_CONTENT='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAx3EeF3VBJ7ZIio1r3j7dD0Xe06DDv5Z7ekcG66YDpB goataog@gmail.com'
 
 # ===== ฟังก์ชันช่วยเหลือ =====
 err() { echo "ERROR: $*" >&2; exit 1; }

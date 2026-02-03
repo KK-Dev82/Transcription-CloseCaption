@@ -35,6 +35,8 @@ _WINDOW_SECONDS = float(os.getenv("FE_CC_WINDOW_SECONDS", "3.0"))          # ✅
 _STEP_SECONDS = float(os.getenv("FE_CC_STEP_SECONDS", "1.0"))              # ✅ เพิ่มจาก 0.5 เป็น 1.0 เพื่อลด requests และรอประโยคสมบูรณ์
 _MIN_WINDOW_SECONDS = float(os.getenv("FE_CC_MIN_WINDOW_SECONDS", "2.0"))  # ✅ เพิ่มจาก 1.2 เป็น 2.0 เพื่อให้มีเสียงพอสำหรับประโยค
 _SILENCE_THRESHOLD_SECONDS = float(os.getenv("FE_CC_SILENCE_THRESHOLD", "0.8"))  # ✅ รอ silence 0.8s ก่อนส่ง final (sentence boundary)
+# Server → client keepalive (แก้ 1006 abnormal close เมื่อ proxy ตัด WS ถ้า server เงียบ)
+_UPLINK_KEEPALIVE_SECONDS = float(os.getenv("FE_CC_UPLINK_KEEPALIVE_SECONDS", "15"))
 
 _last_emitted_text_by_meeting: dict[str, str] = {}
 _last_silence_time_by_meeting: dict[str, float] = {}  # ✅ เก็บเวลาที่มีเสียงล่าสุด
@@ -599,11 +601,13 @@ async def websocket_audio_ingest_endpoint(
                         if whisper_service is None:
                             continue
                         logger.info(f"[WS ingest] 🎤 Starting transcription: audio_path={tmp_path}, model={model_size}, language={language}, chunk_size={len(chunk)} bytes")
-                        result = whisper_service.transcribe_file(
-                            audio_path=tmp_path,
-                            model_size=model_size,
-                            language=language,
-                            use_thai_processor=(language == "th")
+                        # Non-blocking: ย้าย transcription ไป thread เพื่อไม่ block event loop (แก้ 1011 ping timeout)
+                        result = await asyncio.to_thread(
+                            whisper_service.transcribe_file,
+                            tmp_path,
+                            model_size,
+                            language,
+                            use_thai_processor=(language == "th"),
                         )
                         text = (result.get("text") or "").strip()
                         segments = result.get("segments", [])
@@ -617,16 +621,18 @@ async def websocket_audio_ingest_endpoint(
                 if not text:
                     continue
 
-                # Postprocess
+                # Postprocess (non-blocking: PyThaiNLP หนัก)
                 if CloseCaptionConfig.POSTPROCESS_ENABLED and language == "th":
                     try:
-                        text = postprocess_thai_text(
+                        text = await asyncio.to_thread(
+                            postprocess_thai_text,
                             text,
                             normalize=CloseCaptionConfig.POSTPROCESS_NORMALIZE,
                             fix_words=True,
                             word_segmentation=False,  # FE overlay จะจัดรูปแบบเอง
-                            improve_spacing=True  # ✅ เพิ่มการเว้นวรรค (ตัวเลข, ชื่อ-นามสกุล, คำติดกัน)
-                        ).strip()
+                            improve_spacing=True,  # ✅ เพิ่มการเว้นวรรค
+                        )
+                        text = text.strip()
                         logger.debug(f"[WS ingest] 🔧 Postprocessed text: {text[:50]}")
                     except Exception as e:
                         logger.warning(f"[WS ingest] ⚠️ Postprocess error: {e}")
@@ -636,11 +642,17 @@ async def websocket_audio_ingest_endpoint(
                     logger.debug(f"[WS ingest] ⚠️  No text after postprocess, skipping")
                     continue
 
-                # ✅ ใช้ dedupe เพื่อหาข้อความใหม่ (ไม่ซ้ำกับที่ส่งไปแล้ว)
+                # ✅ ใช้ dedupe เพื่อหาข้อความใหม่ (ไม่ซ้ำกับที่ส่งไปแล้ว) (non-blocking)
                 last_emitted = _last_emitted_text_by_meeting.get(meeting_id, "")
                 if CloseCaptionConfig.DEDUPE_ENABLED:
                     try:
-                        new_text = dedupe_text(text, last_emitted, max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH).strip()
+                        new_text = await asyncio.to_thread(
+                            dedupe_text,
+                            text,
+                            last_emitted,
+                            max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH,
+                        )
+                        new_text = new_text.strip()
                     except Exception:
                         new_text = text
                 else:
@@ -675,7 +687,30 @@ async def websocket_audio_ingest_endpoint(
             except Exception as e:
                 logger.warning(f"[WS ingest] infer_loop error meeting_id={meeting_id}: {e}")
 
+    async def uplink_keepalive_loop():
+        """ส่ง status packet เป็นระยะ เพื่อไม่ให้ proxy ตัด WS (แก้ 1006 abnormal close)"""
+        while not stop_event.is_set():
+            try:
+                await asyncio.sleep(_UPLINK_KEEPALIVE_SECONDS)
+                if stop_event.is_set():
+                    break
+                await _safe_send_json(websocket, {
+                    "type": "status",
+                    "meeting_id": meeting_id,
+                    "session_id": producer_session_id,
+                    "status": "keepalive",
+                    "message": "Connection active",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.debug(f"[WS ingest] 📤 Uplink keepalive sent: meeting_id={meeting_id}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[WS ingest] Uplink keepalive error: {e}")
+                break
+
     infer_task = asyncio.create_task(infer_loop())
+    keepalive_task = asyncio.create_task(uplink_keepalive_loop())
 
     try:
         while True:
@@ -751,6 +786,10 @@ async def websocket_audio_ingest_endpoint(
         stop_event.set()
         try:
             infer_task.cancel()
+        except Exception:
+            pass
+        try:
+            keepalive_task.cancel()
         except Exception:
             pass
         _release_producer_lock_if_owner(meeting_id, producer_session_id)

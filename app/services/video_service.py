@@ -59,9 +59,15 @@ class VideoService:
             logger.info(f"🎬 Extracting audio from: {video_path}")
             logger.info(f"   Output: {output_path}")
             
+            # จำกัด thread ของ ffmpeg เพื่อไม่ให้ extract ไปกิน CPU เต็ม (เหลือให้ GPU / workers อื่น)
+            # สำหรับ video 30 นาที: 2-4 threads มักพอ; ปรับได้ผ่าน env FFMPEG_EXTRACT_THREADS
+            max_threads = int(os.environ.get("FFMPEG_EXTRACT_THREADS", "4"))
+            max_threads = max(1, min(max_threads, 16))
+            
             # ใช้ subprocess ตรงๆ (เร็วและคุม args ชัดเจนกว่า)
             cmd = [
                 "ffmpeg", "-y",  # -y = overwrite output
+                "-threads", str(max_threads),
                 "-i", str(video_file),
                 "-vn",  # no video
                 "-ac", "1",  # mono

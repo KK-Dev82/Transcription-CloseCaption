@@ -513,6 +513,79 @@ async def check_task_in_queue(task_id: str):
                 }
                 result["recommendations"].append("❌ ไฟล์ไม่พบ - Task อาจจะ fail แล้ว")
         
+        # 5. ตรวจสอบ RQ jobs ที่เกี่ยวกับ task นี้ (ถ้าใช้ Redis Queue)
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            from rq.job import Job
+            from rq.registry import StartedJobRegistry
+            rq_service = get_redis_queue_service()
+            conn = rq_service.redis_conn
+            rq_jobs = []
+            all_queues = (
+                list(rq_service.queues.values()) +
+                [rq_service.priority_queue, rq_service.cpu_queue, rq_service.preprocess_queue]
+            )
+            for q in all_queues:
+                for jid in q.job_ids:
+                    try:
+                        job = Job.fetch(jid, connection=conn)
+                        jid_str = jid.decode() if isinstance(jid, bytes) else jid
+                        match = task_id in jid_str
+                        if not match and job.args and len(job.args) > 0:
+                            a0 = job.args[0]
+                            a0_str = a0.decode("utf-8", errors="replace") if isinstance(a0, bytes) else a0
+                            match = a0_str == task_id
+                        if match:
+                            rq_jobs.append({
+                                "queue": q.name,
+                                "job_id": jid_str,
+                                "status": job.get_status(),
+                            })
+                    except Exception:
+                        pass
+                try:
+                    reg = StartedJobRegistry(queue=q, connection=conn)
+                    for jid in reg.get_job_ids():
+                        jid_str = jid.decode() if isinstance(jid, bytes) else jid
+                        if any(j["job_id"] == jid_str for j in rq_jobs):
+                            continue
+                        if task_id in jid_str:
+                            rq_jobs.append({"queue": q.name, "job_id": jid_str, "status": "started"})
+                        else:
+                            try:
+                                job = Job.fetch(jid, connection=conn)
+                                if job.args and len(job.args) > 0:
+                                    a0 = job.args[0]
+                                    a0_str = a0.decode("utf-8", errors="replace") if isinstance(a0, bytes) else a0
+                                    if a0_str == task_id:
+                                        rq_jobs.append({"queue": q.name, "job_id": jid_str, "status": job.get_status()})
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            result["rq_jobs"] = rq_jobs
+            status = result.get("storage", {}).get("status", "")
+            if rq_jobs:
+                started = [j for j in rq_jobs if j.get("status") == "started"]
+                queued = [j for j in rq_jobs if j.get("status") == "queued"]
+                if started:
+                    result["summary"] = "กำลังมีการประมวลผลอยู่ (มี job อยู่ในสถานะ started)"
+                elif queued:
+                    result["summary"] = f"ติดคิวรอทำ — อยู่ในคิว: {', '.join(set(j['queue'] for j in queued))}"
+                else:
+                    result["summary"] = "มี RQ jobs ที่เกี่ยวข้อง (ดู rq_jobs)"
+            elif status == "completed":
+                result["summary"] = "Task ถอดข้อความเสร็จแล้ว"
+            elif status == "failed":
+                result["summary"] = "Task ล้มเหลว (ดู error_message ใน storage)"
+            elif status in ("processing", "queued", "pending"):
+                result["summary"] = "Task อยู่ในสถานะ " + status + " แต่ไม่พบ job ใน RQ — อาจติดคิว FE-CC / preprocess หรือ worker ยังไม่รับงาน"
+            else:
+                result["summary"] = "ดูสถานะจาก storage"
+        except Exception as e:
+            result["rq_jobs"] = []
+            result["rq_jobs_error"] = str(e)
+        
         return result
         
     except Exception as e:

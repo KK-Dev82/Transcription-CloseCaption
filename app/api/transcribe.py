@@ -102,7 +102,7 @@ class TranscriptionRequest(BaseModel):
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     language: str = "th"
-    model_size: str = "Vinxscribe/biodatlab-whisper-th-medium-faster"
+    model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก env (WHISPER_MODEL)
     chunk_duration: Optional[int] = None
     use_chunking: bool = False
     callback_url: Optional[str] = None
@@ -237,8 +237,12 @@ async def start_transcription(request: TranscriptionRequest):
                 detail=f"ไม่พบไฟล์: {file_path}"
             )
         
+        # ใช้ default model จาก env เมื่อ frontend ไม่ส่ง model_size
+        from app.services.close_caption_config import get_default_whisper_model_display
+        model_size = request.model_size or get_default_whisper_model_display()
+        
         # Log request for debugging
-        logger.info(f"📥 Received transcription request: file_path={file_path}, language={request.language}, model_size={request.model_size}")
+        logger.info(f"📥 Received transcription request: file_path={file_path}, language={request.language}, model_size={model_size}")
         
         # สร้าง task_id
         task_id = str(uuid.uuid4())
@@ -249,7 +253,7 @@ async def start_transcription(request: TranscriptionRequest):
             status="queued",
             file_path=file_path,
             language=request.language,
-            model_size=request.model_size,
+            model_size=model_size,
             created_at=datetime.now(timezone.utc),
             callback_url=request.callback_url
         )
@@ -261,7 +265,7 @@ async def start_transcription(request: TranscriptionRequest):
             "progress": 0,
             "file_path": file_path,
             "language": request.language,
-            "model_size": request.model_size,
+            "model_size": model_size,
             "full_text": "",
             "chunks": [],
             "created_at": task.created_at.isoformat(),
@@ -301,7 +305,7 @@ async def start_transcription(request: TranscriptionRequest):
                     task_id=task_id,
                     file_path=file_path,
                     language=request.language,
-                    model_size=request.model_size,
+                    model_size=model_size,
                     chunk_duration=chunk_duration
                 )
                 
@@ -337,7 +341,7 @@ async def start_transcription(request: TranscriptionRequest):
                     task_id=task_id,
                     file_path=file_path,
                     language=request.language,
-                    model_size=request.model_size,
+                    model_size=model_size,
                     chunk_duration=request.chunk_duration or 150,
                     use_chunking=request.use_chunking
                 )
@@ -362,7 +366,7 @@ async def start_transcription(request: TranscriptionRequest):
                     task_id=task_id,
                     file_path=file_path,
                     language=request.language,
-                    model_size=request.model_size,
+                    model_size=model_size,
                     chunk_duration=request.chunk_duration or 150,
                     use_chunking=request.use_chunking
                 )

@@ -25,6 +25,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# โหลด LD_LIBRARY_PATH ที่ persist จาก setup-cudnn-env.sh (ถ้ามี)
+if [ -f "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh" ]; then
+    set -a
+    source "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh"
+    set +a
+    print_status "Loaded LD_LIBRARY_PATH from .cudnn-ldpath.sh"
+fi
+
 # 1. หยุด Main API
 print_status "Stopping Main API..."
 if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
@@ -50,17 +58,29 @@ print_status "Starting Main API..."
 if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then
     print_warning "⚠️  Main API already running"
 else
+    # โหลด .env.runpod ถ้ามี (ให้ WHISPER_PROVIDER/MODEL ตรงกับ production)
+    if [ -f "$PROJECT_ROOT/.env.runpod" ]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$PROJECT_ROOT/.env.runpod"
+        set +a
+        print_status "Loaded .env.runpod"
+    fi
+
     export PYTHONPATH="$PROJECT_ROOT"
     export RABBITMQ_HOST=${RABBITMQ_HOST:-178.128.105.100}
     export RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
     export RABBITMQ_USER=${RABBITMQ_USER:-senate}
     export RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-qP2VtHz6fAX4xDksEpMrLT}
-    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
+    export WHISPER_PROVIDER=${WHISPER_PROVIDER:-faster-whisper}
     export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
     export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
-    
+
+    # WebSocket keepalive (แก้ 1011 ping timeout / 1006 abnormal close)
+    UVICORN_WS_PING_INTERVAL=${UVICORN_WS_PING_INTERVAL:-20}
+    UVICORN_WS_PING_TIMEOUT=${UVICORN_WS_PING_TIMEOUT:-60}
+
     # Note: Using UTC timezone (datetime.now(timezone.utc)) - frontend handles conversion
-    # FIX: เพิ่ม PYTHONPATH ใน env เพื่อให้ import app.* ได้
     nohup env PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" \
              RABBITMQ_HOST="${RABBITMQ_HOST}" \
              RABBITMQ_PORT="${RABBITMQ_PORT}" \
@@ -69,7 +89,10 @@ else
              WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
              WHISPER_MODEL="${WHISPER_MODEL}" \
              WHISPER_DEVICE="${WHISPER_DEVICE}" \
-             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 > /tmp/main-api.log 2>&1 & disown
+             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 \
+             --ws-ping-interval "$UVICORN_WS_PING_INTERVAL" \
+             --ws-ping-timeout "$UVICORN_WS_PING_TIMEOUT" \
+             > /tmp/main-api.log 2>&1 & disown
     sleep 5
     
     # Check if process is still running (not crashed)

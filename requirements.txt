@@ -44,7 +44,7 @@ ctranslate2==4.4.0
 #     - ถ้า transcription ช้า (>2 นาที สำหรับ 30 นาที audio): ตรวจสอบว่า workers ใช้ GPU จริงหรือไม่
 #     - ถ้า LD_LIBRARY_PATH ไม่ถูกต้อง: Workers อาจ fallback เป็น CPU (ช้ามาก!)
 #     - วิธีตรวจสอบ: nvidia-smi --query-compute-apps (ควรเห็น processes เมื่อ transcription ทำงาน)
-#     - ใช้สคริปต์: bash scripts/fix-ctranslate2-gpu.sh
+#     - ใช้สคริปต์: bash scripts/utility/setup-cudnn-env.sh
 # torch และ torchaudio ใช้จาก base image (2.2.0+cu121)
 # ไม่ต้องติดตั้งใหม่ เพื่อหลีกเลี่ยง conflict
 # torch==2.2.0+cu121  (ใช้จาก base image)

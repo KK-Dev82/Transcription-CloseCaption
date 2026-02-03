@@ -6,6 +6,28 @@ Close Caption Configuration - Profile: TH-CC-RT v1
 import os
 from typing import Dict, Optional
 
+
+def get_default_whisper_model() -> str:
+    """คืนค่า default whisper model จาก env (raw: อาจเป็น models--org--name หรือ org/name)"""
+    return os.getenv("CC_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "small")
+
+
+def whisper_model_to_display(raw: str) -> str:
+    """แปลงค่า model จาก env เป็นรูปแบบแสดง (org/name) สำหรับ API และ frontend"""
+    if not raw:
+        return raw
+    if raw.startswith("models--"):
+        parts = raw.replace("models--", "", 1).split("--", 1)
+        if len(parts) == 2:
+            return f"{parts[0]}/{parts[1]}"
+    return raw
+
+
+def get_default_whisper_model_display() -> str:
+    """คืนค่า default whisper model ในรูปแบบแสดง (org/name) สำหรับ API response และ frontend"""
+    return whisper_model_to_display(get_default_whisper_model())
+
+
 class CloseCaptionConfig:
     """
     Configuration สำหรับ Close Caption (Profile: TH-CC-RT v1)
@@ -17,8 +39,8 @@ class CloseCaptionConfig:
     - Postprocess: ปรับปรุงข้อความภาษาไทย
     """
     
-    # Model Configuration
-    MODEL_SIZE = os.getenv("CC_MODEL_SIZE", "small")  # small สำหรับ realtime
+    # Model Configuration (ใช้ WHISPER_MODEL เมื่อ CC_MODEL_SIZE ไม่ได้ตั้ง → โมเดลเดียวทั้ง transcription และ close-caption)
+    MODEL_SIZE = get_default_whisper_model()
     DEVICE = os.getenv("CC_DEVICE", os.getenv("WHISPER_DEVICE", "auto"))
     COMPUTE_TYPE = os.getenv("CC_COMPUTE_TYPE", "float16")  # float16 สำหรับ GPU
     

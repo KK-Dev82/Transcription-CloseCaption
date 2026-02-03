@@ -417,7 +417,7 @@ else
     echo ""
     print_info "Troubleshooting:"
     echo "  1. Check LD_LIBRARY_PATH: echo \$LD_LIBRARY_PATH"
-    echo "  2. Run fix script: bash scripts/utility/fix-ctranslate2-gpu.sh"
+    echo "  2. Run setup: bash scripts/utility/setup-cudnn-env.sh"
     echo "  3. Reinstall ctranslate2: pip3 uninstall -y ctranslate2 && pip3 install ctranslate2==4.4.0 --no-cache-dir"
     exit 1
 fi

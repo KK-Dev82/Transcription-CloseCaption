@@ -1,7 +1,7 @@
 # 🎙️ Transcription Service
 
 บริการ Transcription สำหรับวิดีโอ/เสียง โดยใช้ Whisper และ faster-whisper พร้อม Multi-GPU Support
-
+apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt && ./scripts/utility/setup-cudnn-env.sh && ./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh 
 ---
 
 ## 📦 Prerequisites (สิ่งที่ต้องมีก่อนเริ่ม)
@@ -182,20 +182,11 @@ pip install -r requirements.txt
 ⚠️ **สำคัญ**: ขั้นตอนนี้แนะนำให้ทำเพื่อตรวจสอบว่า GPU/CUDA ทำงานได้ถูกต้อง
 
 ```bash
-# วิธีที่ 1: ใช้ fix-ctranslate2-gpu.sh (แนะนำ - มีการตรวจสอบ CUDA support)
-bash scripts/utility/fix-ctranslate2-gpu.sh
-
-# หรือ วิธีที่ 2: ใช้ setup-cudnn-env.sh (เบื้องต้น - แค่ตั้งค่า environment)
-bash scripts/pod/setup-cudnn-env.sh
+# ตั้งค่า cuDNN/CTranslate2 (persist LD_LIBRARY_PATH + ตรวจสอบ GPU)
+bash scripts/utility/setup-cudnn-env.sh
 ```
 
-**หมายเหตุ**: 
-- `fix-ctranslate2-gpu.sh` จะ:
-  - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ cuDNN และ CTranslate2
-  - ✅ ตรวจสอบ cuDNN libraries
-  - ✅ ตรวจสอบ CTranslate2 CUDA support
-  - ✅ ทดสอบ WhisperModel กับ CUDA
-- `setup-cudnn-env.sh` จะแค่ตั้งค่า `LD_LIBRARY_PATH` เท่านั้น
+**หมายเหตุ**: `setup-cudnn-env.sh` จะ ตั้งค่าและ persist `LD_LIBRARY_PATH` ตรวจสอบ cuDNN libraries และทดสอบ ctranslate2/faster-whisper
 
 ### 5. Start Services
 
@@ -651,16 +642,11 @@ bash scripts/utility/test-ctranslate2-gpu.sh
 
 **วิธีแก้ไข**:
 
-1. **ใช้ fix-ctranslate2-gpu.sh (แนะนำ)**:
+1. **ใช้ setup-cudnn-env.sh**:
    ```bash
-   # Script นี้จะตรวจสอบและตั้งค่าทุกอย่างให้อัตโนมัติ
-   bash scripts/utility/fix-ctranslate2-gpu.sh
+   bash scripts/utility/setup-cudnn-env.sh
    ```
-   Script นี้จะ:
-   - ✅ ตั้งค่า `LD_LIBRARY_PATH` สำหรับ cuDNN และ CTranslate2
-   - ✅ ตรวจสอบ cuDNN libraries
-   - ✅ ตรวจสอบ CTranslate2 CUDA support
-   - ✅ ทดสอบ WhisperModel กับ CUDA
+   Script นี้จะ: ตั้งค่าและ persist `LD_LIBRARY_PATH` ตรวจสอบ cuDNN libraries และทดสอบ ctranslate2/faster-whisper
 
 2. ตรวจสอบ cuDNN installation (ถ้าต้องการตรวจสอบเอง):
    ```bash
@@ -701,11 +687,7 @@ bash scripts/utility/test-ctranslate2-gpu.sh
 
 5. ตั้งค่า GPU/CUDA (แนะนำ):
    ```bash
-   # ใช้ fix-ctranslate2-gpu.sh (แนะนำ - มีการตรวจสอบ CUDA support)
-   bash scripts/utility/fix-ctranslate2-gpu.sh
-   
-   # หรือใช้ setup-cudnn-env.sh (เบื้องต้น)
-   bash scripts/pod/setup-cudnn-env.sh
+   bash scripts/utility/setup-cudnn-env.sh
    ```
 
 6. Restart Services:
@@ -776,7 +758,7 @@ CUDNN_DISABLE=0
 - [ ] **ติดตั้ง FFmpeg**: `apt-get update && apt-get install -y ffmpeg` (ใน container ไม่ต้องใช้ sudo)
 - [ ] **ตรวจสอบ FFmpeg**: `ffmpeg -version`
 - [ ] **ติดตั้ง Python Dependencies**: `pip install -r requirements.txt`
-- [ ] **ตั้งค่า GPU/CUDA** (แนะนำ): `bash scripts/utility/fix-ctranslate2-gpu.sh`
+- [ ] **ตั้งค่า GPU/CUDA** (แนะนำ): `bash scripts/utility/setup-cudnn-env.sh`
 - [ ] **ทดสอบ CTranslate2 และ GPU**: `bash scripts/utility/test-ctranslate2-gpu.sh` (ตรวจสอบว่าทุกอย่างทำงานได้)
 - [ ] **Start Services**: `bash scripts/pod/start-pod.sh`
 - [ ] **Start RQ Workers**: `bash scripts/pod/start-rq-workers.sh` (หรือ `restart-rq-workers.sh` สำหรับ restart)

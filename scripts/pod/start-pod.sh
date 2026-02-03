@@ -28,7 +28,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN libraries
+# โหลด LD_LIBRARY_PATH ที่ persist จาก setup-cudnn-env.sh (ถ้ามี)
+if [ -f "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh" ]; then
+    set -a
+    # shellcheck source=../utility/.cudnn-ldpath.sh
+    source "$PROJECT_ROOT/scripts/utility/.cudnn-ldpath.sh"
+    set +a
+    print_success "✅ Loaded LD_LIBRARY_PATH from scripts/utility/.cudnn-ldpath.sh"
+fi
+
+# ตั้งค่า LD_LIBRARY_PATH สำหรับ cuDNN libraries (fallback ถ้ายังไม่มี)
 # PyTorch 2.2.0 มี cuDNN libraries อยู่ใน nvidia/cudnn/lib
 CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
 if [ -d "$CUDNN_LIB_PATH" ]; then

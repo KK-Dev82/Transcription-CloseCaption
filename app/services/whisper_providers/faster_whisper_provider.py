@@ -286,12 +286,25 @@ class FasterWhisperProvider(WhisperProvider):
             )
             self._model_cache[cache_key] = model
             
-            # FIX: ตรวจสอบ device จริงที่ model ใช้
-            # faster-whisper (CTranslate2) model มี device attribute
+            # FIX: ตรวจสอบ device จริง — ถ้าตั้ง cuda แต่รันบน CPU = ผิดปกติ (CPU/RAM ทำงานแทน GPU)
             if hasattr(model, 'model') and hasattr(model.model, 'device'):
-                actual_device = model.model.device
+                actual_device = str(getattr(model.model, 'device', '')).lower()
                 logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
-                logger.info(f"[Faster Whisper]    ACTUAL model.device={actual_device} (ตรวจสอบว่าใช้ GPU จริงหรือไม่)")
+                logger.info(f"[Faster Whisper]    ACTUAL model.device={actual_device}")
+                # CTranslate2: device คือ "cpu" หรือ "cuda"
+                if current_device.startswith('cuda') and actual_device == 'cpu':
+                    logger.error(
+                        "[Faster Whisper] ❌ WHISPER_DEVICE=cuda but model is on CPU! "
+                        "CPU/RAM will do the work instead of GPU. Check: LD_LIBRARY_PATH (cuDNN/CUDA), "
+                        "CUDA_VISIBLE_DEVICES, and GPU worker logs."
+                    )
+                    if os.getenv('WHISPER_FAIL_IF_CPU', '0') == '1':
+                        raise RuntimeError(
+                            "Model loaded on CPU but WHISPER_DEVICE=cuda. "
+                            "Set WHISPER_FAIL_IF_CPU=0 to allow (slow) CPU mode, or fix CUDA/cuDNN."
+                        )
+                elif current_device.startswith('cuda') and actual_device != 'cuda':
+                    logger.warning(f"[Faster Whisper] ⚠️  Expected cuda but actual device: {actual_device}")
             else:
                 logger.info(f"[Faster Whisper] ✅ Model loaded: {cache_key}")
                 logger.warning(f"[Faster Whisper]    ⚠️  Cannot detect actual device from model (may fallback to CPU)")

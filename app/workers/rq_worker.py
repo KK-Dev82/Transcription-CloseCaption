@@ -471,6 +471,15 @@ def process_transcription_job(
             import time
             from datetime import datetime, timezone
             t_chunk_transcribe_start = time.time()
+            # วัด RAM/CPU ก่อนเริ่ม GPU chunk (สำหรับตรวจสอบการใช้งานทรัพยากร)
+            ram_mb_chunk_before = cpu_chunk_before = None
+            try:
+                import psutil
+                proc = psutil.Process()
+                ram_mb_chunk_before = proc.memory_info().rss / (1024 * 1024)
+                cpu_chunk_before = psutil.cpu_percent(interval=0.1)
+            except Exception:
+                pass
             logger.info(f"📦 Processing single chunk (chunk job)")
             # ใช้ provider.transcribe() (async) แทน transcribe() ที่ไม่มี
             transcription_result = loop.run_until_complete(
@@ -492,6 +501,16 @@ def process_transcription_job(
             }
             logger.info(f"📊 Chunk Phase Timings:")
             logger.info(f"   Transcribe: {chunk_transcribe_time:.2f}s")
+            # วัด RAM/CPU หลังจบ chunk transcription
+            try:
+                import psutil
+                proc = psutil.Process()
+                ram_mb_chunk_after = proc.memory_info().rss / (1024 * 1024)
+                cpu_chunk_after = psutil.cpu_percent(interval=0.1)
+                if ram_mb_chunk_before is not None and ram_mb_chunk_after is not None:
+                    logger.info(f"📊 Chunk resources: RAM {ram_mb_chunk_after:.1f} MB (delta: {ram_mb_chunk_after - ram_mb_chunk_before:+.1f} MB) | CPU before/after: {cpu_chunk_before or '-'}% / {cpu_chunk_after or '-'}%")
+            except Exception:
+                pass
             
             # Convert TranscriptionResult to dict
             if hasattr(transcription_result, 'text'):
@@ -674,6 +693,16 @@ def process_transcription_job(
             phase_timings = {}
             t_aggregator_start = time.time()
             phase_timings['t_aggregator_start'] = datetime.now(timezone.utc).isoformat()
+            
+            # วัด RAM/CPU ก่อนเริ่ม aggregator (สำหรับตรวจสอบการใช้งานทรัพยากร)
+            ram_mb_agg_before = cpu_agg_before = None
+            try:
+                import psutil
+                proc = psutil.Process()
+                ram_mb_agg_before = proc.memory_info().rss / (1024 * 1024)
+                cpu_agg_before = psutil.cpu_percent(interval=0.1)
+            except Exception:
+                pass
             
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
@@ -1089,6 +1118,17 @@ def process_transcription_job(
                             # Note: Chunk transcription time ไม่รวมใน total_end_to_end เพราะมันทำงาน parallel
                             logger.info(f"   (Chunk transcription runs in parallel, not included in breakdown)")
             
+            # วัด RAM/CPU หลังจบ aggregator
+            try:
+                import psutil
+                proc = psutil.Process()
+                ram_mb_agg_after = proc.memory_info().rss / (1024 * 1024)
+                cpu_agg_after = psutil.cpu_percent(interval=0.1)
+                if ram_mb_agg_before is not None and ram_mb_agg_after is not None:
+                    logger.info(f"📊 Aggregator resources: RAM {ram_mb_agg_after:.1f} MB (delta: {ram_mb_agg_after - ram_mb_agg_before:+.1f} MB) | CPU before/after: {cpu_agg_before or '-'}% / {cpu_agg_after or '-'}%")
+            except Exception:
+                pass
+            
             # Cleanup Redis keys หลัง aggregator เสร็จ (ลด memory usage)
             logger.info(f"🧹 Cleaning up Redis keys for {main_task_id}...")
             try:
@@ -1199,36 +1239,69 @@ def process_transcription_job(
         
     except Exception as e:
         logger.error(f"❌ RQ Worker: Error processing job {task_id}: {e}", exc_info=True)
+
+        # FIX: เมื่อ CHUNK job ล้มเหลว ต้อง decr inflight + incr done_chunks + บันทึก chunk ว่าง
+        # มิฉะนั้น inflight ค้าง → ไม่มี chunk ถัดไปถูก enqueue และ aggregator รอไม่จบ
+        if "_chunk_" in task_id:
+            try:
+                main_task_id = task_id.rsplit("_chunk_", 1)[0]
+                chunk_index = int(task_id.rsplit("_chunk_", 1)[1])
+                conn = get_redis_connection(decode_responses=True)
+                ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+                # บันทึก chunk result ว่าง (ให้ aggregator merge ต่อได้)
+                chunk_result_key = f"task:{main_task_id}:chunk:{chunk_index}"
+                empty_result = json.dumps({"text": "", "segments": [], "processing_time": 0, "error": str(e)})
+                conn.setex(chunk_result_key, ttl_seconds, empty_result)
+                # incr done_chunks เพื่อให้ aggregator นับครบ
+                done_key = f"task:{main_task_id}:done_chunks"
+                conn.incr(done_key)
+                conn.expire(done_key, ttl_seconds)
+                # decr inflight เพื่อให้ chunk ถัดไปถูก enqueue ได้
+                inflight_key = f"task:{main_task_id}:inflight_chunks"
+                guard_key = f"task:{main_task_id}:enqueued:{chunk_index}"
+                try:
+                    from app.workers.lua_scripts import DECR_INFLIGHT_SCRIPT
+                    decr_script = conn.register_script(DECR_INFLIGHT_SCRIPT)
+                    decr_script(keys=[inflight_key, guard_key], args=[ttl_seconds])
+                except Exception as decr_err:
+                    try:
+                        conn.decr(inflight_key)
+                        conn.expire(inflight_key, ttl_seconds)
+                    except Exception:
+                        pass
+                logger.warning(f"⚠️ Chunk {chunk_index} failed; recorded empty result and freed inflight so next chunk can run")
+            except Exception as chunk_cleanup_err:
+                logger.error(f"❌ Failed to cleanup chunk on error: {chunk_cleanup_err}", exc_info=True)
         
-        # บันทึก error status และส่ง WebSocket notification
+        # บันทึก error status และส่ง WebSocket notification (สำหรับ full job ไม่ใช่ chunk)
         try:
             from datetime import datetime, timezone
             # os already imported at module level (line 8)
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            
-            if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
-                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                storage.save_transcription(task_id, task_data)
-            else:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
-                task_data = json_storage.load_transcription(task_id) or {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                json_storage.save_transcription(task_id, task_data)
-            
-            # ส่ง failure callback (webhook + WebSocket)
-            loop = get_event_loop()
-            loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
+            # สำหรับ chunk job ไม่ต้อง mark main task เป็น failed (เรา record empty chunk แล้ว)
+            if "_chunk_" not in task_id:
+                if storage_type == 'sqlite':
+                    from app.utils.sqlite_storage import SQLiteStorage
+                    storage = SQLiteStorage()
+                    task_data = storage.load_transcription(task_id, skip_migration=True) or {}
+                    task_data["status"] = "failed"
+                    task_data["error_message"] = str(e)
+                    task_data["current_stage"] = "failed"
+                    task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                    task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    storage.save_transcription(task_id, task_data)
+                else:
+                    from app.utils.json_storage import JSONStorage
+                    json_storage = JSONStorage()
+                    task_data = json_storage.load_transcription(task_id) or {}
+                    task_data["status"] = "failed"
+                    task_data["error_message"] = str(e)
+                    task_data["current_stage"] = "failed"
+                    task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                    json_storage.save_transcription(task_id, task_data)
+                # ส่ง failure callback (webhook + WebSocket)
+                loop = get_event_loop()
+                loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
         except Exception as save_error:
             logger.error(f"❌ Failed to save error status: {save_error}")
         
@@ -1672,9 +1745,20 @@ def process_live_chunk_job(
     import time
     job_start_time = time.time()
     
-    # ใช้ default model ถ้าไม่ได้ระบุ
+    # วัด RAM/CPU ก่อนเริ่ม job (สำหรับตรวจสอบการใช้งานทรัพยากร)
+    ram_mb_before = cpu_percent_before = None
+    try:
+        import psutil
+        proc = psutil.Process()
+        ram_mb_before = proc.memory_info().rss / (1024 * 1024)
+        cpu_percent_before = psutil.cpu_percent(interval=0.1)
+    except Exception as e:
+        logger.debug(f"Could not get initial resource stats: {e}")
+    
+    # ใช้ default model จาก env (โมเดลเดียวกับ WHISPER_MODEL/CC_MODEL_SIZE)
     if not model_size:
-        model_size = "Vinxscribe/biodatlab-whisper-th-medium-faster"
+        from app.services.close_caption_config import get_default_whisper_model, whisper_model_to_display
+        model_size = whisper_model_to_display(get_default_whisper_model())
     
     logger.info(f"🚀 RQ Worker: Starting live chunk job {session_id}")
     logger.info(f"   Meeting: {meeting_id}, Chunk: {chunk_index}, Start: {start_time}s, Duration: {duration}s")
@@ -1705,15 +1789,31 @@ def process_live_chunk_job(
         job_end_time = time.time()
         job_duration = job_end_time - job_start_time
         
+        # วัด RAM/CPU หลังจบ job
+        ram_mb_after = cpu_percent_after = None
+        try:
+            import psutil
+            proc = psutil.Process()
+            ram_mb_after = proc.memory_info().rss / (1024 * 1024)
+            cpu_percent_after = psutil.cpu_percent(interval=0.1)
+        except Exception as e:
+            logger.debug(f"Could not get final resource stats: {e}")
+        
         logger.info(f"✅ Live chunk job {session_id} completed successfully")
         logger.info(f"   Duration: {job_duration:.2f}s, Meeting: {meeting_id}, Chunk: {chunk_index}")
+        if ram_mb_before is not None and ram_mb_after is not None:
+            delta_mb = ram_mb_after - ram_mb_before
+            logger.info(f"   RAM: {ram_mb_after:.1f} MB (delta: {delta_mb:+.1f} MB) | CPU before/after: {cpu_percent_before or '-'}% / {cpu_percent_after or '-'}%")
         
         return {
             "status": "completed",
             "session_id": session_id,
             "meeting_id": meeting_id,
             "chunk_index": chunk_index,
-            "duration": job_duration
+            "duration": job_duration,
+            "ram_mb": round(ram_mb_after, 2) if ram_mb_after is not None else None,
+            "ram_delta_mb": round(ram_mb_after - ram_mb_before, 2) if (ram_mb_after is not None and ram_mb_before is not None) else None,
+            "cpu_percent_after": round(cpu_percent_after, 1) if cpu_percent_after is not None else None,
         }
         
     except Exception as e:

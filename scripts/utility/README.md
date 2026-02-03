@@ -26,7 +26,14 @@ Scripts สำหรับการจัดการ Models และ Utilities
    pip install -r requirements.txt
    ```
 
-3. **Start Services:**
+3. **ตั้งค่า cuDNN/CTranslate2 (persist LD_LIBRARY_PATH) — รันครั้งเดียวหลัง restart container:**
+   ```bash
+   ./scripts/utility/setup-cudnn-env.sh
+   ```
+   - สร้างไฟล์ `scripts/utility/.cudnn-ldpath.sh` ให้ `start-pod.sh` / `start-rq-workers.sh` โหลดอัตโนมัติ
+   - ถ้า container มีสิทธิ root จะเขียนลง `/etc/profile.d` และ `/etc/ld.so.conf.d` ด้วย
+
+4. **Start Services:**
    ```bash
    bash scripts/pod/start-pod.sh
    ```
@@ -81,7 +88,7 @@ for qname in ['transcription_preprocess', 'transcription_gpu0', 'transcription_g
 - **Redis**: External (RedisLabs) - กำหนดใน `.env.runpod`
 
 ### หมายเหตุ:
-- **cuDNN & CTranslate2**: จัดการอัตโนมัติผ่าน `LD_LIBRARY_PATH` ใน scripts
+- **cuDNN & CTranslate2**: รัน `setup-cudnn-env.sh` ครั้งเดียว → persist LD_LIBRARY_PATH + ตรวจสอบ GPU (ดูรายละเอียดด้านล่าง)
 - **Models**: ต้องดาวน์โหลดก่อนใช้งาน (ดู `download-models.sh` ด้านล่าง)
 - **Environment**: โหลดจาก `.env.runpod` อัตโนมัติ
 - **Container**: ไม่ต้องใช้ `sudo` (รันเป็น root อยู่แล้ว)
@@ -134,6 +141,20 @@ bash scripts/utility/download-models.sh base small medium
 
 # Download all recommended models
 bash scripts/utility/download-models.sh --all
+```
+
+---
+
+### `setup-cudnn-env.sh` ⭐ (แนะนำหลัง restart container)
+**ตั้งค่า cuDNN / CTranslate2 แบบครบในไฟล์เดียว**
+- **Persist:** เขียน `LD_LIBRARY_PATH` ลง `scripts/utility/.cudnn-ldpath.sh` → start-pod/start-rq-workers/restart-main-api โหลดอัตโนมัติ
+- **ตรวจสอบ:** ตรวจ cuDNN libraries และทดสอบ ctranslate2 + faster-whisper (WhisperModel)
+- ถ้า container รันด้วย root: เขียนลง `/etc/profile.d` และ `/etc/ld.so.conf.d` ด้วย
+
+**Usage:**
+```bash
+# รันครั้งเดียวหลัง apt + pip install (หรือหลัง restart container)
+./scripts/utility/setup-cudnn-env.sh
 ```
 
 ---
