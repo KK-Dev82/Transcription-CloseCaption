@@ -32,8 +32,11 @@ ctranslate2>=4.5.0,<6
 # ============================================================================
 # TyPhoon ASR + NeMo (ASR FE Live Caption Streaming - ภาษาไทย)
 # ============================================================================
+# ต้อง pin NeMo 2.5.3 ก่อน typhoon-asr — NeMo 2.6.x มี CUDA 35 bug (RNNT+CUDA12.8)
+# ref: https://github.com/NVIDIA-NeMo/NeMo/issues/15145
+nemo-toolkit[asr]==2.5.3
 typhoon-asr>=0.1.1
-# typhoon-asr จะ pull nemo_toolkit[asr] โดยอัตโนมัติ
+# typhoon-asr ใช้ nemo-toolkit ข้างบน
 # โมเดล: typhoon-ai/typhoon-asr-realtime (FastConformer-Transducer)
 
 # ============================================================================

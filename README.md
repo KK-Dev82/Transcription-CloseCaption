@@ -14,6 +14,8 @@ pip install -r requirements.runpod-unified.txt && \
 ./scripts/pod/start-rq-workers.sh
 ```
 
+> **หมายเหตุ**: `requirements.runpod-unified.txt` รวม NeMo 2.5.3 สำหรับ TyPhoon ASR (FE Live Caption) — ไม่ต้องติดตั้ง `nemo-toolkit` แยก
+
 ### ตรวจสอบ CTranslate2 + GPU
 ```bash
 ./scripts/utility/verify-ctranslate2-gpu.sh
@@ -136,11 +138,45 @@ Models จะถูกดาวน์โหลดอัตโนมัติเ�
 
 **หมายเหตุ**: สำหรับการ deploy ครั้งแรก Models จะต้องถูกดาวน์โหลดก่อนใช้งาน (อาจใช้เวลา 5-15 นาที ขึ้นอยู่กับ model size)
 
+### NeMo + TyPhoon ASR (FE Live Caption)
+
+ใช้สำหรับ **FE Live Caption** (WebSocket `/api/ws/ingest-audio`) เมื่อ `FE_CC_PROVIDER=typhoon`:
+
+| รายการ | รายละเอียด |
+|--------|-------------|
+| **Package** | `nemo-toolkit[asr]==2.5.3` + `typhoon-asr>=0.1.1` |
+| **โมเดล** | typhoon-ai/typhoon-asr-realtime (FastConformer-Transducer) |
+| **ภาษา** | ไทย |
+| **Use case** | Real-time caption streaming จาก browser |
+
+⚠️ **NeMo Version**: ต้องใช้ **2.5.3** — NeMo 2.6.x มี CUDA error 35 (RNNT + CUDA 12.8)  
+ref: [NVIDIA NeMo Issue #15145](https://github.com/NVIDIA-NeMo/NeMo/issues/15145)
+
+**การตั้งค่า** `.env.runpod`:
+```bash
+FE_CC_PROVIDER=typhoon
+FE_CC_TYPHOON_MODEL=typhoon-ai/typhoon-asr-realtime
+FE_CC_TYPHOON_DEVICE=auto
+```
+
+**Real-time (ความเร็วขึ้น)**:
+```bash
+FE_CC_WINDOW_SECONDS=1.5
+FE_CC_STEP_SECONDS=1.0
+FE_CC_MIN_WINDOW_SECONDS=1.5
+FE_CC_SILENCE_THRESHOLD=0.4
+FE_CC_REALTIME_LOW_LATENCY=true   # ข้าม postprocess ลด latency ~100–300ms
+```
+
+**ทางเลือก**: ถ้า NeMo มีปัญหา ให้เปลี่ยนเป็น `FE_CC_PROVIDER=faster-whisper` (ใช้ CTranslate2 ไม่มี CUDA 35 bug)
+
 ---
 
 ## 🚀 Quick Start (หลังจาก Restart Pod Container)
 
 เมื่อ restart pod container ใหม่ ต้องทำตามขั้นตอนนี้:
+
+> **สรุป**: `pip install -r requirements.runpod-unified.txt` ติดตั้งทุกอย่างรวม NeMo 2.5.3 — **ไม่ต้องรัน `pip install "nemo-toolkit[asr]==2.5.3"` แยก**
 
 ### 1. ตรวจสอบและปรับ NUM_GPUS ใน .env.runpod
 
@@ -195,10 +231,11 @@ ffmpeg -version
 
 ```bash
 cd /workspace/transcription-service
-pip install -r requirements.txt
+pip install -r requirements.runpod-unified.txt
 ```
 
 **หมายเหตุ**: 
+- `requirements.runpod-unified.txt` รวม faster-whisper, NeMo 2.5.3, typhoon-asr — **ไม่ต้องติดตั้ง NeMo แยก**
 - Scripts จะจัดการ cuDNN และ CTranslate2 libraries อัตโนมัติผ่าน `LD_LIBRARY_PATH`
 - cuDNN 8.9.0.2 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
 - `whisper_api.py` จะตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
@@ -595,6 +632,10 @@ tail -f /tmp/whisper.log
 
 # Workers
 tail -f /tmp/rq-worker-*.log
+
+# WS ingest|TyPhoon|CUDA FE LiveCaption
+tail -f /tmp/main-api.log | grep -E "WS ingest|TyPhoon|CUDA"
+
 ```
 
 ---

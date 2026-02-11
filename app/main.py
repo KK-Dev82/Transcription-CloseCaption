@@ -56,6 +56,7 @@ except Exception as e:
 Path("uploads").mkdir(exist_ok=True)
 Path("temp").mkdir(exist_ok=True)
 Path("storage").mkdir(exist_ok=True)
+Path("storage/cc_temp").mkdir(parents=True, exist_ok=True)  # FE Live Caption temp files
 Path("models").mkdir(exist_ok=True)
 Path("static").mkdir(exist_ok=True)
 Path("logs").mkdir(exist_ok=True)
@@ -70,6 +71,14 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown"""
     # Startup
     logger.info("🚀 Starting application startup...")
+    # Cleanup FE CC temp files ที่เก่ากว่า 1 ชม. (ป้องกัน storage เต็ม)
+    try:
+        from app.utils.cc_temp_storage import cleanup_cc_temp
+        stats = cleanup_cc_temp(max_age_hours=1.0)
+        if stats.get("deleted", 0) > 0:
+            logger.info(f"🧹 Cleaned {stats['deleted']} FE CC temp files ({stats.get('bytes_freed', 0) / 1024 / 1024:.2f} MB)")
+    except Exception as e:
+        logger.warning(f"⚠️ FE CC temp cleanup skipped: {e}")
     
     # 🧪 MOCK MODE: WebSocket ยังต้องทำงานได้ (สำหรับ realtime caption events)
     MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"

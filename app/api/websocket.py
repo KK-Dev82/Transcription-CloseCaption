@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..services.websocket_service import websocket_manager
 from ..services.close_caption_config import CloseCaptionConfig
+from ..utils.cc_temp_storage import ensure_cc_temp_dir
 from ..utils.dedupe_text import dedupe_text
 from ..utils.thai_postprocess import postprocess_thai_text
 
@@ -50,6 +51,8 @@ _MIN_WINDOW_SECONDS = float(os.getenv("FE_CC_MIN_WINDOW_SECONDS", "2.0"))  # ✅
 _SILENCE_THRESHOLD_SECONDS = float(os.getenv("FE_CC_SILENCE_THRESHOLD", "0.8"))  # ✅ รอ silence 0.8s ก่อนส่ง final (sentence boundary)
 # Server → client keepalive (แก้ 1006 abnormal close เมื่อ proxy ตัด WS ถ้า server เงียบ)
 _UPLINK_KEEPALIVE_SECONDS = float(os.getenv("FE_CC_UPLINK_KEEPALIVE_SECONDS", "15"))
+# Real-time: ข้าม postprocess (PyThaiNLP) เพื่อลด latency ~100–300ms — TyPhoon output ใช้ได้ทันที
+_FE_CC_SKIP_POSTPROCESS = os.getenv("FE_CC_REALTIME_LOW_LATENCY", "false").lower() == "true"
 
 _last_emitted_text_by_meeting: dict[str, str] = {}
 _last_silence_time_by_meeting: dict[str, float] = {}  # ✅ เก็บเวลาที่มีเสียงล่าสุด
@@ -662,8 +665,9 @@ async def websocket_audio_ingest_endpoint(
                 if MOCK_MODE:
                     text = f"[MOCK] pcm_bytes={len(chunk)}"
                 else:
-                    # Write PCM as WAV to temp file
-                    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                    # Write PCM as WAV to temp file (ใช้ storage/cc_temp แทน /tmp)
+                    cc_temp = ensure_cc_temp_dir()
+                    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=str(cc_temp))
                     tmp_path = tmp.name
                     tmp.close()
                     try:
@@ -718,8 +722,8 @@ async def websocket_audio_ingest_endpoint(
                 if not text:
                     continue
 
-                # Postprocess (non-blocking: PyThaiNLP หนัก)
-                if CloseCaptionConfig.POSTPROCESS_ENABLED and language == "th":
+                # Postprocess (non-blocking: PyThaiNLP หนัก) — ข้ามได้เมื่อ FE_CC_REALTIME_LOW_LATENCY=true
+                if not _FE_CC_SKIP_POSTPROCESS and CloseCaptionConfig.POSTPROCESS_ENABLED and language == "th":
                     try:
                         text = await asyncio.to_thread(
                             postprocess_thai_text,
@@ -740,13 +744,16 @@ async def websocket_audio_ingest_endpoint(
                     continue
 
                 # ✅ ใช้ dedupe เพื่อหาข้อความใหม่ (ไม่ซ้ำกับที่ส่งไปแล้ว) (non-blocking)
+                # สำคัญ: ใช้ pending_text เป็น context (ไม่ใช่แค่ last_emitted) เพราะระหว่างรอ silence
+                # เรา send partial หลายครั้ง แต่ last_emitted อัปเดตเฉพาะตอน final → ทำให้ chunk ซ้ำ overlap
                 last_emitted = _last_emitted_text_by_meeting.get(meeting_id, "")
+                dedupe_context = pending_text or last_emitted
                 if CloseCaptionConfig.DEDUPE_ENABLED:
                     try:
                         new_text = await asyncio.to_thread(
                             dedupe_text,
                             text,
-                            last_emitted,
+                            dedupe_context,
                             max_match_length=CloseCaptionConfig.DEDUPE_MAX_MATCH_LENGTH,
                         )
                         new_text = new_text.strip()
@@ -754,8 +761,8 @@ async def websocket_audio_ingest_endpoint(
                         new_text = text
                 else:
                     # ถ้าไม่ใช้ dedupe → เปรียบเทียบแบบง่าย
-                    if text.startswith(last_emitted):
-                        new_text = text[len(last_emitted):].strip()
+                    if text.startswith(dedupe_context):
+                        new_text = text[len(dedupe_context):].strip()
                     else:
                         new_text = text
 

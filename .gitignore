@@ -144,6 +144,9 @@ cython_debug/
 uploads/
 temp/
 storage/
+# FE Live Caption temp (อาจเกิดใน project root ถ้า legacy typhoon-asr)
+processed_tmp*.wav
+typhoon_proc_*.wav
 # Ignore large model files and entire models directory
 # Models are too large for GitHub (2.1GB+) and should be downloaded separately
 models/
