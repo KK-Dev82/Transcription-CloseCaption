@@ -27,6 +27,16 @@ router = APIRouter()
 
 MOCK_MODE = os.getenv("TRANSCRIPTION_MOCK_MODE", "false").lower() == "true"
 
+# FE Live Caption Provider: typhoon (NeMo/TyPhoon ASR) หรือ faster-whisper
+_FE_CC_PROVIDER = (os.getenv("FE_CC_PROVIDER", "typhoon") or "typhoon").lower().strip()
+
+
+def _get_fe_cc_provider_name() -> str:
+    """คืนค่า provider name สำหรับ FE Live Caption (typhoon หรือ faster-whisper)"""
+    if MOCK_MODE:
+        return "mock"
+    return _FE_CC_PROVIDER if _FE_CC_PROVIDER in ("typhoon", "faster-whisper") else "faster-whisper"
+
 # Producer soft-lock (in-memory)
 _active_producer_by_meeting: dict[str, dict] = {}
 _PRODUCER_TTL_SECONDS = float(os.getenv("FE_CC_PRODUCER_TTL_SECONDS", "20"))
@@ -525,20 +535,24 @@ async def websocket_audio_ingest_endpoint(
     sample_rate = _DEFAULT_SAMPLE_RATE
     channels = _DEFAULT_CHANNELS
     audio_format = "s16le"
-    # ✅ แปลง cache directory name เป็น HuggingFace model ID (ถ้าจำเป็น)
-    raw_model_size = CloseCaptionConfig.MODEL_SIZE
-    # ถ้าเป็น cache directory name (models--*) ให้แปลงเป็น HuggingFace model ID
-    if raw_model_size.startswith("models--"):
-        parts = raw_model_size.replace("models--", "").split("--", 1)
-        if len(parts) == 2:
-            org, model_name = parts
-            model_size = f"{org}/{model_name}"
-            logger.info(f"[WS ingest] 🔄 Normalized model ID: {raw_model_size} → {model_size}")
+    language = CloseCaptionConfig.LANGUAGE
+    # Model size ขึ้นกับ FE_CC_PROVIDER
+    if _FE_CC_PROVIDER == "typhoon":
+        model_size = os.getenv("FE_CC_TYPHOON_MODEL", "typhoon-ai/typhoon-asr-realtime")
+        logger.info(f"[WS ingest] 🎯 FE Live Caption provider: typhoon (NeMo), model={model_size}")
+    else:
+        raw_model_size = CloseCaptionConfig.MODEL_SIZE
+        if raw_model_size.startswith("models--"):
+            parts = raw_model_size.replace("models--", "").split("--", 1)
+            if len(parts) == 2:
+                org, model_name = parts
+                model_size = f"{org}/{model_name}"
+                logger.info(f"[WS ingest] 🔄 Normalized model ID: {raw_model_size} → {model_size}")
+            else:
+                model_size = raw_model_size
         else:
             model_size = raw_model_size
-    else:
-        model_size = raw_model_size
-    language = CloseCaptionConfig.LANGUAGE
+        logger.info(f"[WS ingest] 🎯 FE Live Caption provider: faster-whisper, model={model_size}")
 
     ring = bytearray()
     seq_counter = 1
@@ -618,7 +632,7 @@ async def websocket_audio_ingest_endpoint(
                             "chunk_duration_ms": max(1, now_ms - (pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)))),
                             "language": language,
                             "model": model_size,
-                            "provider": "faster-whisper" if not MOCK_MODE else "mock",
+                            "provider": _get_fe_cc_provider_name(),
                             "text": pending_text,
                             "segments": [
                                 {
@@ -662,21 +676,39 @@ async def websocket_audio_ingest_endpoint(
                         # ✅ Debug: บันทึก WAV ตัวอย่างเพื่อตรวจสอบคุณภาพเสียง
                         _maybe_save_debug_audio(meeting_id, tmp_path, chunk, sample_rate, channels, seq_counter)
 
-                        whisper_service = _get_whisper_service()
-                        if whisper_service is None:
-                            continue
-                        logger.info(f"[WS ingest] 🎤 Starting transcription: audio_path={tmp_path}, model={model_size}, language={language}, chunk_size={len(chunk)} bytes")
-                        # Non-blocking: ย้าย transcription ไป thread เพื่อไม่ block event loop (แก้ 1011 ping timeout)
-                        result = await asyncio.to_thread(
-                            whisper_service.transcribe_file,
-                            tmp_path,
-                            model_size,
-                            language,
-                            use_thai_processor=False,  # ปิด Thai Text Processor (PyThaiNLP) — แก้คำผิดพลาด
-                        )
+                        # เลือก provider ตาม FE_CC_PROVIDER (typhoon หรือ faster-whisper)
+                        use_typhoon = _FE_CC_PROVIDER == "typhoon"
+                        try:
+                            from ..services.typhoon_asr_service import (
+                                is_typhoon_available,
+                                transcribe_audio as typhoon_transcribe,
+                            )
+                            use_typhoon = use_typhoon and is_typhoon_available()
+                        except ImportError:
+                            use_typhoon = False
+
+                        if use_typhoon:
+                            logger.info(f"[WS ingest] 🎤 TyPhoon transcription: audio_path={tmp_path}, chunk_size={len(chunk)} bytes")
+                            result = await asyncio.to_thread(
+                                typhoon_transcribe,
+                                tmp_path,
+                                with_timestamps=True,
+                            )
+                        else:
+                            whisper_service = _get_whisper_service()
+                            if whisper_service is None:
+                                continue
+                            logger.info(f"[WS ingest] 🎤 faster-whisper transcription: audio_path={tmp_path}, model={model_size}, chunk_size={len(chunk)} bytes")
+                            result = await asyncio.to_thread(
+                                whisper_service.transcribe_file,
+                                tmp_path,
+                                model_size,
+                                language,
+                                use_thai_processor=False,
+                            )
                         text = (result.get("text") or "").strip()
                         segments = result.get("segments", [])
-                        logger.info(f"[WS ingest] ✅ Transcription result: text_length={len(text)}, segments_count={len(segments)}, text_preview={text[:50] if text else '(empty)'}")
+                        logger.info(f"[WS ingest] ✅ Transcription result: text_length={len(text)}, segments_count={len(segments)}, provider={result.get('provider', 'unknown')}, text_preview={text[:50] if text else '(empty)'}")
                     finally:
                         try:
                             os.unlink(tmp_path)

@@ -1,9 +1,32 @@
 # 🎙️ Transcription Service
 
-บริการ Transcription สำหรับวิดีโอ/เสียง โดยใช้ Whisper และ faster-whisper พร้อม Multi-GPU Support
-apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt && ./scripts/utility/setup-cudnn-env.sh && ./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh 
----
-./scripts/pod/restart-main-api.sh && ./scripts/pod/restart-rq-workers.sh 
+บริการ Transcription สำหรับวิดีโอ/เสียง โดยใช้ Whisper, faster-whisper และ TyPhoon ASR พร้อม Multi-GPU Support
+
+## 🚀 RunPod Quick Start
+
+### First Setup (หลัง clone / container ใหม่)
+
+```bash
+apt-get update && apt-get install -y ffmpeg && \
+pip install -r requirements.runpod-unified.txt && \
+./scripts/utility/setup-cudnn-env.sh && \
+./scripts/pod/start-pod.sh && \
+./scripts/pod/start-rq-workers.sh
+```
+
+### ตรวจสอบ CTranslate2 + GPU
+```bash
+./scripts/utility/verify-ctranslate2-gpu.sh
+```
+
+### Restart (เมื่อแก้ไข config หรือต้องการ restart services)
+
+```bash
+./scripts/pod/restart-main-api.sh && ./scripts/pod/restart-rq-workers.sh
+```
+
+> **หมายเหตุ**: สำหรับ RunPod container `cu1281-torch280` (CUDA 12.8), ถ้า `setup-cudnn-env.sh` แจ้ง path ไม่พบ ให้ตรวจสอบ `.env.runpod` มี `LD_LIBRARY_PATH` ที่ถูกต้องแล้ว และ start scripts จะโหลดจาก `.env.runpod` อัตโนมัติ
+
 ---
 
 ## 📦 Prerequisites (สิ่งที่ต้องมีก่อนเริ่ม)
@@ -620,6 +643,16 @@ curl "https://0b3x44foetagtu-8010.proxy.runpod.net/api/monitoring/"
    # หรือสำหรับ restart
    bash scripts/pod/restart-rq-workers.sh
    ```
+
+### Transcription ถูกตัดกลางประโยค
+
+**อาการ**: ข้อความ transcription ถูกตัดกลางคำ (เช่น "ระดั" แทน "ระดับ") แม้เสียงจะไม่ขาดหาย
+
+**สาเหตุ**: Whisper decoder มีขีดจำกัด **448 tokens** ต่อ segment — 30 วินาทีของภาษาไทยพูดหนาแน่นอาจเกิน limit
+
+**วิธีแก้**: ตั้งค่า `WHISPER_CHUNK_LENGTH=15` ใน `.env.runpod` (default 15 แล้ว)
+- ลดจาก 30s → 15s = sub-segment เล็กกว่า → แต่ละ segment ไม่เกิน token limit
+- ถ้ายังตัดอยู่ ลองลดเป็น 12 หรือ 10 วินาที
 
 ### cuDNN/CTranslate2 Issues
 

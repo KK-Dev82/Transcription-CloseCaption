@@ -17,22 +17,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Paths (order: cuDNN → system → CUDA → CTranslate2)
+# CUDA: ลองตามลำดับ (RunPod 12.8 ใช้ cuda-12.8, container เก่าใช้ cuda-12.1)
 CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+CUDNN_LIB_PATH_311="/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
 SYSTEM_PATH="/usr/lib/x86_64-linux-gnu"
-CUDA_LIB_PATH="/usr/local/cuda-12.1/lib64"
+CUDA_LIB_PATH="/usr/local/cuda-12.8/lib64"
+CUDA_LIB_PATH_121="/usr/local/cuda-12.1/lib64"
+CUDA_LIB_PATH_LINK="/usr/local/cuda/lib64"
 CTRANSLATE2_LIB_PATH="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+CTRANSLATE2_LIB_PATH_311="/usr/local/lib/python3.11/site-packages/ctranslate2.libs"
 
 echo "🔧 Setup cuDNN / CTranslate2 environment"
 echo ""
 
-# 1. สร้าง LD_LIBRARY_PATH
+# 1. สร้าง LD_LIBRARY_PATH (รวม paths ที่มีอยู่จริง)
 NEW_LD_PATH=""
-for path in "$CUDNN_LIB_PATH" "$SYSTEM_PATH" "$CUDA_LIB_PATH" "$CTRANSLATE2_LIB_PATH"; do
+for path in "$CUDNN_LIB_PATH" "$CUDNN_LIB_PATH_311" "$SYSTEM_PATH" "$CUDA_LIB_PATH" "$CUDA_LIB_PATH_121" "$CUDA_LIB_PATH_LINK" "$CTRANSLATE2_LIB_PATH" "$CTRANSLATE2_LIB_PATH_311"; do
     if [ -d "$path" ]; then
-        [ -n "$NEW_LD_PATH" ] && NEW_LD_PATH="$NEW_LD_PATH:$path" || NEW_LD_PATH="$path"
-        echo "  ✅ $path"
-    else
-        echo "  ⚠️  Not found: $path"
+        if echo ":$NEW_LD_PATH:" | grep -q ":$path:"; then
+            : # already in path
+        else
+            [ -n "$NEW_LD_PATH" ] && NEW_LD_PATH="$NEW_LD_PATH:$path" || NEW_LD_PATH="$path"
+            echo "  ✅ $path"
+        fi
     fi
 done
 
@@ -63,7 +70,7 @@ fi
 if [ -w /etc/ld.so.conf.d ] 2>/dev/null; then
     LDCONF="/etc/ld.so.conf.d/cudnn-ctranslate2.conf"
     : > "$LDCONF"
-    for path in "$CUDNN_LIB_PATH" "$SYSTEM_PATH" "$CUDA_LIB_PATH" "$CTRANSLATE2_LIB_PATH"; do
+    for path in "$CUDNN_LIB_PATH" "$CUDNN_LIB_PATH_311" "$SYSTEM_PATH" "$CUDA_LIB_PATH" "$CUDA_LIB_PATH_121" "$CUDA_LIB_PATH_LINK" "$CTRANSLATE2_LIB_PATH" "$CTRANSLATE2_LIB_PATH_311"; do
         [ -d "$path" ] && echo "$path" >> "$LDCONF"
     done
     [ -s "$LDCONF" ] && ldconfig 2>/dev/null || true
@@ -72,12 +79,12 @@ fi
 ldconfig 2>/dev/null || true
 echo ""
 
-# 4. ตรวจสอบ cuDNN libraries
+# 4. ตรวจสอบ cuDNN libraries (รองรับ cuDNN 8 และ 9)
 echo "4️⃣ Checking cuDNN libraries..."
-for file in libcudnn.so.8 libcudnn_ops_infer.so.8 libcudnn_cnn_infer.so.8; do
+for file in libcudnn.so.9 libcudnn_ops_infer.so.9 libcudnn.so.8 libcudnn_ops_infer.so.8 libcudnn_cnn_infer.so.8; do
     found=false
-    for path in "$CUDNN_LIB_PATH" "$SYSTEM_PATH" "$CUDA_LIB_PATH"; do
-        [ -f "$path/$file" ] && { echo "  ✅ Found: $path/$file"; found=true; break; }
+    for path in "$CUDNN_LIB_PATH" "$CUDNN_LIB_PATH_311" "$SYSTEM_PATH" "$CUDA_LIB_PATH" "$CUDA_LIB_PATH_121" "$CUDA_LIB_PATH_LINK"; do
+        [ -d "$path" ] && [ -f "$path/$file" ] && { echo "  ✅ Found: $path/$file"; found=true; break; }
     done
     [ "$found" = false ] && echo "  ⚠️  Not found: $file"
 done
@@ -85,6 +92,11 @@ echo ""
 
 # 5. ทดสอบ ctranslate2 + faster-whisper (รับ LD_LIBRARY_PATH จาก env ที่ export ไว้แล้ว)
 echo "5️⃣ Testing ctranslate2 / faster-whisper CUDA..."
+# ปิด HF_HUB_ENABLE_HF_TRANSFER ชั่วคราว (ถ้าไม่มี pip install hf_transfer)
+# เพื่อหลีกเลี่ยง: ValueError: Fast download using 'hf_transfer' is enabled but 'hf_transfer' package is not available
+unset HF_HUB_ENABLE_HF_TRANSFER 2>/dev/null || true
+export HF_HUB_ENABLE_HF_TRANSFER=0
+
 python3 << 'PYTHON'
 import os
 import sys

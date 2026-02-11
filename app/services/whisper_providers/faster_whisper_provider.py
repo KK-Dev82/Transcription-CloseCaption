@@ -170,8 +170,13 @@ class FasterWhisperProvider(WhisperProvider):
             # เพื่อลด peak RAM โดยเฉพาะเมื่อมีหลาย jobs พร้อมกัน
             batch_size = int(os.getenv('WHISPER_BATCH_SIZE', '16'))
             
+            # WHISPER_CHUNK_LENGTH: ความยาวสูงสุดของแต่ละ segment (วินาที) ภายใน faster-whisper
+            # - Default 30s → ภาษาไทยพูดหนาแน่นอาจเกิน 448 tokens → ตัดกลางประโยค
+            # - แนะนำ 15 วินาที สำหรับภาษาไทย เพื่อให้แต่ละ segment ไม่เกิน token limit
+            chunk_length = int(os.getenv('WHISPER_CHUNK_LENGTH', '15'))
+            
             if use_batched:
-                logger.info(f"[Faster Whisper] 🚀 Using BatchedInferencePipeline (batch_size={batch_size})")
+                logger.info(f"[Faster Whisper] 🚀 Using BatchedInferencePipeline (batch_size={batch_size}, chunk_length={chunk_length}s)")
                 batched_model = BatchedInferencePipeline(model=model)
                 segments, info = batched_model.transcribe(
                     audio_input,  # รองรับทั้ง str และ np.ndarray
@@ -185,10 +190,11 @@ class FasterWhisperProvider(WhisperProvider):
                     temperature=temperature,
                     no_speech_threshold=no_speech_threshold,
                     log_prob_threshold=log_prob_threshold,
-                    batch_size=batch_size
+                    batch_size=batch_size,
+                    chunk_length=chunk_length,
                 )
             else:
-                logger.info(f"[Faster Whisper] Using standard WhisperModel.transcribe()")
+                logger.info(f"[Faster Whisper] Using standard WhisperModel.transcribe() (chunk_length={chunk_length}s)")
                 segments, info = model.transcribe(
                     audio_input,  # รองรับทั้ง str และ np.ndarray
                     language=language if language != "auto" else None,
@@ -200,7 +206,8 @@ class FasterWhisperProvider(WhisperProvider):
                     condition_on_previous_text=condition_on_previous_text,
                     temperature=temperature,
                     no_speech_threshold=no_speech_threshold,
-                    log_prob_threshold=log_prob_threshold
+                    log_prob_threshold=log_prob_threshold,
+                    chunk_length=chunk_length,
                 )
             
             # Convert segments to list (this is where it might crash if cuDNN is wrong)

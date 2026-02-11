@@ -83,49 +83,37 @@ else
 fi
 
 # ตั้งค่า LD_LIBRARY_PATH สำหรับ CUDA, cuDNN และ CTranslate2
-# ⚠️ สำคัญ: ต้องมี cuDNN libraries ก่อน CUDA เพื่อให้ CTranslate2 พบ cuDNN ได้
-# Order: cuDNN → CUDA → CTranslate2
-CUDNN_LIB_PATH="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
-CUDA_LIB_PATH="/usr/local/cuda-12.1/lib64"
-CTRANSLATE2_LIB_PATH="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+# รองรับ RunPod 12.8 (Python 3.12) และ container เก่า (Python 3.10, CUDA 12.1)
+# Order: cuDNN → system → CUDA → CTranslate2
+CUDNN_PY310="/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
+CUDNN_PY312="/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib"
+SYSTEM_PATH="/usr/lib/x86_64-linux-gnu"
+CUDA_128="/usr/local/cuda-12.8/lib64"
+CUDA_121="/usr/local/cuda-12.1/lib64"
+CUDA_LINK="/usr/local/cuda/lib64"
+CTRANSLATE2_PY310="/usr/local/lib/python3.10/dist-packages/ctranslate2.libs"
+CTRANSLATE2_PY312="/usr/local/lib/python3.12/dist-packages/ctranslate2.libs"
 
-# สร้าง LD_LIBRARY_PATH ใหม่ (cuDNN ก่อน, แล้ว CUDA, แล้ว CTranslate2)
+# สร้าง LD_LIBRARY_PATH (ใช้ path ที่มีอยู่จริง)
 NEW_LD_LIBRARY_PATH=""
-if [ -d "$CUDNN_LIB_PATH" ]; then
-    NEW_LD_LIBRARY_PATH="$CUDNN_LIB_PATH"
-    print_success "✅ Added cuDNN libraries to LD_LIBRARY_PATH"
-fi
-if [ -d "$CUDA_LIB_PATH" ]; then
-    if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
-        NEW_LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:$CUDA_LIB_PATH"
-    else
-        NEW_LD_LIBRARY_PATH="$CUDA_LIB_PATH"
+for p in "$CUDNN_PY310" "$CUDNN_PY312" "$SYSTEM_PATH" "$CUDA_128" "$CUDA_121" "$CUDA_LINK" "$CTRANSLATE2_PY310" "$CTRANSLATE2_PY312"; do
+    if [ -d "$p" ] && [[ ":$NEW_LD_LIBRARY_PATH:" != *":$p:"* ]]; then
+        [ -n "$NEW_LD_LIBRARY_PATH" ] && NEW_LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:$p" || NEW_LD_LIBRARY_PATH="$p"
+        print_success "✅ Added to LD_LIBRARY_PATH: $p"
     fi
-    print_success "✅ Added CUDA libraries to LD_LIBRARY_PATH"
-fi
-if [ -d "$CTRANSLATE2_LIB_PATH" ]; then
-    if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
-        NEW_LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:$CTRANSLATE2_LIB_PATH"
-    else
-        NEW_LD_LIBRARY_PATH="$CTRANSLATE2_LIB_PATH"
-    fi
-    print_success "✅ Added CTranslate2 libraries to LD_LIBRARY_PATH"
-fi
+done
 
-# รวมกับ LD_LIBRARY_PATH เดิม (ถ้ามี)
+# รวมกับ LD_LIBRARY_PATH เดิม (จาก .cudnn-ldpath.sh or env)
 if [ -n "$NEW_LD_LIBRARY_PATH" ]; then
     export LD_LIBRARY_PATH="$NEW_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
     print_info "Final LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
     
-    # ตรวจสอบว่า cuDNN libraries พบจริงหรือไม่
-    if [ -d "$CUDNN_LIB_PATH" ]; then
-        cudnn_libs=$(find "$CUDNN_LIB_PATH" -name "libcudnn*.so*" 2>/dev/null | wc -l)
-        if [ "$cudnn_libs" -gt 0 ]; then
-            print_success "✅ Found $cudnn_libs cuDNN libraries"
-        else
-            print_warning "⚠️  cuDNN path exists but no libraries found"
-        fi
-    fi
+    # ตรวจสอบว่า cuDNN libraries พบจริงหรือไม่ (cuDNN 8 หรือ 9)
+    cudnn_count=0
+    for p in "$CUDNN_PY310" "$CUDNN_PY312" "$SYSTEM_PATH"; do
+        [ -d "$p" ] && cudnn_count=$(($cudnn_count + $(find "$p" -name "libcudnn*.so*" 2>/dev/null | wc -l)))
+    done
+    [ "$cudnn_count" -gt 0 ] && print_success "✅ Found cuDNN libraries" || print_warning "⚠️  No cuDNN libraries in standard paths"
 else
     print_warning "⚠️  No CUDA/cuDNN libraries found in standard paths"
     print_warning "⚠️  GPU workers may fallback to CPU mode (high RAM usage!)"
@@ -141,9 +129,12 @@ if [ -z "${LD_LIBRARY_PATH:-}" ]; then
     exit 1
 fi
 
-# FIX: ตรวจสอบว่า cuDNN library สามารถ load ได้จริงหรือไม่
+# FIX: ตรวจสอบว่า cuDNN library สามารถ load ได้จริงหรือไม่ (รองรับ cuDNN 8 และ 9)
 print_info "Verifying cuDNN library can be loaded..."
-if python3 -c "import ctypes; ctypes.CDLL('libcudnn_ops_infer.so.8')" 2>/dev/null; then
+if python3 -c "import ctypes; ctypes.CDLL('libcudnn_ops_infer.so.9')" 2>/dev/null || \
+   python3 -c "import ctypes; ctypes.CDLL('libcudnn_ops_infer.so.8')" 2>/dev/null || \
+   python3 -c "import ctypes; ctypes.CDLL('libcudnn.so.9')" 2>/dev/null || \
+   python3 -c "import ctypes; ctypes.CDLL('libcudnn.so.8')" 2>/dev/null; then
     print_success "✅ cuDNN library verification passed"
 else
     print_warning "⚠️  cuDNN library verification failed (may still work if libraries are in system paths)"
@@ -177,11 +168,14 @@ if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -lt 1 ]; then
     GPU_WORKERS_FOR_CC_PER_GPU=1
     print_warning "GPU_WORKERS_FOR_CC_PER_GPU ต่ำกว่า 1 → ตั้งเป็น 1 (ต้องมี worker สำหรับ CC เสมอ)"
 fi
-# ให้ file-only > CC: CC < ครึ่งหนึ่งของ PER_GPU (ปัดลง)
+# ให้ file-only >= CC (Transcription เยอะกว่าหรือเท่า CC)
+# อย่างน้อย 1 CC worker เมื่อมี 2+ workers (สำหรับ display_mode=realtime_chunks)
+# MAX_CC = max(1, (PER_GPU-1)/2) เมื่อ PER_GPU >= 2
 MAX_CC=$(( (GPU_WORKERS_PER_GPU - 1) / 2 ))
+[ "$MAX_CC" -lt 1 ] && [ "$GPU_WORKERS_PER_GPU" -ge 2 ] && MAX_CC=1
 if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -gt "$MAX_CC" ]; then
     GPU_WORKERS_FOR_CC_PER_GPU=$MAX_CC
-    print_warning "GPU_WORKERS_FOR_CC_PER_GPU มากเกินไป → ตั้งเป็น $MAX_CC เพื่อให้ Transcription (file-only) เยอะกว่า CC"
+    print_warning "GPU_WORKERS_FOR_CC_PER_GPU มากเกินไป → ตั้งเป็น $MAX_CC เพื่อให้ Transcription (file-only) เยอะกว่าหรือเท่า CC"
 fi
 if [ "$GPU_WORKERS_FOR_CC_PER_GPU" -gt "$GPU_WORKERS_PER_GPU" ]; then
     GPU_WORKERS_FOR_CC_PER_GPU=$GPU_WORKERS_PER_GPU
