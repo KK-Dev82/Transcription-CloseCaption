@@ -3,6 +3,9 @@ WebSocket API Endpoints สำหรับ Real-time Transcription Updates
 """
 
 import logging
+import math
+import shutil
+from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
 import json
@@ -84,6 +87,52 @@ def _release_producer_lock_if_owner(meeting_id: str, session_id: str) -> None:
 
 def _pcm16_bytes_per_second(sample_rate: int, channels: int) -> int:
     return int(sample_rate) * int(channels) * 2
+
+
+def _compute_audio_stats(pcm16_bytes: bytes) -> dict:
+    """
+    คำนวณสถิติเสียงจาก PCM16LE (16kHz mono)
+    คืนค่า: rms, peak, dbfs (decibels relative to full scale)
+    """
+    if len(pcm16_bytes) < 2:
+        return {"rms": 0, "peak": 0, "dbfs": -100, "samples": 0}
+    samples = []
+    for i in range(0, len(pcm16_bytes) - 1, 2):
+        val = int.from_bytes(pcm16_bytes[i:i+2], byteorder='little', signed=True)
+        samples.append(val)
+    if not samples:
+        return {"rms": 0, "peak": 0, "dbfs": -100, "samples": 0}
+    rms = math.sqrt(sum(s*s for s in samples) / len(samples))
+    peak = max(abs(s) for s in samples)
+    # dBFS: 0 = full scale (32768), -inf ถ้า silence
+    dbfs = 20 * math.log10(rms / 32768) if rms > 0 else -100
+    return {"rms": round(rms, 1), "peak": peak, "dbfs": round(dbfs, 1), "samples": len(samples)}
+
+
+# Debug: เก็บจำนวนไฟล์ที่ save แล้ว (สำหรับจำกัด FE_CC_DEBUG_SAVE_AUDIO_MAX_FILES)
+_debug_audio_save_count: dict[str, int] = {}  # meeting_id -> count
+
+
+def _maybe_save_debug_audio(meeting_id: str, tmp_path: str, chunk: bytes,
+                            sample_rate: int, channels: int, seq: int) -> None:
+    """บันทึก WAV ตัวอย่างเพื่อ debug คุณภาพเสียง (เมื่อ FE_CC_DEBUG_SAVE_AUDIO=true)"""
+    if os.getenv("FE_CC_DEBUG_SAVE_AUDIO", "false").lower() != "true":
+        return
+    max_files = int(os.getenv("FE_CC_DEBUG_SAVE_AUDIO_MAX_FILES", "10"))
+    save_dir = os.getenv("FE_CC_DEBUG_SAVE_AUDIO_DIR", "storage/cc_debug_audio")
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    count = _debug_audio_save_count.get(meeting_id, 0)
+    if count >= max_files:
+        return
+    try:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        out_path = Path(save_dir) / f"cc_{meeting_id}_{ts}_seq{seq}.wav"
+        shutil.copy2(tmp_path, out_path)
+        _debug_audio_save_count[meeting_id] = count + 1
+        logger.info(f"[WS ingest] 💾 Debug: saved audio to {out_path} (count={count+1}/{max_files})")
+    except Exception as e:
+        logger.warning(f"[WS ingest] ⚠️ Debug save failed: {e}")
+
 
 async def _safe_send_json(ws: WebSocket, payload: dict) -> None:
     try:
@@ -459,7 +508,11 @@ async def websocket_audio_ingest_endpoint(
         return
 
     logger.info(f"[WS ingest] ✅ Producer connected: meeting_id={meeting_id}, session_id={producer_session_id}")
-    
+
+    # Reset debug save counter เมื่อมี producer ใหม่ (สำหรับ FE_CC_DEBUG_SAVE_AUDIO)
+    if meeting_id in _debug_audio_save_count:
+        _debug_audio_save_count[meeting_id] = 0
+
     await _safe_send_json(websocket, {
         "type": "status",
         "meeting_id": meeting_id,
@@ -519,6 +572,15 @@ async def websocket_audio_ingest_endpoint(
                 chunk = bytes(ring[-window_bytes:]) if len(ring) >= window_bytes else bytes(ring)
                 chunk_duration = len(chunk) / _pcm16_bytes_per_second(sample_rate, channels)
                 logger.debug(f"[WS ingest] 📦 Audio chunk: size={len(chunk)} bytes, duration={chunk_duration:.2f}s")
+
+                # ✅ Debug: log สถิติเสียง (rms, peak, dBFS) เมื่อ FE_CC_DEBUG_SAVE_AUDIO=true
+                if os.getenv("FE_CC_DEBUG_SAVE_AUDIO", "false").lower() == "true":
+                    stats = _compute_audio_stats(chunk)
+                    logger.info(
+                        f"[WS ingest] 📊 Audio stats: meeting_id={meeting_id}, seq={seq_counter}, "
+                        f"rms={stats['rms']}, peak={stats['peak']}, dBFS={stats['dbfs']}, "
+                        f"samples={stats['samples']}, duration={chunk_duration:.2f}s"
+                    )
 
                 # ✅ Simple VAD: ตรวจสอบว่า chunk มีเสียงหรือไม่ (ตรวจจาก amplitude)
                 # ถ้าไม่มีเสียง → ตรวจสอบ silence duration
@@ -597,6 +659,9 @@ async def websocket_audio_ingest_endpoint(
                             wf.setframerate(sample_rate)
                             wf.writeframes(chunk)
 
+                        # ✅ Debug: บันทึก WAV ตัวอย่างเพื่อตรวจสอบคุณภาพเสียง
+                        _maybe_save_debug_audio(meeting_id, tmp_path, chunk, sample_rate, channels, seq_counter)
+
                         whisper_service = _get_whisper_service()
                         if whisper_service is None:
                             continue
@@ -607,7 +672,7 @@ async def websocket_audio_ingest_endpoint(
                             tmp_path,
                             model_size,
                             language,
-                            use_thai_processor=(language == "th"),
+                            use_thai_processor=False,  # ปิด Thai Text Processor (PyThaiNLP) — แก้คำผิดพลาด
                         )
                         text = (result.get("text") or "").strip()
                         segments = result.get("segments", [])
@@ -741,6 +806,10 @@ async def websocket_audio_ingest_endpoint(
                     language = str(payload.get("language") or language)
                     min_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _MIN_WINDOW_SECONDS)
                     window_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _WINDOW_SECONDS)
+                    logger.info(
+                        f"[WS ingest] 📋 Init: meeting_id={meeting_id}, sr={sample_rate}, ch={channels}, "
+                        f"fmt={audio_format}, lang={language}"
+                    )
                 elif msg_type == "heartbeat":
                     _acquire_or_refresh_producer_lock(meeting_id, producer_session_id)
                 elif msg_type == "stop":

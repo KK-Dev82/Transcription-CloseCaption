@@ -1,3 +1,7 @@
+# Build / env (ต้องมีก่อนเพื่อหลีกเลี่ยง ModuleNotFoundError: pkg_resources ตอน build บาง package)
+setuptools>=65.0.0
+wheel>=0.38.0
+
 # FastAPI และ dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
@@ -13,7 +17,9 @@ ffmpeg-python==0.2.0
 #   - FFmpeg binary ใช้สำหรับ: audio extraction, chunking, video processing
 
 # Whisper และ dependencies
-openai-whisper==20231117
+# openai-whisper: optional — ถ้าต้องการใช้ WHISPER_PROVIDER=openai-whisper ให้ติดตั้งแยก:
+#   pip install -U setuptools && pip install openai-whisper==20231117 --no-build-isolation
+# ปกติใช้ faster-whisper (ด้านล่าง) ไม่ต้องติดตั้ง openai-whisper
 faster-whisper==1.2.1
 ctranslate2==4.4.0
 # ⚠️  หมายเหตุ: faster-whisper 1.2.1 ต้องการ ctranslate2>=4.0,<6

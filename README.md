@@ -3,6 +3,8 @@
 บริการ Transcription สำหรับวิดีโอ/เสียง โดยใช้ Whisper และ faster-whisper พร้อม Multi-GPU Support
 apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt && ./scripts/utility/setup-cudnn-env.sh && ./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh 
 ---
+./scripts/pod/restart-main-api.sh && ./scripts/pod/restart-rq-workers.sh 
+---
 
 ## 📦 Prerequisites (สิ่งที่ต้องมีก่อนเริ่ม)
 
@@ -42,7 +44,8 @@ apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt &
 
 ### Python Dependencies
 
-ติดตั้งผ่าน `pip install -r requirements.txt`
+ติดตั้งผ่าน `pip install -r requirements.txt`  
+(ถ้าเคยเจอ `ModuleNotFoundError: No module named 'pkg_resources'` — ตอนนี้แก้แล้ว: ใส่ setuptools/wheel ใน requirements และเอา openai-whisper ออกจากรายการหลัก เพราะใช้ faster-whisper เป็น default)
 
 **Dependencies หลัก** (ดูรายละเอียดทั้งหมดใน `requirements.txt`):
 
@@ -377,6 +380,9 @@ curl -X POST "https://0b3x44foetagtu-8010.proxy.runpod.net/api/transcribe/" \
     "callback_url": "https://your-server.com/webhook"
   }'
 ```
+
+- **chunk_duration**: แนะนำ ≤ 30 วินาทีเมื่อใช้ faster-whisper (model มีข้อจำกัด ~30s ต่อหน้าต่าง)
+- **CHUNK_OVERLAP_SECONDS** (env, default 5): จำนวนวินาทีที่ทับกันระหว่าง chunk เพื่อลดการหายของข้อความช่วงท้าย ตั้งเป็น `0` เพื่อปิด
 
 **Response**:
 ```json
@@ -770,6 +776,7 @@ CUDNN_DISABLE=0
   # ควรมี: /usr/lib/x86_64-linux-gnu (system path) ⚠️ สำคัญ!
   ```
 - [ ] **ทดสอบ API**: `curl https://0b3x44foetagtu-8010.proxy.runpod.net/health`
+- [ ] **ตรวจสอบระบบครบ (Port + GPU + Process)**: `bash scripts/pod/check-system.sh`
 
 **หมายเหตุ**: 
 - Scripts (`start-rq-workers.sh`) จะตั้งค่า LD_LIBRARY_PATH อัตโนมัติ (รวม system path) - ไม่ต้องตั้งค่าเอง
