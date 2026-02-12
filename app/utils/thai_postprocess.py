@@ -250,7 +250,8 @@ def postprocess_thai_text(
     fix_words: bool = True,
     word_segmentation: bool = False,
     improve_spacing: bool = True,  # ✅ เพิ่ม option สำหรับปรับปรุงการเว้นวรรค
-    word_fixes: Optional[Dict[str, str]] = None
+    word_fixes: Optional[Dict[str, str]] = None,
+    fuzzy_match: bool = False,
 ) -> str:
     """
     Postprocess ข้อความภาษาไทย (รวมทุกขั้นตอน)
@@ -262,6 +263,7 @@ def postprocess_thai_text(
         word_segmentation: เปิดการตัดคำ (ต้องมี PyThaiNLP)
         improve_spacing: เปิดการปรับปรุงการเว้นวรรค (ตัวเลข, ชื่อ-นามสกุล, คำติดกัน)
         word_fixes: Dictionary สำหรับแก้คำเพิ่มเติม
+        fuzzy_match: เปิด Fuzzy Match (ชื่อคน + คำศัพท์จาก data/fuzzy_match/)
     
     Returns:
         ข้อความที่ postprocess แล้ว
@@ -278,6 +280,14 @@ def postprocess_thai_text(
     # 2. Fix common words
     if fix_words:
         result = fix_common_words(result, word_fixes)
+    
+    # 2.5. Fuzzy Match (ชื่อคน + คำศัพท์)
+    if fuzzy_match:
+        try:
+            from app.services.fuzzy_match_service import apply_fuzzy_match
+            result = apply_fuzzy_match(result)
+        except Exception as e:
+            logger.warning(f"⚠️ Fuzzy match error: {e}")
     
     # 3. Improve spacing (ตัวเลข, คำติดกัน)
     if improve_spacing:

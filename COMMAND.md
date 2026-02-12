@@ -9,3 +9,12 @@
 ```bash
 ./scripts/pod/restart-main-api.sh && ./scripts/pod/restart-rq-workers.sh
 ```
+
+
+# ดู log Thai/Fuzzy/merging (ทุก CPU worker)
+grep -h -E "Fuzzy|Thai|merging|Processed|🔤|🇹🇭" /tmp/rq-worker-cpu-*.log
+
+# follow แบบ real-time — ดูทุก CPU (ใช้ -F รองรับ log truncate)
+tail -F /tmp/rq-worker-cpu-{0,1,2,3,4,5,6,7}.log 2>/dev/null | grep -E "Fuzzy|Thai|merging|Processed|🔤|🇹🇭" --line-buffered
+
+# ถ้ารู้ว่า task อยู่ worker ไหน (เช่น cpu-5): tail -F /tmp/rq-worker-cpu-5.log

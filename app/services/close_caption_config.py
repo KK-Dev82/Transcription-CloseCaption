@@ -68,6 +68,9 @@ class CloseCaptionConfig:
     POSTPROCESS_ENABLED = os.getenv("CC_POSTPROCESS_ENABLED", "true").lower() == "true"
     POSTPROCESS_NORMALIZE = os.getenv("CC_POSTPROCESS_NORMALIZE", "true").lower() == "true"
     POSTPROCESS_WORD_SEGMENTATION = os.getenv("CC_POSTPROCESS_WORD_SEG", "true").lower() == "true"
+
+    # Fuzzy Match Configuration (สำหรับ CC: NeMo/TyPhoon + faster-whisper)
+    FUZZY_MATCH_ENABLED = os.getenv("CC_FUZZY_MATCH_ENABLED", "true").lower() == "true"
     
     @classmethod
     def get_whisper_params(cls) -> Dict:
@@ -109,4 +112,5 @@ Close Caption Config (TH-CC-RT v1):
   Whisper: beam_size={cls.BEAM_SIZE}, temp={cls.TEMPERATURE}, vad={cls.VAD_FILTER}
   Dedupe: {cls.DEDUPE_ENABLED} (max_match={cls.DEDUPE_MAX_MATCH_LENGTH})
   Postprocess: {cls.POSTPROCESS_ENABLED} (normalize={cls.POSTPROCESS_NORMALIZE}, word_seg={cls.POSTPROCESS_WORD_SEGMENTATION})
+  Fuzzy Match (CC): {cls.FUZZY_MATCH_ENABLED}
 """

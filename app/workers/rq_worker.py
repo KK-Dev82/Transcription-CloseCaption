@@ -960,7 +960,7 @@ def process_transcription_job(
             
             # Final merge processing (cleanup text, calculate total_duration)
             t_merge_start = time.time()
-            logger.info(f"✅ Processed {processed_count}/{total_chunks} chunks incrementally (took {phase_timings['fetch_chunks_time']:.2f}s), finalizing merge...")
+            logger.warning(f"✅ Processed {processed_count}/{total_chunks} chunks (took {phase_timings['fetch_chunks_time']:.2f}s), finalizing merge...")
             
             # Build merged result (text only, no segments in memory)
             full_text = " ".join(merged_text_parts).strip()
@@ -977,11 +977,40 @@ def process_transcription_job(
             # Apply Thai processor
             if language == "th":
                 t_thai_start = time.time()
-                logger.info(f"🇹🇭 Applying Thai processor...")
+                logger.warning(f"🇹🇭 Applying Thai processor... (text len={len(merged_result.get('text',''))})")
                 merged_result = transcription_service.whisper_service._apply_thai_processing(merged_result)
                 t_thai_end = time.time()
                 phase_timings['thai_processing_time'] = t_thai_end - t_thai_start
-                logger.info(f"✅ Thai processing completed (took {phase_timings['thai_processing_time']:.2f}s)")
+                logger.warning(f"✅ Thai processing completed (took {phase_timings['thai_processing_time']:.2f}s)")
+
+                # Fuzzy Match (ชื่อคน + คำศัพท์) — เปิด/ปิดได้ผ่าน FUZZY_MATCH_ENABLED_FOR_TRANSCRIPTION
+                if os.getenv("FUZZY_MATCH_ENABLED_FOR_TRANSCRIPTION", "true").lower() == "true":
+                    try:
+                        from app.services.fuzzy_match_service import apply_fuzzy_match
+                        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+                        t_fuzzy_start = time.time()
+                        before_text = merged_result.get("text", "")
+                        fuzzy_timeout = int(os.getenv("FUZZY_MATCH_TIMEOUT_SECONDS", "60"))
+                        logger.warning(f"🔤 Applying Fuzzy match... (text len={len(before_text)}, timeout={fuzzy_timeout}s)")
+                        ex = ThreadPoolExecutor(max_workers=1)
+                        try:
+                            future = ex.submit(apply_fuzzy_match, before_text)
+                            try:
+                                merged_result["text"] = future.result(timeout=fuzzy_timeout)
+                            except FuturesTimeoutError:
+                                logger.warning(f"⚠️ Fuzzy match timeout ({fuzzy_timeout}s), using original text")
+                                merged_result["text"] = before_text
+                        finally:
+                            ex.shutdown(wait=False)  # อย่ารอ thread ที่ค้าง — ให้ main ทำงานต่อ
+                        phase_timings['fuzzy_match_time'] = time.time() - t_fuzzy_start
+                        if before_text != merged_result["text"]:
+                            logger.warning(f"✅ Fuzzy match applied (took {phase_timings.get('fuzzy_match_time', 0):.2f}s)")
+                        else:
+                            logger.warning(f"✅ Fuzzy match ran (took {phase_timings.get('fuzzy_match_time', 0):.2f}s, no changes)")
+                    except Exception as fuzzy_e:
+                        logger.warning(f"⚠️ Fuzzy match error: {fuzzy_e}")
+                        if "before_text" in locals():
+                            merged_result["text"] = before_text
             
             t_merge_end = time.time()
             phase_timings['t_merge_end'] = datetime.now(timezone.utc).isoformat()

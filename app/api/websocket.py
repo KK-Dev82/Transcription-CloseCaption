@@ -732,6 +732,7 @@ async def websocket_audio_ingest_endpoint(
                             fix_words=True,
                             word_segmentation=False,  # FE overlay จะจัดรูปแบบเอง
                             improve_spacing=True,  # ✅ เพิ่มการเว้นวรรค
+                            fuzzy_match=CloseCaptionConfig.FUZZY_MATCH_ENABLED,  # ✅ เปิด/ปิดได้
                         )
                         text = text.strip()
                         logger.debug(f"[WS ingest] 🔧 Postprocessed text: {text[:50]}")

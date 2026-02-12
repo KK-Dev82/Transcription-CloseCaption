@@ -85,6 +85,7 @@ tqdm==4.66.1
 
 # Thai NLP
 pythainlp==4.0.2
+rapidfuzz>=3.0.0
 attacut==1.0.6
 tzdata>=2024.1  # Required for PyThaiNLP timezone support (auto-update to latest)
 

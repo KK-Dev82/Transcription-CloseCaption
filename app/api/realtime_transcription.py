@@ -698,13 +698,14 @@ async def process_live_chunk_background(
                 preprocess_text = transcription_text
                 postprocess_start_time = datetime.now(timezone.utc)
                 
-                logger.info(f"🔧 Postprocessing: normalize={CloseCaptionConfig.POSTPROCESS_NORMALIZE}, word_seg={CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION}")
+                logger.info(f"🔧 Postprocessing: normalize={CloseCaptionConfig.POSTPROCESS_NORMALIZE}, word_seg={CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION}, fuzzy_match={CloseCaptionConfig.FUZZY_MATCH_ENABLED}")
                 
                 transcription_text = postprocess_thai_text(
                     transcription_text,
                     normalize=CloseCaptionConfig.POSTPROCESS_NORMALIZE,
                     fix_words=True,
-                    word_segmentation=CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION
+                    word_segmentation=CloseCaptionConfig.POSTPROCESS_WORD_SEGMENTATION,
+                    fuzzy_match=CloseCaptionConfig.FUZZY_MATCH_ENABLED,  # ✅ เปิด/ปิดได้
                 )
                 
                 postprocess_end_time = datetime.now(timezone.utc)

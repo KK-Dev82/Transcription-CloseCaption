@@ -103,4 +103,13 @@ Config path ใน `.env` (ถ้าต้องการ override):
 FUZZY_MATCH_NAMES_PATH=data/fuzzy_match/names.txt
 FUZZY_MATCH_VOCABULARY_PATH=data/fuzzy_match/vocabulary.txt
 FUZZY_MATCH_NAME_PREFIXES_PATH=data/fuzzy_match/name_prefixes.txt
+FUZZY_MATCH_NAME_THRESHOLD=0.85
+FUZZY_MATCH_VOCAB_THRESHOLD=0.85
 ```
+
+## เปิด/ปิดการใช้งาน
+
+| ตัวแปร | ค่า | ใช้กับ |
+|--------|-----|--------|
+| `CC_FUZZY_MATCH_ENABLED` | `true` / `false` | FE CC (NeMo/TyPhoon + faster-whisper) |
+| `FUZZY_MATCH_ENABLED_FOR_TRANSCRIPTION` | `true` / `false` | File transcription (aggregator) |
