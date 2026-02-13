@@ -218,7 +218,7 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
         PYTHONPATH="$PYTHONPATH" \
         WHISPER_DEVICE="${WHISPER_DEVICE:-cuda}" \
         WHISPER_COMPUTE_TYPE="${WHISPER_COMPUTE_TYPE:-float16}" \
-            WHISPER_MODEL="${WHISPER_MODEL:-Vinxscribe/biodatlab-whisper-th-medium-faster}" \
+            WHISPER_MODEL="${WHISPER_MODEL:-deepdml/faster-whisper-large-v3-turbo-ct2}" \
         WHISPER_USE_BATCHED="${WHISPER_USE_BATCHED:-true}" \
         WHISPER_BATCH_SIZE="${WHISPER_BATCH_SIZE:-16}" \
         CUDNN_DISABLE="${CUDNN_DISABLE:-0}" \

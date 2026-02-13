@@ -110,7 +110,9 @@ class JSONStorage:
             "text_correction_time": transcription_data.get("text_correction_time", existing_data.get("text_correction_time")),  # เวลาที่ใช้ในการแก้ไขข้อความ (วินาที)
             "job_id": transcription_data.get("job_id", existing_data.get("job_id")),
             "user_id": transcription_data.get("user_id", existing_data.get("user_id")),
-            "callback_url": transcription_data.get("callback_url", existing_data.get("callback_url"))
+            "callback_url": transcription_data.get("callback_url", existing_data.get("callback_url")),
+            "model_size": transcription_data.get("model_size", existing_data.get("model_size")),
+            "chunk_duration": transcription_data.get("chunk_duration", existing_data.get("chunk_duration")),
         }
         
         # แปลง progress ให้เป็นตัวเลขเสมอ

@@ -242,7 +242,7 @@ class RedisQueueService:
         task_id: str,
         file_path: str,
         language: str = "th",
-        model_size: str = "base",
+        model_size: Optional[str] = None,
         chunk_duration: int = 90
     ) -> str:
         """
@@ -261,6 +261,14 @@ class RedisQueueService:
         Raises:
             QueueFullError: ถ้า queue เต็ม (current >= max)
         """
+        # model_size: None / ว่าง / "base" = ใช้ WHISPER_MODEL (turbo) จาก .env
+        if not model_size or str(model_size).strip().lower() in ("", "base", "default"):
+            try:
+                from app.services.close_caption_config import get_transcription_model_display
+                model_size = get_transcription_model_display()
+            except Exception:
+                model_size = os.getenv("WHISPER_MODEL", "base")
+        
         # ตรวจสอบ queue limit ก่อน enqueue
         self._check_preprocess_queue_limit()
         

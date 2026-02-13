@@ -427,8 +427,9 @@
                 <div class="form-group">
                     <label for="modelSize">ขนาดโมเดล:</label>
                     <select id="modelSize">
+                        <option value="" selected>Default (จาก .env.runpod)</option>
                         <option value="tiny">Tiny (เร็วที่สุด)</option>
-                        <option value="base" selected>Base (แนะนำ)</option>
+                        <option value="base">Base</option>
                         <option value="small">Small (แม่นยำกว่า)</option>
                         <option value="medium">Medium (แม่นยำมาก)</option>
                         <option value="large">Large (แม่นยำที่สุด แต่ช้า)</option>
@@ -600,19 +601,21 @@
                 const uploadData = await uploadResponse.json();
                 showProgress('อัพโหลดสำเร็จ กำลังเริ่มการแปลงเสียง...', 30);
 
-                // Step 2: Start transcription
+                // Step 2: Start transcription (ไม่ส่ง model_size = ใช้ WHISPER_MODEL จาก .env)
+                const transcribePayload = {
+                    file_path: uploadData.file_path,
+                    file_name: uploadData.filename,
+                    language: document.getElementById('language').value,
+                    chunk_duration: 30
+                };
+                const modelSize = document.getElementById('modelSize').value;
+                if (modelSize) transcribePayload.model_size = modelSize;
                 const transcriptionResponse = await fetch(`${CONFIG.POD_URL}/transcribe/`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        file_path: uploadData.file_path,
-                        file_name: uploadData.filename,
-                        language: document.getElementById('language').value,
-                        model_size: document.getElementById('modelSize').value,
-                        chunk_duration: 30
-                    })
+                    body: JSON.stringify(transcribePayload)
                 });
 
                 if (!transcriptionResponse.ok) {

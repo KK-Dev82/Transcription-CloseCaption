@@ -19,7 +19,7 @@ transcription_service = TranscriptionService()
 class EnhancedTranscriptionRequest(BaseModel):
     file_path: str
     language: str = "th"
-    model_size: str = "base"  # เร็วกว่า large-v3 มาก
+    model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก .env (WHISPER_MODEL)
     chunk_duration: int = 30
     enable_thai_processing: bool = True
 
@@ -32,8 +32,6 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
     """
     try:
         # ใช้ logic เดียวกับ /api/transcribe/ โดยตรง
-        from ..api.transcribe import TranscriptionRequest
-        from ..utils.json_storage import JSONStorage
         from ..services.redis_queue_service import get_redis_queue_service
         import uuid
         from datetime import datetime, timezone
@@ -43,26 +41,42 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         file_path = request.file_path
         if not Path(file_path).exists():
             raise HTTPException(status_code=404, detail=f"ไม่พบไฟล์: {file_path}")
-        
+
+        # model_size: ไม่ส่ง / ว่าง / "default" / "base" = ใช้ WHISPER_MODEL (turbo) จาก .env
+        from ..services.close_caption_config import get_transcription_model_display
+        _raw = (request.model_size or "").strip().lower()
+        if _raw in ("", "default", "base"):
+            model_size = get_transcription_model_display()
+            logger.info(f"📥 model_size not sent/empty/base → using WHISPER_MODEL: {model_size}")
+        else:
+            model_size = request.model_size
+
         # สร้าง task_id
         task_id = str(uuid.uuid4())
         
-        # สร้าง task และบันทึกลง storage
-        json_storage = JSONStorage()
+        # สร้าง task และบันทึกลง storage (ใช้ storage ตาม STORAGE_TYPE เหมือน transcribe.py)
+        import os
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        if storage_type == 'sqlite':
+            from ..utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+        else:
+            from ..utils.json_storage import JSONStorage
+            storage = JSONStorage()
         task_dict = {
             "task_id": task_id,
             "status": "queued",
             "progress": 0,
             "file_path": file_path,
             "language": request.language,
-            "model_size": request.model_size,
+            "model_size": model_size,
             "chunk_duration": request.chunk_duration,
             "full_text": "",
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "enable_thai_processing": request.enable_thai_processing,
         }
-        json_storage.save_transcription(task_id, task_dict)
+        storage.save_transcription(task_id, task_dict)
         
         # Enqueue preprocessing job
         queue_service = get_redis_queue_service()
@@ -71,7 +85,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                 task_id=task_id,
                 file_path=file_path,
                 language=request.language,
-                model_size=request.model_size,
+                model_size=model_size,
                 chunk_duration=request.chunk_duration
             )
             

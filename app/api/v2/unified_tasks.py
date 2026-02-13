@@ -774,11 +774,13 @@ async def resubmit_task(task_id: str) -> Dict:
         
         new_task_id = str(uuid.uuid4())
         
-        # สร้าง request ใหม่
+        # สร้าง request ใหม่ (model_size: ใช้จาก task หรือ default จาก WHISPER_MODEL)
+        from app.services.close_caption_config import get_transcription_model_display
+        model_size = task_data.get('model_size') or get_transcription_model_display()
         request = TranscriptionRequest(
             file_path=file_path,
             language=task_data.get('language', 'th'),
-            model_size=task_data.get('model_size', 'base'),
+            model_size=model_size,
             chunk_duration=task_data.get('chunk_duration', 150),
             use_chunking=task_data.get('use_chunking', True)
         )

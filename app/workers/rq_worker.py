@@ -377,12 +377,14 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                 from app.services.transcription_service import TranscriptionService
                 
                 # สร้าง TranscriptionResponse object สำหรับ _send_callback
+                from app.services.close_caption_config import get_transcription_model_display
+                model_size_val = task_data.get("model_size") or get_transcription_model_display()
                 task = TranscriptionResponse(
                     task_id=task_id,
                     status=status,
                     file_path=task_data.get("file_path"),
                     language=task_data.get("language", "th"),
-                    model_size=task_data.get("model_size", "base"),
+                    model_size=model_size_val,
                     created_at=datetime.fromisoformat(task_data.get("created_at", datetime.now(timezone.utc).isoformat()).replace('Z', '+00:00')),
                     callback_url=callback_url,
                     progress=task_data.get("progress", 100 if status == "completed" else 0),
@@ -590,7 +592,8 @@ def process_transcription_job(
                         chunk_paths = chunks_metadata.get("chunk_paths", [])
                         total_chunks = chunks_metadata.get("total_chunks", 0)
                         language = chunks_metadata.get("language", "th")
-                        model_size = chunks_metadata.get("model_size", "base")
+                        from app.services.close_caption_config import get_transcription_model_display
+                        model_size = chunks_metadata.get("model_size") or get_transcription_model_display()
                         chunk_duration = chunks_metadata.get("chunk_duration", 150)
                         
                         if claimed_index < len(chunk_paths):
@@ -1411,6 +1414,19 @@ def process_preprocess_job(
         task_data["language"] = language
         task_data["model_size"] = model_size
         task_data["chunk_duration"] = chunk_duration
+        if not task_data.get("created_at"):
+            task_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        if not task_data.get("task_id"):
+            task_data["task_id"] = task_id
+        if "status" not in task_data:
+            task_data["status"] = "processing"
+        
+        # FIX: บันทึก task_data ลง storage ทันที (รวม model_size) เพื่อป้องกัน fallback เป็น "base"
+        # กรณี transcription_enhanced บันทึกไว้แค่ JSON แต่ STORAGE_TYPE=sqlite
+        if storage_type == 'sqlite' and storage:
+            storage.save_transcription(task_id, task_data)
+        elif storage_type != 'sqlite' and json_storage:
+            json_storage.save_transcription(task_id, task_data)
         
         # อัปเดต stage: preprocessing
         _update_task_stage_sync(

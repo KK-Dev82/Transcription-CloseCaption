@@ -8,8 +8,16 @@ from typing import Dict, Optional
 
 
 def get_default_whisper_model() -> str:
-    """คืนค่า default whisper model จาก env (raw: อาจเป็น models--org--name หรือ org/name)"""
+    """คืนค่า default whisper model จาก env (raw: อาจเป็น models--org--name หรือ org/name)
+    ลำดับ: CC_MODEL_SIZE (สำหรับ Close Caption) → WHISPER_MODEL"""
     return os.getenv("CC_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "small")
+
+
+def get_transcription_model_display() -> str:
+    """สำหรับ Transcription (file) เท่านั้น — ใช้ WHISPER_MODEL เป็นหลักจาก .env.runpod
+    ไม่ใช้ CC_MODEL_SIZE เพราะเป็นคนละ use case (CC vs file transcription)"""
+    raw = os.getenv("WHISPER_MODEL") or os.getenv("CC_MODEL_SIZE", "small")
+    return whisper_model_to_display(raw)
 
 
 def whisper_model_to_display(raw: str) -> str:

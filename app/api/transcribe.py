@@ -237,9 +237,14 @@ async def start_transcription(request: TranscriptionRequest):
                 detail=f"ไม่พบไฟล์: {file_path}"
             )
         
-        # ใช้ default model จาก env เมื่อ frontend ไม่ส่ง model_size
-        from app.services.close_caption_config import get_default_whisper_model_display
-        model_size = request.model_size or get_default_whisper_model_display()
+        # model_size: ไม่ส่ง / ว่าง / "default" / "base" = ใช้ WHISPER_MODEL (turbo) จาก .env
+        from app.services.close_caption_config import get_transcription_model_display
+        _raw = (request.model_size or "").strip().lower()
+        if _raw in ("", "default", "base"):
+            model_size = get_transcription_model_display()
+            logger.info(f"📥 model_size not sent/empty/base → using WHISPER_MODEL: {model_size}")
+        else:
+            model_size = request.model_size
         
         # Log request for debugging
         logger.info(f"📥 Received transcription request: file_path={file_path}, language={request.language}, model_size={model_size}")
