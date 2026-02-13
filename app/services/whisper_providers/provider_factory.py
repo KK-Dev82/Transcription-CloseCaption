@@ -34,11 +34,8 @@ class ProviderType(Enum):
     GROQ = "groq"
     OPENAI_WHISPER = "openai-whisper"
     FASTER_WHISPER = "faster-whisper"
+    NEMO_TYPHOON = "nemo-typhoon"
     WHISPER_CPP = "whisper-cpp"
-    # Future providers
-    # FIREWORKS = "fireworks"
-    # OPENAI = "openai"
-    # DEEPGRAM = "deepgram"
 
 
 class WhisperProviderFactory:
@@ -59,15 +56,16 @@ class WhisperProviderFactory:
     _providers: Dict[str, WhisperProvider] = {}
     
     # Fallback order (primary -> fallback)
-    # Note: 
-    # - faster-whisper ควรเป็น primary สำหรับ GPU (เร็วกว่า)
-    # - whisper-cpp ควรเป็น primary สำหรับ Local Test (Mac Mini M4)
+    # Note:
+    # - faster-whisper / nemo-typhoon: GPU (Runpod) — สลับได้ via WHISPER_PROVIDER
+    # - whisper-cpp: Local Test (Mac Mini M4)
     _fallback_order = [
-        ProviderType.FASTER_WHISPER,  # GPU (Runpod)
+        ProviderType.FASTER_WHISPER,   # GPU (Runpod) — fallback เมื่อ nemo-typhoon ล้มเหลว
+        ProviderType.NEMO_TYPHOON,     # NeMo Typhoon ASR — fallback เมื่อ faster-whisper ล้มเหลว
         ProviderType.WHISPER_CPP,      # Local Test (Mac Mini M4)
         ProviderType.OPENAI_WHISPER,   # Fallback
-        ProviderType.GROQ,              # Cloud API
-        ProviderType.BUILTIN            # Docker API (last resort)
+        ProviderType.GROQ,             # Cloud API
+        ProviderType.BUILTIN           # Docker API (last resort)
     ]
     
     @classmethod
@@ -116,6 +114,9 @@ class WhisperProviderFactory:
             return FasterWhisperProvider(config)
         elif provider_type == ProviderType.WHISPER_CPP.value:
             return WhisperCppProvider(config)
+        elif provider_type == ProviderType.NEMO_TYPHOON.value:
+            from .nemo_typhoon_provider import NeMoTyphoonProvider
+            return NeMoTyphoonProvider(config)
         else:
             logger.warning(f"[Factory] ⚠️ Unknown provider '{provider_type}', using builtin")
             return BuiltinProvider(config)
@@ -156,6 +157,11 @@ class WhisperProviderFactory:
                 'model_dir': os.getenv('WHISPER_MODEL_DIR', 'models'),
                 'model': os.getenv('WHISPER_MODEL', 'base'),
                 'use_metal': os.getenv('WHISPER_USE_METAL', None)
+            }
+        elif provider_type == ProviderType.NEMO_TYPHOON.value:
+            return {
+                'model': os.getenv('TRANSCRIPTION_TYPHOON_MODEL') or os.getenv('FE_CC_TYPHOON_MODEL', 'typhoon-ai/typhoon-asr-realtime'),
+                'device': os.getenv('TRANSCRIPTION_TYPHOON_DEVICE') or os.getenv('FE_CC_TYPHOON_DEVICE', 'auto'),
             }
         return {}
     

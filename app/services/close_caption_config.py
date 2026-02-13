@@ -14,9 +14,14 @@ def get_default_whisper_model() -> str:
 
 
 def get_transcription_model_display() -> str:
-    """สำหรับ Transcription (file) เท่านั้น — ใช้ WHISPER_MODEL เป็นหลักจาก .env.runpod
-    ไม่ใช้ CC_MODEL_SIZE เพราะเป็นคนละ use case (CC vs file transcription)"""
-    raw = os.getenv("WHISPER_MODEL") or os.getenv("CC_MODEL_SIZE", "small")
+    """สำหรับ Transcription (file) เท่านั้น
+    - WHISPER_PROVIDER=nemo-typhoon → ใช้ TRANSCRIPTION_TYPHOON_MODEL
+    - WHISPER_PROVIDER=faster-whisper → ใช้ WHISPER_MODEL"""
+    provider = os.getenv("WHISPER_PROVIDER", "faster-whisper").lower()
+    if provider == "nemo-typhoon":
+        raw = os.getenv("TRANSCRIPTION_TYPHOON_MODEL") or os.getenv("FE_CC_TYPHOON_MODEL", "typhoon-ai/typhoon-asr-realtime")
+    else:
+        raw = os.getenv("WHISPER_MODEL") or os.getenv("CC_MODEL_SIZE", "small")
     return whisper_model_to_display(raw)
 
 

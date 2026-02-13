@@ -20,7 +20,7 @@ class EnhancedTranscriptionRequest(BaseModel):
     file_path: str
     language: str = "th"
     model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก .env (WHISPER_MODEL)
-    chunk_duration: int = 30
+    chunk_duration: Optional[int] = None  # ไม่ส่ง = ใช้จาก .env (TRANSCRIPTION_CHUNK_DURATION)
     enable_thai_processing: bool = True
 
 @router.post("/start")
@@ -51,6 +51,11 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         else:
             model_size = request.model_size
 
+        # chunk_duration: ไม่ส่ง = ใช้ TRANSCRIPTION_CHUNK_DURATION จาก .env
+        chunk_duration = request.chunk_duration
+        if chunk_duration is None:
+            chunk_duration = int(os.getenv("TRANSCRIPTION_CHUNK_DURATION", "150"))
+
         # สร้าง task_id
         task_id = str(uuid.uuid4())
         
@@ -70,7 +75,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "file_path": file_path,
             "language": request.language,
             "model_size": model_size,
-            "chunk_duration": request.chunk_duration,
+            "chunk_duration": chunk_duration,
             "full_text": "",
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -86,7 +91,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                 file_path=file_path,
                 language=request.language,
                 model_size=model_size,
-                chunk_duration=request.chunk_duration
+                chunk_duration=chunk_duration
             )
             
             logger.info(f"✅ Enhanced transcription job enqueued: {preprocess_job_id}")

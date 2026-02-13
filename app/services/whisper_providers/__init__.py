@@ -20,7 +20,7 @@ __all__ = [
     'FasterWhisperProvider',
     'WhisperCppProvider',
     'WhisperProviderFactory',
-    'ProviderType'
+    'ProviderType',
 ]
 
 

@@ -38,8 +38,27 @@ FE_CC_PROVIDER=faster-whisper
 - ถ้า `FE_CC_PROVIDER=typhoon` แต่ `typhoon-asr` ไม่ได้ติดตั้ง → ระบบจะ fallback ไปใช้ **faster-whisper** อัตโนมัติ
 - ถ้า `typhoon-asr` ติดตั้งแล้ว → ใช้ TyPhoon ตามที่ตั้งค่า
 
+## Transcription (File) — สลับได้แล้ว
+
+ตั้งแต่เพิ่ม NeMo Typhoon ASR สำหรับ File Transcription:
+
+| Env | ค่าที่เปลี่ยน | ผลลัพธ์ |
+|-----|--------------|---------|
+| `WHISPER_PROVIDER=faster-whisper` | (default) | ใช้ faster-whisper สำหรับ file transcription |
+| `WHISPER_PROVIDER=nemo-typhoon` | เปลี่ยน env | ใช้ NeMo Typhoon ASR สำหรับ file transcription |
+
+```bash
+# ใน .env.runpod
+WHISPER_PROVIDER=faster-whisper   # หรือ nemo-typhoon
+TRANSCRIPTION_TYPHOON_MODEL=typhoon-ai/typhoon-asr-realtime  # เมื่อใช้ nemo-typhoon
+```
+
+**สลับได้ตลอดเวลา** — เปลี่ยน env แล้ว restart GPU workers (ไม่กระทบ FE, ไม่ต้องแก้ API/Frontend)
+
+- Fallback: ถ้า `nemo-typhoon` ไม่พร้อม (typhoon-asr ไม่ติดตั้ง) → fallback อัตโนมัติไปใช้ faster-whisper
+
 ## หมายเหตุ
 
-- **Transcription (file)** ยังใช้ faster-whisper เสมอ (ไม่เปลี่ยนแปลง)
-- **RQ Workers** (Transcription Queue) ยังใช้ faster-whisper
-- เฉพาะ **FE Live Caption** (WebSocket ingest) เท่านั้นที่สลับได้ตาม FE_CC_PROVIDER
+- **FE Live Caption** สลับได้ตาม `FE_CC_PROVIDER` (typhoon / faster-whisper)
+- **Transcription (file)** สลับได้ตาม `WHISPER_PROVIDER` (faster-whisper / nemo-typhoon)
+- สองระบบแยกกัน — ไม่กระทบกัน (ใช้ env คนละตัว)
