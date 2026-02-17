@@ -40,9 +40,14 @@ print_success() {
     echo -e "${GREEN}✅ $1${NC}"
 }
 
-# โหลด environment variables จาก .env.runpod ก่อน
-print_info "Loading environment variables from .env.runpod..."
-if [ -f "$PROJECT_ROOT/.env.runpod" ]; then
+# โหลด env ตามจำนวน GPU (1 GPU → .env.runpod-1GPU ป้องกัน OOM)
+print_info "Loading environment (base + profile by GPU count)..."
+if [ -f "$PROJECT_ROOT/scripts/utility/load-env-by-gpu.sh" ]; then
+    set -a
+    source "$PROJECT_ROOT/scripts/utility/load-env-by-gpu.sh"
+    set +a
+    print_success "✅ Environment loaded (profile: ${ENV_LOADED_PROFILE:-default})"
+elif [ -f "$PROJECT_ROOT/.env.runpod" ]; then
     set -a
     source "$PROJECT_ROOT/.env.runpod"
     set +a

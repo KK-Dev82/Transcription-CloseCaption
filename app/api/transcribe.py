@@ -2,11 +2,14 @@
 Transcription API Endpoint
 รองรับ /api/transcribe/ สำหรับ job-based architecture
 """
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+import os
 import logging
 import uuid
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -102,10 +105,11 @@ class TranscriptionRequest(BaseModel):
     file_path: Optional[str] = None
     file_url: Optional[str] = None
     language: str = "th"
-    model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก env (WHISPER_MODEL)
+    model_size: Optional[str] = None
     chunk_duration: Optional[int] = None
     use_chunking: bool = False
     callback_url: Optional[str] = None
+    enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT
 
 @router.post("/")
 async def start_transcription(request: TranscriptionRequest):
@@ -263,6 +267,11 @@ async def start_transcription(request: TranscriptionRequest):
             callback_url=request.callback_url
         )
         
+        # enable_diarization: None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก env
+        enable_diarization = request.enable_diarization
+        if enable_diarization is None:
+            enable_diarization = os.getenv("ENABLE_DIARIZATION_DEFAULT", "0").lower() in ("1", "true", "yes")
+
         # บันทึก task ลง storage โดยตรง (ไม่ใช้ in-memory tasks dict)
         task_dict = {
             "task_id": task_id,
@@ -274,7 +283,8 @@ async def start_transcription(request: TranscriptionRequest):
             "full_text": "",
             "chunks": [],
             "created_at": task.created_at.isoformat(),
-            "callback_url": request.callback_url,  # บันทึก callback_url เพื่อใช้ส่ง callback เมื่อเสร็จ
+            "callback_url": request.callback_url,
+            "enable_diarization": enable_diarization,
         }
         storage.save_transcription(task_id, task_dict)
         

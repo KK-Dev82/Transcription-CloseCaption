@@ -70,8 +70,14 @@ mkdir -p uploads storage/transcriptions storage/metadata storage/captions temp m
 print_success "✅ Directories created"
 echo ""
 
-# Load environment variables
-if [ -f ".env.runpod" ]; then
+# Load env ตามจำนวน GPU (1 GPU → .env.runpod-1GPU ป้องกัน OOM)
+if [ -f "scripts/utility/load-env-by-gpu.sh" ]; then
+    print_status "Loading environment (profile by GPU count)..."
+    set -a
+    source scripts/utility/load-env-by-gpu.sh
+    set +a
+    print_success "✅ Environment loaded (profile: ${ENV_LOADED_PROFILE:-default})"
+elif [ -f ".env.runpod" ]; then
     print_status "Loading .env.runpod..."
     set -a
     source .env.runpod

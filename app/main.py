@@ -29,16 +29,20 @@ if not os.getenv('LD_LIBRARY_PATH') or 'cudnn' not in os.getenv('LD_LIBRARY_PATH
         os.environ['LD_LIBRARY_PATH'] = new_ld_path
         logging.info(f"✅ Set LD_LIBRARY_PATH for cuDNN and CTranslate2: {new_ld_path[:100]}...")
 
-# Load .env.runpod if exists (ต้องทำก่อน import services ที่ใช้ environment variables)
+# Load env ตามจำนวน GPU (1 GPU → .env.runpod-1GPU ป้องกัน OOM)
 try:
-    from dotenv import load_dotenv
-    env_file = Path(__file__).parent.parent / ".env.runpod"
-    if env_file.exists():
-        load_dotenv(env_file)
-except ImportError:
-    pass  # python-dotenv not installed, will use system env vars
-except Exception as e:
-    pass
+    from app.utils.load_env_by_gpu import load_env_by_gpu
+    profile = load_env_by_gpu()
+    if profile:
+        logging.getLogger(__name__).info(f"Loaded env profile: {profile} (by GPU count)")
+except Exception:
+    try:
+        from dotenv import load_dotenv
+        env_file = Path(__file__).parent.parent / ".env.runpod"
+        if env_file.exists():
+            load_dotenv(env_file)
+    except ImportError:
+        pass
 
 # ✅ Setup logging with rotation (ต้องทำก่อน import services)
 try:

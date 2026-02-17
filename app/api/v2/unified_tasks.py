@@ -231,7 +231,8 @@ def _build_full_response(
         "completed_at": task.get("completed_at"),
         "total_duration": task.get("total_duration"),
         "duration": task.get("duration"),
-        "_format": "full"
+        "_format": "full",
+        "full_text": task.get("full_text", "") or task.get("text", "")
     }
     
     # Add timing info

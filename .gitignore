@@ -103,6 +103,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.runpod
+.env.runpod-*
 .venv
 env/
 venv/

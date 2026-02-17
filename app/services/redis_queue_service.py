@@ -14,16 +14,18 @@ from rq import Queue, Worker, Connection
 from rq.job import Job
 from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
 
-# Load .env.runpod if exists (ต้องทำก่อนใช้ os.getenv)
+# Load env ตามจำนวน GPU (1 GPU → .env.runpod-1GPU ป้องกัน OOM)
 try:
-    from dotenv import load_dotenv
-    env_file = Path(__file__).parent.parent.parent / ".env.runpod"
-    if env_file.exists():
-        load_dotenv(env_file)
-except ImportError:
-    pass  # python-dotenv not installed, will use system env vars
+    from app.utils.load_env_by_gpu import load_env_by_gpu
+    load_env_by_gpu()
 except Exception:
-    pass  # Failed to load, will use system env vars
+    try:
+        from dotenv import load_dotenv
+        env_file = Path(__file__).parent.parent.parent / ".env.runpod"
+        if env_file.exists():
+            load_dotenv(env_file)
+    except ImportError:
+        pass
 
 logger = logging.getLogger(__name__)
 

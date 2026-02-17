@@ -22,6 +22,7 @@ class EnhancedTranscriptionRequest(BaseModel):
     model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก .env (WHISPER_MODEL)
     chunk_duration: Optional[int] = None  # ไม่ส่ง = ใช้จาก .env (TRANSCRIPTION_CHUNK_DURATION)
     enable_thai_processing: bool = True
+    enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก .env (.env.runpod / .env.runpod-1GPU)
 
 @router.post("/start")
 async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
@@ -31,7 +32,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
     แต่เพิ่ม Thai processing ในภายหลัง
     """
     try:
-        # ใช้ logic เดียวกับ /api/transcribe/ โดยตรง
+        import os
         from ..services.redis_queue_service import get_redis_queue_service
         import uuid
         from datetime import datetime, timezone
@@ -56,11 +57,15 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         if chunk_duration is None:
             chunk_duration = int(os.getenv("TRANSCRIPTION_CHUNK_DURATION", "150"))
 
+        # enable_diarization: None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก .env (.env.runpod / .env.runpod-1GPU)
+        enable_diarization = request.enable_diarization
+        if enable_diarization is None:
+            enable_diarization = os.getenv("ENABLE_DIARIZATION_DEFAULT", "0").lower() in ("1", "true", "yes")
+
         # สร้าง task_id
         task_id = str(uuid.uuid4())
         
         # สร้าง task และบันทึกลง storage (ใช้ storage ตาม STORAGE_TYPE เหมือน transcribe.py)
-        import os
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
             from ..utils.sqlite_storage import SQLiteStorage
@@ -80,6 +85,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "enable_thai_processing": request.enable_thai_processing,
+            "enable_diarization": enable_diarization,
         }
         storage.save_transcription(task_id, task_dict)
         
@@ -114,7 +120,8 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "strategy": "fast_model_with_post_processing",
             "estimated_time": "3-5 นาทีสำหรับวิดีโอ 10 นาที",
             "queue": "redis",
-            "enable_thai_processing": request.enable_thai_processing
+            "enable_thai_processing": request.enable_thai_processing,
+            "enable_diarization": enable_diarization
         }
         
     except HTTPException:

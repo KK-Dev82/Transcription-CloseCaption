@@ -84,9 +84,16 @@ class SQLiteStorage:
                 job_id TEXT,
                 user_id TEXT,
                 callback_url TEXT,
-                phase_timings_json TEXT
+                phase_timings_json TEXT,
+                enable_diarization INTEGER DEFAULT 0
             )
         """)
+        try:
+            conn.execute("ALTER TABLE transcriptions ADD COLUMN enable_diarization INTEGER DEFAULT 0")
+            conn.commit()
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                pass
         
         # Captions table
         conn.execute("""
@@ -359,6 +366,7 @@ class SQLiteStorage:
         if completed_at:
             completed_at = get_utc_timestamp(completed_at)
         
+        enable_diarization = 1 if transcription_data.get("enable_diarization") else 0
         conn.execute("""
             INSERT OR REPLACE INTO transcriptions (
                 task_id, created_at, updated_at, completed_at, file_path, file_url, file_name,
@@ -366,8 +374,8 @@ class SQLiteStorage:
                 chunks_json, status, progress, model_size, chunk_duration, error_message,
                 processing_time, transcription_time, audio_extraction_time, text_correction_time,
                 current_stage, current_stage_description, stage_progress,
-                job_id, user_id, callback_url, phase_timings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                job_id, user_id, callback_url, phase_timings_json, enable_diarization
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task_id,
             created_at,
@@ -398,7 +406,8 @@ class SQLiteStorage:
             transcription_data.get("job_id"),
             transcription_data.get("user_id"),
             transcription_data.get("callback_url"),
-            phase_timings_json
+            phase_timings_json,
+            enable_diarization
         ))
         
         conn.commit()
@@ -629,7 +638,8 @@ class SQLiteStorage:
             "stage_progress": get_row_value('stage_progress'),
             "job_id": get_row_value('job_id'),
             "user_id": get_row_value('user_id'),
-            "callback_url": get_row_value('callback_url')
+            "callback_url": get_row_value('callback_url'),
+            "enable_diarization": bool(get_row_value('enable_diarization', 0) or 0)
         }
         
         # FIX: โหลด phase_timings จาก phase_timings_json (ถ้ามี)

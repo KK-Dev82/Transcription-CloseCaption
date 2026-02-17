@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POD_SCRIPT_DIR="$SCRIPT_DIR"  # เก็บไว้ก่อน source (load-env-by-gpu.sh จะ overwrite SCRIPT_DIR)
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 cd "$PROJECT_ROOT"
@@ -39,13 +40,18 @@ print_header() {
     echo "================================================================================"
 }
 
-# Load environment variables
-if [ -f ".env.runpod" ]; then
-    print_info "Loading environment variables from .env.runpod..."
+# Load env ตามจำนวน GPU (1 GPU → .env.runpod-1GPU ป้องกัน OOM)
+if [ -f "scripts/utility/load-env-by-gpu.sh" ]; then
+    print_info "Loading environment (profile by GPU count)..."
+    set -a
+    source scripts/utility/load-env-by-gpu.sh
+    set +a
+    print_success "Environment loaded (profile: ${ENV_LOADED_PROFILE:-default})"
+elif [ -f ".env.runpod" ]; then
     set -a
     source .env.runpod
     set +a
-    print_success "Environment variables loaded from .env.runpod"
+    print_success "Environment loaded from .env.runpod"
 else
     print_warning ".env.runpod not found, using system environment variables"
 fi
@@ -67,7 +73,7 @@ sleep 2
 
 # Start workers using the start script
 print_header "Starting RQ workers..."
-bash "$SCRIPT_DIR/start-rq-workers.sh"
+bash "$POD_SCRIPT_DIR/start-rq-workers.sh"
 
 print_header "Restart Complete!"
 print_info "Workers should be running now. Check logs if needed:"

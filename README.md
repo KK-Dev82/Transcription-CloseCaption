@@ -178,32 +178,36 @@ FE_CC_REALTIME_LOW_LATENCY=true   # ข้าม postprocess ลด latency ~100
 
 > **สรุป**: `pip install -r requirements.runpod-unified.txt` ติดตั้งทุกอย่างรวม NeMo 2.5.3 — **ไม่ต้องรัน `pip install "nemo-toolkit[asr]==2.5.3"` แยก**
 
-### 1. ตรวจสอบและปรับ NUM_GPUS ใน .env.runpod
+### 1. Environment ตามจำนวน GPU (อัตโนมัติ)
 
-⚠️ **สำคัญ**: ต้องตรวจสอบว่า `NUM_GPUS` ใน `.env.runpod` ตรงกับจำนวน GPU ที่ใช้จริง
+Project โหลด config ตามจำนวน GPU โดยอัตโนมัติ เพื่อป้องกัน OOM:
+- **1 GPU** → `.env.runpod-1GPU` (ลด workers, chunk limits)
+- **2+ GPUs** → `.env.runpod-2GPU`
+
+ดูรายละเอียด: [docs/ENV_PROFILE_BY_GPU.md](docs/ENV_PROFILE_BY_GPU.md)
+
+**Override ด้วยมือ**:
+```bash
+ENV_PROFILE=1gpu ./scripts/pod/start-rq-workers.sh   # บังคับใช้ 1 GPU profile
+```
+
+### 2. ตรวจสอบ NUM_GPUS (ถ้าไม่ใช้ auto)
 
 ```bash
 # ตรวจสอบจำนวน GPU จริง
 nvidia-smi -L
 
-# ตรวจสอบค่า NUM_GPUS ใน .env.runpod
+# ตรวจสอบค่า NUM_GPUS ที่โหลด
 grep NUM_GPUS .env.runpod
-
-# ตรวจสอบ CUDA_VISIBLE_DEVICES
-grep CUDA_VISIBLE_DEVICES .env.runpod
+grep NUM_GPUS .env.runpod-1GPU
+grep NUM_GPUS .env.runpod-2GPU
 ```
 
-**ตัวอย่าง**:
-- ถ้ามี 2 GPUs: `NUM_GPUS=2` และ `CUDA_VISIBLE_DEVICES=0,1`
-- ถ้ามี 1 GPU: `NUM_GPUS=1` และ `CUDA_VISIBLE_DEVICES=0`
-
 **หมายเหตุ**: 
-- `start-rq-workers.sh` จะอ่าน `NUM_GPUS` จาก `.env.runpod` อัตโนมัติ
-- ถ้า `NUM_GPUS` ไม่ตรงกับจำนวน GPU จริง จะเกิดปัญหา:
-  - ถ้าน้อยเกินไป: จะไม่ใช้ GPU บางตัว
-  - ถ้ามากเกินไป: จะพยายามใช้ GPU ที่ไม่มี → error
+- `start-rq-workers.sh` โหลด env ตาม GPU อัตโนมัติ
+- ถ้าต้องการ override: ตั้ง `ENV_PROFILE=1gpu` หรือ `2gpu`
 
-### 2. ติดตั้ง System Dependencies
+### 3. ติดตั้ง System Dependencies
 
 ```bash
 # อัปเดต package list (ใน container - ไม่ต้องใช้ sudo)
@@ -227,7 +231,7 @@ ffmpeg -version
   apt-get install -y ffmpeg
   ```
 
-### 3. ติดตั้ง Python Dependencies
+### 4. ติดตั้ง Python Dependencies
 
 ```bash
 cd /workspace/transcription-service
@@ -240,7 +244,7 @@ pip install -r requirements.runpod-unified.txt
 - cuDNN 8.9.0.2 ติดตั้งแล้ว (ไม่ต้องติดตั้งเพิ่ม)
 - `whisper_api.py` จะตั้งค่า `LD_LIBRARY_PATH` และ pre-load cuDNN library อัตโนมัติ
 
-### 4. ตั้งค่า GPU/CUDA (แนะนำ)
+### 5. ตั้งค่า GPU/CUDA (แนะนำ)
 
 ⚠️ **สำคัญ**: ขั้นตอนนี้แนะนำให้ทำเพื่อตรวจสอบว่า GPU/CUDA ทำงานได้ถูกต้อง
 
@@ -251,7 +255,7 @@ bash scripts/utility/setup-cudnn-env.sh
 
 **หมายเหตุ**: `setup-cudnn-env.sh` จะ ตั้งค่าและ persist `LD_LIBRARY_PATH` ตรวจสอบ cuDNN libraries และทดสอบ ctranslate2/faster-whisper
 
-### 5. Start Services
+### 6. Start Services
 
 ```bash
 bash scripts/pod/start-pod.sh
@@ -267,7 +271,7 @@ Script นี้จะ:
 - ✅ Start Whisper API (port 8002) พร้อม cuDNN support
 - ✅ Start Main API (port 8010)
 
-### 6. Start RQ Workers
+### 7. Start RQ Workers
 
 ```bash
 # สำหรับ start ครั้งแรก (หรือถ้าไม่มี workers ทำงานอยู่)

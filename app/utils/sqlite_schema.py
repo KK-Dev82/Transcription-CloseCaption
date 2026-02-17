@@ -62,9 +62,17 @@ def ensure_sqlite_schema(db_path: str, connection: Optional[sqlite3.Connection] 
             stage_progress INTEGER,
             job_id TEXT,
             user_id TEXT,
-            callback_url TEXT
+            callback_url TEXT,
+            enable_diarization INTEGER DEFAULT 0
         )
     """)
+    # Migration: add enable_diarization if missing (สำหรับ DB ที่มีอยู่แล้ว)
+    try:
+        connection.execute("ALTER TABLE transcriptions ADD COLUMN enable_diarization INTEGER DEFAULT 0")
+        connection.commit()
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            logger.debug(f"Schema migration enable_diarization: {e}")
     
     # 2. Ensure segments table exists (for streaming segments)
     connection.execute("""

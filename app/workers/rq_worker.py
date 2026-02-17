@@ -828,11 +828,23 @@ def process_transcription_job(
             )
             
             # FIX: Streaming Merge to SQLite - ไม่เก็บ segments ใน memory
-            # หลักการ: Process ทีละ chunk → stream segments ลง SQLite → ลบ chunk data ทันที
             t_fetch_start = time.time()
+
+            # Diarization: โหลด task + diarization ถ้าเปิด
+            enable_diarization = False
+            diarization_segments = None
+            _td = (storage.load_transcription(main_task_id, skip_migration=True) if (storage_type == 'sqlite' and storage) else (json_storage.load_transcription(main_task_id) if json_storage else None)) or {}
+            enable_diarization = bool(_td.get("enable_diarization", False))
+            if enable_diarization:
+                ds = conn.get(f"task:{main_task_id}:diarization")
+                if ds:
+                    diarization_segments = json.loads(ds)
+                    logger.info(f"📢 Diarization: {len(diarization_segments)} segments for /newSpeaker")
+                else:
+                    enable_diarization = False
             
-            # Initialize accumulator (เก็บแค่ text, ไม่เก็บ segments)
             merged_text_parts = []
+            all_segments_for_diarization = [] if enable_diarization else None
             total_duration = total_chunks * chunk_duration
             last_segment_end = 0.0
             
@@ -876,9 +888,8 @@ def process_transcription_job(
                     if chunk_text:
                         merged_text_parts.append(chunk_text)
                     
-                    # Stream segments to SQLite (don't store in memory)
                     segments = chunk_result.get('segments', [])
-                    if segments and sqlite_conn:
+                    if segments:
                         for seg_idx, seg in enumerate(segments):
                             if not isinstance(seg, dict):
                                 continue
@@ -918,22 +929,16 @@ def process_transcription_job(
                             seg_text = (seg.get("text") or "").strip()
                             confidence = seg.get("confidence")
                             
-                            if seg_text:  # Only store non-empty segments
-                                segments_batch.append((
-                                    main_task_id,
-                                    processed_count * 1000 + seg_idx,  # Global index
-                                    start_time,
-                                    end_time,
-                                    seg_text,
-                                    confidence
-                                ))
+                            if seg_text:
+                                if sqlite_conn and segments_batch is not None:
+                                    segments_batch.append((main_task_id, processed_count * 1000 + seg_idx, start_time, end_time, seg_text, confidence))
+                                    if len(segments_batch) >= batch_size:
+                                        sqlite_conn.executemany(insert_stmt, segments_batch)
+                                        sqlite_conn.commit()
+                                        segments_batch.clear()
                                 last_segment_end = max(last_segment_end, end_time)
-                                
-                                # Bulk insert every batch_size segments
-                                if len(segments_batch) >= batch_size:
-                                    sqlite_conn.executemany(insert_stmt, segments_batch)
-                                    sqlite_conn.commit()
-                                    segments_batch.clear()
+                                if all_segments_for_diarization is not None:
+                                    all_segments_for_diarization.append({"start": start_time, "end": end_time, "text": seg_text})
                     
                     # Clear chunk_result immediately (don't keep in memory)
                     del chunk_result
@@ -965,9 +970,16 @@ def process_transcription_job(
             t_merge_start = time.time()
             logger.warning(f"✅ Processed {processed_count}/{total_chunks} chunks (took {phase_timings['fetch_chunks_time']:.2f}s), finalizing merge...")
             
-            # Build merged result (text only, no segments in memory)
-            full_text = " ".join(merged_text_parts).strip()
+            # Build merged result
+            if enable_diarization and diarization_segments and all_segments_for_diarization:
+                from app.services.diarization_service import build_text_with_speaker_markers
+                full_text = build_text_with_speaker_markers(all_segments_for_diarization, diarization_segments)
+                logger.info(f"📢 Applied /newSpeaker (len={len(full_text)})")
+            else:
+                full_text = " ".join(merged_text_parts).strip()
             del merged_text_parts
+            if all_segments_for_diarization is not None:
+                del all_segments_for_diarization
             import gc
             gc.collect()
             
@@ -1456,6 +1468,27 @@ def process_preprocess_job(
         phase_timings['t_extract_end'] = datetime.now(timezone.utc).isoformat()
         phase_timings['extract_time'] = t_extract_end - t_extract_start
         logger.info(f"✅ Audio extracted: {audio_path} (took {phase_timings['extract_time']:.2f}s)")
+
+        # 1.5 Diarization (optional)
+        enable_diarization = task_data.get("enable_diarization", False)
+        if enable_diarization:
+            t_diar_start = time.time()
+            _update_task_stage_sync(
+                task_id=task_id, progress=20, status="processing", stage="diarization",
+                stage_description="กำลังแยกผู้พูด", stage_progress=0,
+                json_storage=json_storage if storage_type != 'sqlite' else None
+            )
+            try:
+                from app.services.diarization_service import diarize
+                conn_d = get_redis_connection(decode_responses=True)
+                ttl = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+                diar_result = diarize(audio_path)
+                conn_d.setex(f"task:{task_id}:diarization", ttl, json.dumps(diar_result))
+                phase_timings['diarization_time'] = time.time() - t_diar_start
+                logger.info(f"✅ Diarization: {len(diar_result)} segments ({phase_timings['diarization_time']:.2f}s)")
+            except Exception as de:
+                logger.warning(f"⚠️ Diarization failed: {de}", exc_info=True)
+                get_redis_connection(decode_responses=True).delete(f"task:{task_id}:diarization")
         
         # 2. Create chunks
         t_chunk_start = time.time()

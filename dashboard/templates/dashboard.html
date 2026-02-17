@@ -3,499 +3,191 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Transcription Service Dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css">
-    <link rel="stylesheet" href="/static/css/components.css">
-    <!-- HLS.js for HLS stream playback -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <title>Dashboard · Monitor</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:16px;font-size:14px;line-height:1.4}
+        .header{margin-bottom:20px}
+        .header h1{font-size:22px;font-weight:600}
+        .header p{color:#86868b;font-size:13px;margin-top:4px}
+        .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid #d2d2d7;padding-bottom:8px}
+        .tab-btn{padding:8px 16px;background:0;border:0;cursor:pointer;font-size:14px;color:#86868b;border-radius:6px}
+        .tab-btn:hover{color:#1d1d1f;background:#e8e8ed}
+        .tab-btn.active{color:#0071e3;font-weight:600;background:#e8f4fc}
+        .tab{display:none}
+        .tab.active{display:block}
+        .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+        .card h3{font-size:14px;font-weight:600;margin-bottom:12px;color:#1d1d1f}
+        .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+        .stat{padding:12px;background:#f5f5f7;border-radius:8px;text-align:center}
+        .stat .val{font-size:20px;font-weight:600;color:#1d1d1f}
+        .stat .lbl{font-size:11px;color:#86868b;margin-top:4px;text-transform:uppercase}
+        .stat.ok .val{color:#34c759}
+        .stat.warn .val{color:#ff9500}
+        .stat.err .val{color:#ff3b30}
+        .btn{padding:8px 14px;border:0;border-radius:8px;font-size:13px;cursor:pointer;background:#0071e3;color:#fff}
+        .btn:hover{background:#0077ed}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .log-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px}
+        .log-tab{padding:6px 12px;background:#f5f5f7;border:0;cursor:pointer;font-size:12px;border-radius:6px;color:#86868b}
+        .log-tab:hover,.log-tab.active{background:#0071e3;color:#fff}
+        .log-view{background:#1d1d1f;color:#e8e8ed;padding:12px;border-radius:8px;font-family:monospace;font-size:12px;line-height:1.5;max-height:400px;overflow-y:auto;white-space:pre-wrap}
+        .bar{height:6px;background:#e8e8ed;border-radius:3px;overflow:hidden;margin-top:4px}
+        .bar-fill{height:100%;background:#0071e3;border-radius:3px}
+        .bar-fill.warn{background:#ff9500}
+        .bar-fill.err{background:#ff3b30}
+        .loading{text-align:center;padding:24px;color:#86868b}
+        .err-msg{color:#ff3b30;font-size:13px;padding:12px;background:#fff3f3;border-radius:8px}
+    </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Transcription Service Dashboard</h1>
-        <p class="subtitle">Monitor and Control Transcription Tasks</p>
+    <div class="header">
+        <h1>Dashboard · Monitor</h1>
+        <p>ตรวจสอบ Resource · ไม่มี auto-refresh (กด Refresh เอง)</p>
+    </div>
 
-        <!-- Tabs Navigation -->
-        <div class="tabs">
-            <button class="tab-button active" onclick="switchTab('overview')" id="tab-overview-btn">
-                📊 Overview
-            </button>
-            <button class="tab-button" onclick="switchTab('monitoring')" id="tab-monitoring-btn">
-                📡 Monitoring & Logs
-            </button>
-            <button class="tab-button" onclick="switchTab('test')" id="tab-test-btn">
-                🧪 Test
-            </button>
-            <button class="tab-button" onclick="switchTab('monitor')" id="tab-monitor-btn">
-                📈 Monitor & Analysis
-            </button>
-            <button class="tab-button" onclick="switchTab('live-streaming')" id="tab-live-streaming-btn">
-                📺 Live Streaming
-            </button>
-        </div>
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('status')" id="tab-status">Status</button>
+        <button class="tab-btn" onclick="switchTab('logs')" id="tab-logs">Logs</button>
+    </div>
 
-        <!-- Tab Content: Overview -->
-        <div id="tab-overview" class="tab-content active">
-            <div class="overview-single-container">
-                <!-- Server Selector -->
-                <div class="server-selector">
-                    <div class="server-buttons">
-                        <button class="server-btn active" onclick="selectOverviewServer('4000-ada-sc')" id="server-btn-4000-ada-sc">
-                            🖥️ 4000-ada-sc
-                        </button>
-                        <button class="server-btn" onclick="selectOverviewServer('4000-ada')" id="server-btn-4000-ada">
-                            🖥️ 4000-ada
-                        </button>
-                        <button class="server-btn" onclick="selectOverviewServer('5080')" id="server-btn-5080">
-                            🖥️ 5080
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Selected Server Content -->
-                <div class="server-content-section" id="overview-server-content">
-                    <div class="server-header-full">
-                        <h2 id="overview-server-name">4000-ada-sc</h2>
-                        <div style="display: flex; gap: 8px; align-items: center;">
-                            <button class="btn btn-primary btn-small" onclick="manualRefreshOverview()" id="refresh-overview-btn">
-                                🔄 Refresh
-                            </button>
-                            <button class="btn btn-danger btn-small" onclick="clearPendingTasksCurrent()">
-                                🧹 Clear Pending
-                            </button>
-                            <button class="btn btn-secondary btn-small" onclick="showDeleteOldTasksDialogCurrent()" title="Delete old tasks">
-                                🗑️ Delete Old
-                            </button>
-                            <button class="btn btn-danger btn-small" onclick="showDeleteAllTasksDialogCurrent()" title="Delete ALL tasks (all statuses)">
-                                ⚠️ Delete All
-                            </button>
-                        </div>
-                    </div>
-                    <div class="logs-filters">
-                        <select id="overview-status-filter" onchange="onOverviewFilterChange()">
-                            <option value="">All Status</option>
-                            <option value="pending">Pending</option>
-                            <option value="processing">Processing</option>
-                            <option value="completed">Completed</option>
-                            <option value="failed">Failed</option>
-                            <option value="stopped">Stopped</option>
-                        </select>
-                    </div>
-                    <div class="logs-container-full" id="overview-tasks-container">
-                        <div class="table-loader">
-                            <div class="loader-spinner"></div>
-                            <div class="loader-text">Loading tasks...</div>
-                        </div>
-                    </div>
-                </div>
+    <div id="tab-status" class="tab active">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <h3>Health & Resources</h3>
+                <button class="btn" onclick="refreshStatus()" id="statusRefresh">Refresh</button>
             </div>
-        </div>
-
-        <!-- Tab Content: Monitoring & Logs -->
-        <div id="tab-monitoring" class="tab-content">
-            <div class="monitoring-container">
-                <!-- Server Selector -->
-                <div class="server-selector" style="margin-bottom: 20px;">
-                    <div class="server-buttons">
-                        <button class="server-btn active" onclick="selectMonitoringServer('4000-ada-sc')" id="monitoring-server-btn-4000-ada-sc">
-                            🖥️ 4000-ada-sc
-                        </button>
-                        <button class="server-btn" onclick="selectMonitoringServer('4000-ada')" id="monitoring-server-btn-4000-ada">
-                            🖥️ 4000-ada
-                        </button>
-                        <button class="server-btn" onclick="selectMonitoringServer('5080')" id="monitoring-server-btn-5080">
-                            🖥️ 5080
-                        </button>
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <span id="monitoring-server-name" style="font-weight: bold; color: var(--apple-blue);">4000-ada-sc</span>
-                        <button class="btn btn-secondary btn-small" onclick="manualRefreshMonitoring()">🔄 Refresh</button>
-                        <button class="btn btn-secondary btn-small" onclick="openMonitoringInNewWindow()">🔗 Open in New Window</button>
-                    </div>
-                </div>
-                
-                <!-- Real-time Progress -->
-                <div class="monitoring-section">
-                    <h3>🔄 Real-time Task Progress</h3>
-                    <div class="real-time-progress" id="realTimeProgress">
-                        <div class="loading">Loading active tasks...</div>
-                    </div>
-                </div>
-
-                <!-- System Logs -->
-                <div class="monitoring-section">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                        <h3>📋 System Logs</h3>
-                        <div style="display: flex; gap: 8px;">
-                            <button class="btn btn-secondary btn-small" onclick="clearLogs()">🧹 Clear Logs</button>
-                            <button class="btn btn-secondary btn-small" onclick="toggleAutoScroll()" id="autoScrollBtn">📌 Auto-scroll: ON</button>
-                        </div>
-                    </div>
-                    <div class="logs-viewer" id="systemLogs">
-                        <div class="log-entry info">
-                            <span class="log-timestamp">[System]</span>
-                            Monitoring started. Waiting for logs...
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Server Status -->
-                <div class="monitoring-section">
-                    <h3>🖥️ Server Status</h3>
-                    <div id="serverStatusGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px;">
-                        <!-- Server status will be shown here -->
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Tab Content: Test -->
-        <div id="tab-test" class="tab-content">
-            <div class="test-container">
-                <!-- Test Configuration -->
-                <div class="test-config-section">
-                    <h2>Test Configuration</h2>
-                    <div class="test-form">
-                        <div class="form-group">
-                            <label>Server</label>
-                            <select id="testServer" onchange="onTestServerChange()">
-                                <option value="">Select Server</option>
-                                <option value="4000-ada-sc">4000-ada-sc (Default)</option>
-                                <option value="4000-ada">4000-ada</option>
-                                <option value="5080">5080</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Video</label>
-                            <select id="testVideo" disabled>
-                                <option value="">Select Server first</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Count (1-50)</label>
-                            <input type="number" id="testCount" min="1" max="50" value="1">
-                        </div>
-                        <button class="btn btn-primary" id="startTestBtn" onclick="startTest()" disabled>
-                            🚀 Start Test
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Test Results -->
-                <div id="testResultsSection" style="display: none;">
-                    <div class="test-results-header">
-                        <h2>Test Results</h2>
-                        <div class="test-overview" id="testOverview">
-                            <!-- Overview stats will be shown here -->
-                        </div>
-                    </div>
-                    <div class="test-tasks-container" id="testTasksContainer">
-                        <!-- Task list will be shown here -->
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Tab Content: Monitor & Analysis -->
-        <div id="tab-monitor" class="tab-content">
-            <div class="monitor-container">
-                <!-- Monitor Configuration -->
-                <div class="monitor-config-section">
-                    <h2>📈 Monitor & Analyze Test Jobs</h2>
-                    <p style="color: var(--apple-gray-3); margin-bottom: 24px;">
-                        ติดตามและวิเคราะห์ผลลัพธ์ Transcription Jobs จนกว่าจะเสร็จสมบูรณ์
-                    </p>
-                    
-                    <div class="monitor-form">
-                        <div class="form-group">
-                            <label>Server</label>
-                            <select id="monitorServer" onchange="onMonitorServerChange()">
-                                <option value="">Select Server</option>
-                                <option value="4000-ada-sc">4000-ada-sc (Default)</option>
-                                <option value="4000-ada">4000-ada</option>
-                                <option value="5080">5080</option>
-                            </select>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Monitor Method</label>
-                            <select id="monitorMethod" onchange="onMonitorMethodChange()">
-                                <option value="batch-id">Batch ID (จาก Test Tab)</option>
-                                <option value="task-ids">Task IDs (comma-separated)</option>
-                                <option value="count">Latest N Tasks</option>
-                            </select>
-                        </div>
-                        
-                        <!-- Batch ID Input -->
-                        <div class="form-group" id="monitorBatchIdGroup">
-                            <label>Batch ID</label>
-                            <input type="text" id="monitorBatchId" placeholder="Paste batch_id from Test tab">
-                            <small style="color: var(--apple-gray-3);">Copy batch_id จาก Test tab หลังจาก Start Test</small>
-                        </div>
-                        
-                        <!-- Task IDs Input -->
-                        <div class="form-group" id="monitorTaskIdsGroup" style="display: none;">
-                            <label>Task IDs</label>
-                            <textarea id="monitorTaskIds" rows="3" placeholder="task1,task2,task3 หรือ task1&#10;task2&#10;task3"></textarea>
-                            <small style="color: var(--apple-gray-3);">Comma-separated หรือ line-separated</small>
-                        </div>
-                        
-                        <!-- Count Input -->
-                        <div class="form-group" id="monitorCountGroup" style="display: none;">
-                            <label>Count</label>
-                            <input type="number" id="monitorCount" min="1" max="100" value="50">
-                            <small style="color: var(--apple-gray-3);">Monitor latest N tasks</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Check Interval (seconds)</label>
-                            <input type="number" id="monitorInterval" min="5" max="60" value="10">
-                        </div>
-                        
-                        <button class="btn btn-primary" id="startMonitorBtn" onclick="startMonitoring()" disabled>
-                            🚀 Start Monitoring
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Monitoring Status -->
-                <div id="monitorStatusSection" style="display: none;">
-                    <div class="monitor-status-header">
-                        <h2>Monitoring Status</h2>
-                        <button class="btn btn-secondary btn-small" onclick="stopMonitoring()" id="stopMonitorBtn">
-                            ⏹️ Stop
-                        </button>
-                    </div>
-                    <div class="monitor-progress" id="monitorProgress">
-                        <!-- Progress will be shown here -->
-                    </div>
-                </div>
-
-                <!-- Analysis Results -->
-                <div id="monitorResultsSection" style="display: none;">
-                    <div class="monitor-results-header">
-                        <h2>📊 Analysis Results</h2>
-                        <button class="btn btn-secondary btn-small" onclick="exportResults()" id="exportResultsBtn">
-                            💾 Export JSON
-                        </button>
-                    </div>
-                    <div class="monitor-analysis" id="monitorAnalysis">
-                        <!-- Analysis report will be shown here -->
-                    </div>
-                </div>
-
-                <!-- Previous Results -->
-                <div class="monitor-previous-results">
-                    <h2>📁 Previous Monitoring Results</h2>
-                    <div id="previousResultsList" class="previous-results-list">
-                        <div class="loading">Loading previous results...</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Tab Content: Live Streaming -->
-        <div id="tab-live-streaming" class="tab-content">
-            <div class="live-streaming-container">
-                <h2>📺 Live Streaming - Close Caption</h2>
-                
-                <!-- Stream Configuration -->
-                <div class="stream-config-section" style="margin-bottom: 24px; padding: 20px; background: var(--apple-gray-1); border-radius: 8px;">
-                    <h3>Stream Configuration</h3>
-                    <div class="form-group" style="margin-bottom: 12px;">
-                        <label>RTMP URL:</label>
-                        <input type="text" id="rtmpUrl" value="rtmp://143.198.77.135:1935/live/channel1" style="width: 100%; padding: 8px; border: 1px solid var(--apple-gray-3); border-radius: 4px;">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 12px;">
-                        <label>HLS URL:</label>
-                        <input type="text" id="hlsUrl" value="http://143.198.77.135:80/hls/channel1.m3u8" style="width: 100%; padding: 8px; border: 1px solid var(--apple-gray-3); border-radius: 4px;">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 12px;">
-                        <label>Server:</label>
-                        <select id="liveStreamingServer" style="width: 100%; padding: 8px; border: 1px solid var(--apple-gray-3); border-radius: 4px;">
-                            <option value="4000-ada-sc">4000-ada-sc</option>
-                            <option value="4000-ada">4000-ada</option>
-                            <option value="5080">5080</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Video Player -->
-                <div class="video-player-section" style="margin-bottom: 24px; padding: 20px; background: var(--apple-gray-1); border-radius: 8px;">
-                    <h3>Live Stream Player</h3>
-                    <div style="position: relative; width: 100%; max-width: 800px; margin: 0 auto;">
-                        <video id="liveStreamVideo" controls style="width: 100%; background: #000; border-radius: 8px;" preload="metadata">
-                            <source id="hlsSource" src="" type="application/x-mpegURL">
-                            Your browser does not support the video tag.
-                        </video>
-                        <div id="streamStatus" style="margin-top: 8px; padding: 8px; background: var(--apple-gray-2); border-radius: 4px; font-size: 12px; color: var(--apple-gray-4);">
-                            ⏸️ Stream not loaded
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Record & Close Caption Controls -->
-                <div class="record-controls-section" style="margin-bottom: 24px; padding: 20px; background: var(--apple-gray-1); border-radius: 8px;">
-                    <h3>Record & Close Caption</h3>
-                    <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-                        <button id="recordButton" class="btn btn-primary" onclick="startRecording()" style="padding: 12px 24px; font-size: 16px;">
-                            🎙️ Record 3s & Generate Close Caption
-                        </button>
-                        <button id="stopRecordButton" class="btn btn-danger" onclick="stopRecording()" style="padding: 12px 24px; font-size: 16px; display: none;">
-                            ⏹️ Stop Recording
-                        </button>
-                        <span id="recordStatus" style="font-size: 14px; color: var(--apple-gray-4);"></span>
-                    </div>
-                    <div style="font-size: 12px; color: var(--apple-gray-3);">
-                        💡 กดปุ่ม Record เพื่อบันทึกเสียง 3 วินาทีจาก Live Stream และแปลงเป็น Close Caption
-                    </div>
-                </div>
-
-                <!-- Close Caption Display -->
-                <div class="caption-display-section" style="padding: 20px; background: var(--apple-gray-1); border-radius: 8px;">
-                    <h3>Close Caption</h3>
-                    <div id="captionDisplay" style="min-height: 200px; max-height: 400px; overflow-y: auto; padding: 16px; background: #000; color: #fff; border-radius: 8px; font-size: 18px; line-height: 1.8; font-weight: 500;">
-                        <div style="text-align: center; color: #888; padding: 40px;">
-                            ยังไม่มี Close Caption<br>
-                            <small style="font-size: 14px;">กดปุ่ม Record เพื่อเริ่มต้น</small>
-                        </div>
-                    </div>
-                    <div id="captionStatus" style="margin-top: 12px; padding: 8px; background: var(--apple-gray-2); border-radius: 4px; font-size: 12px; color: var(--apple-gray-4);">
-                        Status: Ready
-                    </div>
-                </div>
-
-                <!-- Recent Captions -->
-                <div class="recent-captions-section" style="margin-top: 24px; padding: 20px; background: var(--apple-gray-1); border-radius: 8px;">
-                    <h3>Recent Captions</h3>
-                    <div id="recentCaptionsList" style="max-height: 300px; overflow-y: auto;">
-                        <div style="text-align: center; color: var(--apple-gray-3); padding: 20px;">
-                            No recent captions
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <div id="statusContent" class="loading">โหลด...</div>
         </div>
     </div>
 
-    <!-- Delete Old Tasks Modal -->
-    <div id="deleteOldTasksModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Delete Old Tasks</h2>
-                <button class="modal-close" onclick="closeDeleteOldTasksModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Delete Options</label>
-                    <select id="deleteDaysOption">
-                        <option value="3">Older than 3 days</option>
-                        <option value="7">Older than 7 days</option>
-                        <option value="30">Older than 30 days</option>
-                        <option value="all">All (completed/failed)</option>
+    <div id="tab-logs" class="tab">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                <h3>Logs</h3>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <select id="logLines" onchange="loadLog()" style="padding:6px 10px;border:1px solid #d2d2d7;border-radius:6px;font-size:13px">
+                        <option value="50">50 บรรทัด</option>
+                        <option value="100" selected>100 บรรทัด</option>
+                        <option value="200">200 บรรทัด</option>
                     </select>
-                </div>
-                <div class="form-group">
-                    <label>Status to Delete</label>
-                    <div style="display: flex; flex-direction: column; gap: 8px;">
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="deleteStatusCompleted" checked>
-                            <span>Completed</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="deleteStatusFailed" checked>
-                            <span>Failed</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="deleteStatusCancelled" checked>
-                            <span>Cancelled / Stopped</span>
-                        </label>
-                    </div>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn btn-secondary" onclick="closeDeleteOldTasksDialog()">Cancel</button>
-                    <button class="btn btn-danger" id="confirmDeleteOldBtn" onclick="confirmDeleteOldTasks()">Delete</button>
+                    <button class="btn" onclick="loadLog()" id="logRefresh">Refresh</button>
                 </div>
             </div>
+            <div class="log-tabs" id="logTabs"></div>
+            <div id="logContent" class="log-view">เลือก log ด้านบน</div>
         </div>
     </div>
 
-    <!-- Progress Bottom Bar -->
-    <div id="deleteProgressBar" class="progress-bottom-bar" style="display: none;">
-        <div class="progress-bar-content">
-            <div class="progress-bar-header">
-                <span id="progressBarTitle">Deleting old tasks...</span>
-                <button class="progress-bar-close" onclick="closeProgressBar()">&times;</button>
-            </div>
-            <div class="progress-bar-body">
-                <div class="progress-bar-track">
-                    <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
-                </div>
-                <div class="progress-bar-info">
-                    <span id="progressBarText">0 / 0 files</span>
-                    <span id="progressBarPercent">0%</span>
-                </div>
-                <div class="progress-bar-detail" id="progressBarDetail">
-                    <small>Preparing...</small>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Transcription Text Modal -->
-    <div id="transcriptionTextModal" class="modal" style="display: none;">
-        <div class="modal-content" style="max-width: 800px;">
-            <div class="modal-header">
-                <h2>Transcription Text</h2>
-                <button class="modal-close" onclick="closeTranscriptionTextModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="modal-tabs">
-                    <button class="modal-tab active" onclick="switchTranscriptionTab('fulltext')" id="tab-fulltext">📝 Full Text</button>
-                    <button class="modal-tab" onclick="switchTranscriptionTab('chunks')" id="tab-chunks">📑 Chunks</button>
-                </div>
-                <div id="transcription-fulltext-content" class="modal-tab-content active" style="margin-top: 16px;">
-                    <div id="transcription-fulltext" style="white-space: pre-wrap; line-height: 1.6; max-height: 60vh; overflow-y: auto; padding: 12px; background: var(--apple-gray-1); border-radius: 8px;"></div>
-                </div>
-                <div id="transcription-chunks-content" class="modal-tab-content" style="display: none; margin-top: 16px;">
-                    <div id="transcription-chunks" style="max-height: 60vh; overflow-y: auto;">
-                        <!-- Chunks will be rendered here -->
-                    </div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeTranscriptionTextModal()">Close</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Inject server configs from backend (overrides api-client.js defaults) -->
-    {% if server_configs_js %}
     <script>
-        {{ server_configs_js|safe }}
+        const API = '/api/monitor';
+        let logList = [];
+        let currentLog = '';
+
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(t=>t.classList.remove('active'));
+            document.getElementById('tab-'+name).classList.add('active');
+            document.getElementById('tab-status').classList.toggle('active', name==='status');
+            document.getElementById('tab-logs').classList.toggle('active', name==='logs');
+            document.querySelector('.tab-btn[onclick*="'+name+'"]').classList.add('active');
+            if(name==='status') refreshStatus();
+            if(name==='logs' && logList.length===0) loadLogList();
+        }
+
+        function fetchWithTimeout(url, ms){
+            const c = new AbortController();
+            const t = setTimeout(()=>c.abort(), ms);
+            return fetch(url, {signal:c.signal}).finally(()=>clearTimeout(t));
+        }
+        async function refreshStatus() {
+            const el = document.getElementById('statusContent');
+            const btn = document.getElementById('statusRefresh');
+            btn.disabled = true;
+            el.innerHTML = '<div class="loading">โหลด...</div>';
+            try {
+                const [health, system] = await Promise.all([
+                    fetchWithTimeout(API+'/health', 6000).then(r=>r.json()).catch(()=>({status:'error',detail:'Timeout/Connection'})),
+                    fetchWithTimeout(API+'/system', 8000).then(r=>r.ok?r.json():r.json().then(d=>({error:d.detail||'Error'}))).catch(()=>({error:'Main API (8010) ไม่ทำงาน'}))
+                ]);
+                let html = '';
+                html += '<div class="grid">';
+                html += '<div class="stat '+(health.status==='ok'?'ok':'err')+'"><div class="val">'+(health.status||'?')+'</div><div class="lbl">Health</div></div>';
+                if(system.cpu_percent!=null){
+                    const cpuClass = system.cpu_percent>80?'err':system.cpu_percent>60?'warn':'ok';
+                    html += '<div class="stat '+cpuClass+'"><div class="val">'+Math.round(system.cpu_percent)+'%</div><div class="lbl">CPU</div></div>';
+                }
+                if(system.memory_percent!=null){
+                    const memClass = system.memory_percent>85?'err':system.memory_percent>70?'warn':'ok';
+                    html += '<div class="stat '+memClass+'"><div class="val">'+Math.round(system.memory_percent)+'%</div><div class="lbl">RAM</div></div>';
+                }
+                if(system.memory_used_gb!=null) html += '<div class="stat"><div class="val">'+(system.memory_used_gb||0).toFixed(1)+'</div><div class="lbl">GB ใช้</div></div>';
+                if(system.gpu_utilization && system.gpu_utilization.length){
+                    system.gpu_utilization.forEach((g,i)=>{
+                        const gpuClass = (g.utilization_gpu_percent||0)>80?'err':(g.utilization_gpu_percent||0)>60?'warn':'ok';
+                        html += '<div class="stat '+gpuClass+'"><div class="val">GPU'+i+' '+(g.utilization_gpu_percent||0)+'%</div><div class="lbl">'+(g.memory_used_mb||0)+'/'+(g.memory_total_mb||0)+' MB</div></div>';
+                    });
+                }
+                html += '</div>';
+                if(system.memory_percent!=null) html += '<div class="bar"><div class="bar-fill '+(system.memory_percent>85?'err':system.memory_percent>70?'warn':'')+'" style="width:'+system.memory_percent+'%"></div></div><small style="color:#86868b">RAM</small>';
+                if(system.error) html = '<div class="err-msg">'+escapeHtml(system.error)+'<br><small>ตรวจสอบว่า Main API (port 8010) ทำงานอยู่</small></div>';
+                if(health.status==='error' && health.detail) html += '<div class="err-msg" style="margin-top:8px">Health: '+escapeHtml(health.detail)+'</div>';
+                el.innerHTML = html;
+            } catch(e) {
+                el.innerHTML = '<div class="err-msg">Error: '+e.message+'</div>';
+            }
+            btn.disabled = false;
+        }
+
+        async function loadLogList() {
+            try {
+                const r = await fetchWithTimeout(API+'/logs', 6000);
+                const d = await r.json();
+                logList = (d.available_logs||[]).map(l=>l.name);
+                const labels = {'api':'FE CC','gpu0':'GPU0','gpu1':'GPU1','cpu0':'CPU0','cpu1':'CPU1','whisper':'Transcription','video-worker':'Video'};
+                const order = ['api','gpu0','gpu1','cpu0','cpu1','preprocess0','preprocess1','whisper','video-worker'];
+                const seen = new Set();
+                let tabs = '';
+                order.forEach(k=>{
+                    if(logList.includes(k)) { seen.add(k); tabs += '<button class="log-tab'+(currentLog===k?' active':'')+'" data-log="'+k+'" onclick="selectLog(\''+k+'\')">'+(labels[k]||k)+'</button>'; }
+                });
+                logList.forEach(n=>{
+                    if(!seen.has(n)) tabs += '<button class="log-tab'+(currentLog===n?' active':'')+'" data-log="'+n+'" onclick="selectLog(\''+n+'\')">'+n+'</button>';
+                });
+                document.getElementById('logTabs').innerHTML = tabs||'<span style="color:#86868b">ไม่มี log</span>';
+                if(logList.length && !currentLog) selectLog(logList[0]);
+            } catch(e) {
+                document.getElementById('logTabs').innerHTML = '<span class="err-msg">Error: '+e.message+'</span>';
+            }
+        }
+
+        function selectLog(name) {
+            currentLog = name;
+            document.querySelectorAll('.log-tab').forEach(t=>{
+                t.classList.toggle('active', t.getAttribute('data-log')===name);
+            });
+            loadLog();
+        }
+
+        async function loadLog() {
+            if(!currentLog) return;
+            const el = document.getElementById('logContent');
+            el.innerHTML = '<div class="loading">โหลด...</div>';
+            try {
+                const lines = document.getElementById('logLines').value;
+                const r = await fetchWithTimeout(API+'/logs/'+currentLog+'?lines='+lines+'&tail=true', 10000);
+                const d = await r.json();
+                el.innerHTML = (d.lines||[]).map(l=>escapeHtml(l)).join('\n') || '(ว่าง)';
+            } catch(e) {
+                el.innerHTML = '<span class="err-msg">Error: '+e.message+'</span>';
+            }
+        }
+
+        function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+        document.addEventListener('DOMContentLoaded', ()=>{
+            refreshStatus();
+        });
     </script>
-    {% endif %}
-    <script src="/static/js/api-client.js"></script>
-    <script src="/static/js/webhook-service.js"></script>
-    <script src="/static/js/overview-tab.js"></script>
-    <script src="/static/js/monitoring-tab.js"></script>
-    <script src="/static/js/test-tab.js"></script>
-    <script src="/static/js/cleanup-modal.js"></script>
-    <script src="/static/js/dashboard-tabs.js"></script>
-    <script src="/static/js/monitor-tab.js"></script>
-    <script src="/static/js/task-checker.js"></script>
-    <script src="/static/js/live-streaming-tab.js"></script>
-    
-    <!-- Task Checker Modal -->
-    <div id="taskCheckerModal" class="modal" style="display: none;">
-        <div class="modal-content" style="max-width: 800px;">
-            <div class="modal-header">
-                <h2>🔍 Task Checker</h2>
-                <span class="close" onclick="closeTaskCheckerModal()">&times;</span>
-            </div>
-            <div class="modal-body" id="taskCheckerContent">
-                <!-- Content will be loaded here -->
-            </div>
-        </div>
-    </div>
 </body>
 </html>

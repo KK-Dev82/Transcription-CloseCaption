@@ -7,6 +7,18 @@ import sys
 import logging
 from pathlib import Path
 
+# โหลด .env.runpod จาก project root (สำหรับ MAIN_API_URL, USE_INTERNAL_PORT)
+try:
+    from dotenv import load_dotenv
+    proj_root = Path(__file__).parent.parent
+    for name in (".env.runpod", ".env"):
+        env_file = proj_root / name
+        if env_file.exists():
+            load_dotenv(env_file)
+            break
+except ImportError:
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -113,6 +125,19 @@ except ImportError:
     except ImportError:
         webhook_routes = None
 
+# Monitoring proxy (lightweight - for Resource check only)
+try:
+    from .routes import monitoring_proxy_routes
+except ImportError:
+    try:
+        from routes import monitoring_proxy_routes
+    except ImportError:
+        monitoring_proxy_routes = None
+
+if monitoring_proxy_routes:
+    app.include_router(monitoring_proxy_routes.router)
+    logger.info("✅ Monitoring proxy routes included (lightweight)")
+
 if server_routes:
     app.include_router(server_routes.router)
     logger.info("✅ Server routes included")
@@ -161,39 +186,18 @@ if rtmp_streaming_routes:
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    """Main dashboard page"""
-    # Support both relative (package) and absolute (direct run) imports
-    try:
-        from .server_constants import SERVERS
-    except ImportError:
-        # If relative import fails, try absolute import
-        try:
-            from server_constants import SERVERS
-        except ImportError:
-            from config import SERVERS
-    
-    # Inject server configs to frontend
-    # ⚠️ สำคัญ: Browser (frontend) ไม่สามารถเข้าถึง localhost:8010 ได้
-    # ต้องใช้ HTTP Expose domain name แทน localhost
-    # USE_INTERNAL_PORT ใช้สำหรับ backend-to-backend communication เท่านั้น
-    try:
-        from .server_constants import SERVERS
-        # ใช้ api_url จาก SERVERS โดยตรง (จะใช้ HTTP Expose หรือ TCP Expose ตามที่ตั้งค่า)
-        # ไม่ใช้ INTERNAL_API_URL เพราะ browser ไม่สามารถเข้าถึง localhost ได้
-        server_configs_js = "window.SERVER_CONFIGS = " + str({
-            k: {"name": v["name"], "api_url": v["api_url"]}
-            for k, v in SERVERS.items()
-        }).replace("'", '"') + ";"
-    except ImportError:
-        server_configs_js = "window.SERVER_CONFIGS = " + str({
-            k: {"name": v["name"], "api_url": v["api_url"]}
-            for k, v in SERVERS.items()
-        }).replace("'", '"') + ";"
-    
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "server_configs_js": server_configs_js
-    })
+    """Index - links to Status และ Logs"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/status", response_class=HTMLResponse)
+async def status_page(request: Request):
+    """Status page - Health, CPU, RAM, GPU"""
+    return templates.TemplateResponse("status.html", {"request": request})
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request):
+    """Logs page - CPU, GPU, FE CC, Transcription"""
+    return templates.TemplateResponse("logs.html", {"request": request})
 
 
 if __name__ == "__main__":

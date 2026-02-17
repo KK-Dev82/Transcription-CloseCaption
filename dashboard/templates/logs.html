@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs · Dashboard Monitor</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:16px;font-size:14px;line-height:1.4}
+        .nav{margin-bottom:16px;display:flex;gap:8px}
+        .nav a{padding:8px 14px;background:#fff;color:#86868b;text-decoration:none;border-radius:8px;font-size:13px}
+        .nav a:hover,.nav a.active{background:#0071e3;color:#fff}
+        .header{margin-bottom:20px}
+        .header h1{font-size:22px;font-weight:600}
+        .header p{color:#86868b;font-size:13px;margin-top:4px}
+        .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+        .card h3{font-size:14px;font-weight:600;margin-bottom:12px;color:#1d1d1f}
+        .btn{padding:8px 14px;border:0;border-radius:8px;font-size:13px;cursor:pointer;background:#0071e3;color:#fff}
+        .btn:hover{background:#0077ed}
+        .log-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px}
+        .log-tab{padding:6px 12px;background:#f5f5f7;border:0;cursor:pointer;font-size:12px;border-radius:6px;color:#86868b}
+        .log-tab:hover,.log-tab.active{background:#0071e3;color:#fff}
+        .log-view{background:#1d1d1f;color:#e8e8ed;padding:12px;border-radius:8px;font-family:monospace;font-size:12px;line-height:1.5;max-height:450px;overflow-y:auto;white-space:pre-wrap}
+        .loading{text-align:center;padding:24px;color:#86868b}
+        .err-msg{color:#ff3b30;font-size:13px;padding:12px;background:#fff3f3;border-radius:8px}
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/status">Status</a>
+        <a href="/logs" class="active">Logs</a>
+    </nav>
+    <div class="header">
+        <h1>Logs</h1>
+        <p>CPU, GPU, FE CC, Transcription · กด Refresh เอง</p>
+    </div>
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <h3>Logs</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+                <select id="logLines" onchange="loadLog()" style="padding:6px 10px;border:1px solid #d2d2d7;border-radius:6px;font-size:13px">
+                    <option value="50">50 บรรทัด</option>
+                    <option value="100" selected>100 บรรทัด</option>
+                    <option value="200">200 บรรทัด</option>
+                </select>
+                <button class="btn" onclick="loadLog()" id="logRefresh">Refresh</button>
+            </div>
+        </div>
+        <div class="log-tabs" id="logTabs"></div>
+        <div id="logContent" class="log-view">โหลด...</div>
+    </div>
+    <script>
+        const API = '/api/monitor';
+        let logList = [];
+        let currentLog = '';
+        function fetchWithTimeout(url, ms){
+            const c = new AbortController();
+            const t = setTimeout(()=>c.abort(), ms);
+            return fetch(url, {signal:c.signal}).finally(()=>clearTimeout(t));
+        }
+        function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+        async function loadLogList() {
+            try {
+                const r = await fetchWithTimeout(API+'/logs', 6000);
+                const d = await r.json();
+                logList = (d.available_logs||[]).map(l=>l.name);
+                const labels = {'api':'FE CC','gpu0':'GPU0','gpu1':'GPU1','cpu0':'CPU0','cpu1':'CPU1','whisper':'Transcription','video-worker':'Video'};
+                const order = ['api','gpu0','gpu1','cpu0','cpu1','preprocess0','preprocess1','whisper','video-worker'];
+                const seen = new Set();
+                let tabs = '';
+                order.forEach(k=>{
+                    if(logList.includes(k)) { seen.add(k); tabs += '<button class="log-tab'+(currentLog===k?' active':'')+'" data-log="'+k+'" onclick="selectLog(\''+k+'\')">'+(labels[k]||k)+'</button>'; }
+                });
+                logList.forEach(n=>{
+                    if(!seen.has(n)) tabs += '<button class="log-tab'+(currentLog===n?' active':'')+'" data-log="'+n+'" onclick="selectLog(\''+n+'\')">'+n+'</button>';
+                });
+                document.getElementById('logTabs').innerHTML = tabs||'<span style="color:#86868b">ไม่มี log</span>';
+                if(logList.length && !currentLog) selectLog(logList[0]);
+            } catch(e) {
+                document.getElementById('logTabs').innerHTML = '<span class="err-msg">Error: '+e.message+'</span>';
+            }
+        }
+        function selectLog(name) {
+            currentLog = name;
+            document.querySelectorAll('.log-tab').forEach(t=>{
+                t.classList.toggle('active', t.getAttribute('data-log')===name);
+            });
+            loadLog();
+        }
+        async function loadLog() {
+            if(!currentLog) return;
+            const el = document.getElementById('logContent');
+            el.innerHTML = '<div class="loading">โหลด...</div>';
+            try {
+                const lines = document.getElementById('logLines').value;
+                const r = await fetchWithTimeout(API+'/logs/'+currentLog+'?lines='+lines+'&tail=true', 10000);
+                const d = await r.json();
+                el.innerHTML = (d.lines||[]).map(l=>escapeHtml(l)).join('\n') || '(ว่าง)';
+            } catch(e) {
+                el.innerHTML = '<span class="err-msg">Error: '+e.message+'</span>';
+            }
+        }
+        document.addEventListener('DOMContentLoaded', loadLogList);
+    </script>
+</body>
+</html>
