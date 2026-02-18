@@ -102,9 +102,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
-.env.runpod
-.env.runpod-*
+# .env
+# .env.runpod
+# .env.runpod-*
 .venv
 env/
 venv/
