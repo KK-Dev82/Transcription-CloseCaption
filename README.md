@@ -15,6 +15,8 @@ pip install -r requirements.runpod-unified.txt && \
 ```
 
 > **หมายเหตุ**: `requirements.runpod-unified.txt` รวม NeMo 2.5.3 สำหรับ TyPhoon ASR (FE Live Caption) — ไม่ต้องติดตั้ง `nemo-toolkit` แยก
+>
+> **WebSocket**: `start-pod.sh` ใส่ `--ws-ping-interval` และ `--ws-ping-timeout` ให้ uvicorn แล้ว (แก้ 1011 / 1006) — ถ้าเคยมีปัญหา WebSocket ตัดบ่อย ให้ restart: `./scripts/pod/restart-main-api.sh`
 
 ### ตรวจสอบ CTranslate2 + GPU
 ```bash

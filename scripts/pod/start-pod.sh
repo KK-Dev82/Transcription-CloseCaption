@@ -289,6 +289,9 @@ else
     export WHISPER_PROVIDER=${WHISPER_PROVIDER:-openai-whisper}
     export WHISPER_MODEL=${WHISPER_MODEL:-large-v3}
     export WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+    # WebSocket keepalive (แก้ 1011 ping timeout / 1006 abnormal close) — ต้องใช้ตั้งแต่ First Setup
+    UVICORN_WS_PING_INTERVAL=${UVICORN_WS_PING_INTERVAL:-20}
+    UVICORN_WS_PING_TIMEOUT=${UVICORN_WS_PING_TIMEOUT:-60}
     # Note: Using UTC timezone (datetime.now(timezone.utc)) - frontend handles conversion
     # FIX: เพิ่ม PYTHONPATH ใน env เพื่อให้ import app.* ได้ (ใช้ PROJECT_ROOT แทน hardcode)
     nohup env PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" \
@@ -299,7 +302,10 @@ else
              WHISPER_PROVIDER="${WHISPER_PROVIDER}" \
              WHISPER_MODEL="${WHISPER_MODEL}" \
              WHISPER_DEVICE="${WHISPER_DEVICE}" \
-             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 > /tmp/main-api.log 2>&1 & disown
+             python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8010 \
+             --ws-ping-interval "$UVICORN_WS_PING_INTERVAL" \
+             --ws-ping-timeout "$UVICORN_WS_PING_TIMEOUT" \
+             > /tmp/main-api.log 2>&1 & disown
     sleep 5
     # Check if process is still running (not crashed)
     if pgrep -f "python.*uvicorn.*app.main" > /dev/null; then

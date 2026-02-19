@@ -166,6 +166,45 @@ grep -E "Producer connected|Received|Disconnected" logs/main-api.log | tail -20
 tail -f logs/main-api.log | grep "WS ingest"
 ```
 
+---
+
+## 🔧 FE CC: ตรวจสอบ WebSocket เมื่อ FE ไม่แสดงข้อความ
+
+เมื่อฝั่ง FE ไม่แสดงข้อความ FE CC สามารถตรวจสอบได้ดังนี้:
+
+### 1. ดู Logs แบบ Real-time
+```bash
+tail -f logs/main-api.log | grep "WS ingest"
+```
+- `Producer connected` = Producer (FE) เชื่อมต่อแล้ว
+- `📥 Received` = มีการรับ PCM (พูด/เปิดไมค์)
+- `Broadcast partial/final` = Backend ส่ง caption ออกไปแล้ว
+- `No connections for meeting` = ไม่มี Consumer (FE ยังไม่ connect /api/ws/captions)
+
+### 2. ทดสอบ Consumer ด้วยสคริปต์
+```bash
+# ใช้ meeting_id เดียวกับ FE
+python scripts/test_fe_cc_websocket.py --base-url http://localhost:8010 --meeting-id YOUR_MEETING_ID
+```
+- ถ้าสคริปต์ได้รับ partial/final แต่ FE ไม่แสดง → ปัญหาที่ FE (การแสดงผล)
+- ถ้าสคริปต์ไม่ได้รับอะไร → ตรวจว่า Producer ส่งเสียง และ meeting_id ตรงกัน
+
+### 3. ตรวจสอบ WebSocket Status
+```bash
+curl http://localhost:8010/api/websocket/status
+# หรือ
+curl http://localhost:8010/websocket/status
+```
+
+### 4. Checklist
+| รายการ | ตรวจสอบ |
+|--------|----------|
+| meeting_id | Producer และ Consumer ใช้ meeting_id เดียวกัน |
+| ingest-audio | FE connect ไป `ws://host/api/ws/ingest-audio?meeting_id=X` |
+| captions | FE connect ไป `ws://host/api/ws/captions?meeting_id=X` |
+| PCM frames | Producer ส่ง PCM16 binary (พูดหรือเปิดไมค์) |
+| Logs | ดู main-api.log มี `Broadcast` และไม่มี `No connections` |
+
 ### ตรวจสอบการแปลงเสียง
 ```bash
 tail -f logs/transcription.log | grep -E "Transcribing|completed"
