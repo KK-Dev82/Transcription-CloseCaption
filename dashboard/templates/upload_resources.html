@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Resources · Dashboard</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:16px;font-size:14px;line-height:1.4}
+        .nav{margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap}
+        .nav a{padding:8px 14px;background:#fff;color:#86868b;text-decoration:none;border-radius:8px;font-size:13px}
+        .nav a:hover,.nav a.active{background:#0071e3;color:#fff}
+        .header{margin-bottom:20px}
+        .header h1{font-size:22px;font-weight:600}
+        .header p{color:#86868b;font-size:13px;margin-top:4px}
+        .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+        .card h3{font-size:14px;font-weight:600;margin-bottom:12px;color:#1d1d1f}
+        .btn{padding:8px 14px;border:0;border-radius:8px;font-size:13px;cursor:pointer;background:#0071e3;color:#fff}
+        .btn:hover{background:#0077ed}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .btn-sm{padding:6px 10px;font-size:12px}
+        .btn-outline{background:transparent;color:#0071e3;border:1px solid #0071e3}
+        .btn-outline:hover{background:#e8f4fc}
+        .loading{text-align:center;padding:24px;color:#86868b}
+        .err-msg{color:#ff3b30;font-size:13px;padding:12px;background:#fff3f3;border-radius:8px;margin-bottom:12px}
+        .table-wrap{overflow-x:auto}
+        table{width:100%;border-collapse:collapse}
+        th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #e8e8ed}
+        th{font-size:11px;color:#86868b;text-transform:uppercase;font-weight:600}
+        tr:hover{background:#f9f9f9}
+        .badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:500}
+        .badge-video{background:#e8f4fc;color:#0071e3}
+        .badge-audio{background:#e8f5e9;color:#34c759}
+        .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center;padding:20px}
+        .modal.show{display:flex}
+        .modal-content{background:#fff;border-radius:12px;max-width:90vw;max-height:90vh;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+        .modal-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e8e8ed}
+        .modal-header h4{font-size:14px}
+        .modal-close{background:0;border:0;font-size:20px;cursor:pointer;color:#86868b;padding:4px}
+        .modal-close:hover{color:#1d1d1f}
+        .modal-body{padding:0;background:#000}
+        .modal-body video,.modal-body audio{width:100%;max-height:70vh;display:block}
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/status">Status</a>
+        <a href="/logs">Logs</a>
+        <a href="/upload-resources" class="active">Upload Resources</a>
+    </nav>
+    <div class="header">
+        <h1>Upload Resources</h1>
+        <p>รายการไฟล์ที่อัปโหลด · ชื่อไฟล์, ประเภท, ระยะเวลา, ขนาด · กด Preview ได้</p>
+    </div>
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <h3>ไฟล์ที่อัปโหลด</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <span id="selectedCount" style="font-size:12px;color:#86868b;display:none">เลือก 0 ไฟล์</span>
+                <button class="btn btn-outline btn-sm" id="btnDownloadSelected" onclick="downloadSelected()" disabled>Download ที่เลือก</button>
+                <button class="btn btn-outline btn-sm" id="btnTranscribeSelected" onclick="transcribeSelected()" disabled>Transcribe ที่เลือก</button>
+                <button class="btn" onclick="loadFiles()" id="btnRefresh">Refresh</button>
+            </div>
+        </div>
+        <div id="content" class="loading">โหลด...</div>
+    </div>
+
+    <div id="previewModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 id="previewTitle">Preview</h4>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-sm" id="btnDownloadInModal" onclick="downloadFromModal()" style="display:none">Download</button>
+                    <button class="modal-close" onclick="closePreview()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body" id="previewBody"></div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api/upload-resources';
+
+        function formatSize(bytes) {
+            if (!bytes || bytes === 0) return '-';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+
+        async function loadFiles() {
+            const el = document.getElementById('content');
+            const btn = document.getElementById('btnRefresh');
+            btn.disabled = true;
+            el.innerHTML = '<div class="loading">โหลด...</div>';
+            try {
+                const r = await fetch(API + '/list');
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.detail || 'โหลดไม่สำเร็จ');
+                const files = d.files || [];
+                if (files.length === 0) {
+                    el.innerHTML = '<p style="color:#86868b;padding:16px">ไม่มีไฟล์ที่อัปโหลด</p>';
+                    return;
+                }
+                let html = '<div class="table-wrap"><table><thead><tr>';
+                html += '<th style="width:36px"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="เลือกทั้งหมด"></th>';
+                html += '<th>ชื่อไฟล์</th><th>ประเภท</th><th>ระยะเวลา</th><th>ขนาด</th><th></th></tr></thead><tbody>';
+                files.forEach((f, idx) => {
+                    const duration = f.duration_formatted || (f.duration != null ? Math.floor(f.duration/60) + ':' + String(Math.floor(f.duration%60)).padStart(2,'0') : '-');
+                    const typeClass = f.file_type === 'video' ? 'badge-video' : 'badge-audio';
+                    const selId = 'sel_' + (f.id != null ? f.id : idx);
+                    html += '<tr>';
+                    html += '<td><input type="checkbox" class="file-select" data-id="' + (f.id != null ? f.id : '') + '" data-path="' + escapeHtml(f.file_path || '') + '" id="' + selId + '"></td>';
+                    html += '<td>' + escapeHtml(f.filename || f.file_path?.split('/').pop() || '-') + '</td>';
+                    html += '<td><span class="badge ' + typeClass + '">' + (f.file_type || '-') + '</span></td>';
+                    html += '<td>' + duration + '</td>';
+                    html += '<td>' + formatSize(f.file_size) + '</td>';
+                    html += '<td><button class="btn btn-sm btn-outline" onclick="openPreview(\'' + escapeJs(f.file_path) + '\',\'' + escapeJs(f.filename || f.file_path?.split('/').pop() || '') + '\',\'' + (f.file_type||'') + '\')">Preview</button> ';
+                    html += '<button class="btn btn-sm btn-outline" onclick="downloadFile(\'' + escapeJs(f.file_path) + '\',\'' + escapeJs(f.filename || f.file_path?.split('/').pop() || 'file') + '\')">Download</button></td>';
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div>';
+                html += '<p style="margin-top:8px;color:#86868b;font-size:12px">รวม ' + files.length + ' ไฟล์ (source: ' + (d.source||'') + ')</p>';
+                el.innerHTML = html;
+                updateSelectionUI();
+                document.querySelectorAll('.file-select').forEach(cb => cb.addEventListener('change', updateSelectionUI));
+            } catch (e) {
+                el.innerHTML = '<div class="err-msg">Error: ' + escapeHtml(e.message) + '</div>';
+            }
+            btn.disabled = false;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+        function escapeJs(s) {
+            return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n');
+        }
+
+        function getSelectedItems() {
+            const checkboxes = document.querySelectorAll('.file-select:checked');
+            const ids = [];
+            const paths = [];
+            checkboxes.forEach(cb => {
+                const id = cb.dataset.id;
+                const path = cb.dataset.path;
+                if (id) ids.push(parseInt(id, 10));
+                if (path) paths.push(path);
+            });
+            return {
+                ids: ids.length ? ids : null,
+                paths: paths.length ? paths : null,
+            };
+        }
+
+        function updateSelectionUI() {
+            const sel = getSelectedItems();
+            const n = (sel.ids || []).length + (sel.paths || []).length;
+            const countEl = document.getElementById('selectedCount');
+            const btnDl = document.getElementById('btnDownloadSelected');
+            const btnTr = document.getElementById('btnTranscribeSelected');
+            if (n > 0) {
+                countEl.style.display = 'inline';
+                countEl.textContent = 'เลือก ' + n + ' ไฟล์';
+                btnDl.disabled = false;
+                btnTr.disabled = false;
+            } else {
+                countEl.style.display = 'none';
+                btnDl.disabled = true;
+                btnTr.disabled = true;
+            }
+        }
+
+        function toggleSelectAll(checkbox) {
+            document.querySelectorAll('.file-select').forEach(cb => { cb.checked = checkbox.checked; });
+            updateSelectionUI();
+        }
+
+        async function downloadSelected() {
+            const sel = getSelectedItems();
+            if ((!sel.ids || sel.ids.length === 0) && (!sel.paths || sel.paths.length === 0)) {
+                alert('กรุณาเลือกไฟล์อย่างน้อย 1 ไฟล์');
+                return;
+            }
+            const body = {};
+            if (sel.ids && sel.ids.length) body.ids = sel.ids;
+            else body.file_paths = sel.paths;
+            const a = document.createElement('a');
+            a.href = API + '/selection/download';
+            a.download = 'selection.zip';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            try {
+                const r = await fetch(API + '/selection/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) {
+                    const d = await r.json().catch(() => ({}));
+                    throw new Error(d.detail || 'Download failed');
+                }
+                const blob = await r.blob();
+                const url = URL.createObjectURL(blob);
+                a.href = url;
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+            document.body.removeChild(a);
+        }
+
+        async function transcribeSelected() {
+            const sel = getSelectedItems();
+            if ((!sel.ids || sel.ids.length === 0) && (!sel.paths || sel.paths.length === 0)) {
+                alert('กรุณาเลือกไฟล์อย่างน้อย 1 ไฟล์');
+                return;
+            }
+            const body = { language: 'th', model_size: 'base', use_chunking: false };
+            if (sel.ids && sel.ids.length) body.ids = sel.ids;
+            else body.file_paths = sel.paths;
+            const btn = document.getElementById('btnTranscribeSelected');
+            btn.disabled = true;
+            btn.textContent = 'กำลังส่ง...';
+            try {
+                const r = await fetch(API + '/selection/transcribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(d.detail || d.error || 'Transcribe failed');
+                alert('ส่ง ' + (d.total || 0) + ' ไฟล์ไป transcription แล้ว\nTask IDs: ' + (d.task_ids || []).join(', '));
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+            btn.disabled = false;
+            btn.textContent = 'Transcribe ที่เลือก';
+        }
+
+        function downloadFile(filePath, filename) {
+            const url = API + '/download?file_path=' + encodeURIComponent(filePath);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename || 'download';
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        let _previewFilePath = '';
+        let _previewFilename = '';
+
+        function openPreview(filePath, filename, fileType) {
+            _previewFilePath = filePath;
+            _previewFilename = filename || filePath?.split('/').pop() || 'file';
+            const modal = document.getElementById('previewModal');
+            const title = document.getElementById('previewTitle');
+            const body = document.getElementById('previewBody');
+            const btn = document.getElementById('btnDownloadInModal');
+            title.textContent = _previewFilename || 'Preview';
+            btn.style.display = 'inline-block';
+            btn.onclick = () => downloadFile(_previewFilePath, _previewFilename);
+            const previewUrl = API + '/preview?file_path=' + encodeURIComponent(filePath);
+            if (fileType === 'video') {
+                body.innerHTML = '<video controls src="' + previewUrl + '"></video>';
+            } else {
+                body.innerHTML = '<audio controls src="' + previewUrl + '"></audio>';
+            }
+            modal.classList.add('show');
+        }
+
+        function downloadFromModal() {
+            if (_previewFilePath) downloadFile(_previewFilePath, _previewFilename);
+        }
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.remove('show');
+            document.getElementById('previewBody').innerHTML = '';
+        }
+
+        document.getElementById('previewModal').addEventListener('click', function(e) {
+            if (e.target === this) closePreview();
+        });
+
+        document.addEventListener('DOMContentLoaded', loadFiles);
+    </script>
+</body>
+</html>

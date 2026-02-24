@@ -110,7 +110,7 @@ async def get_queue_stats():
     try:
         conn = get_redis_connection()
         num_gpus = int(os.getenv('NUM_GPUS', '2'))
-        queues_to_check = ['transcription_priority', 'transcription_preprocess', 'transcription_cpu']
+        queues_to_check = ['transcription_priority', 'transcription_preprocess', 'transcription_preprocess_video_record', 'transcription_cpu']
         for i in range(num_gpus):
             queues_to_check.append(f'transcription_gpu{i}')
         

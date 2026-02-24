@@ -2,9 +2,23 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 from typing import Optional
+from urllib.parse import quote
 import logging
 from datetime import datetime
 import uuid
+
+
+def _content_disposition_for_filename(filename: str) -> str:
+    """
+    สร้าง Content-Disposition value สำหรับ filename รองรับอักขระ non-ASCII (ไทย ฯลฯ) ตาม RFC 5987
+    HTTP headers อนุญาตเฉพาะ ASCII; ชื่อไฟล์ภาษาไทยต้องใช้ filename*=UTF-8''
+    """
+    try:
+        filename.encode("ascii")
+        return f'attachment; filename="{filename}"'
+    except UnicodeEncodeError:
+        encoded = quote(filename, safe="")
+        return f"attachment; filename*=UTF-8''{encoded}"
 
 from ..models.upload import UploadResponse
 from ..utils.storage_factory import get_storage
@@ -402,6 +416,103 @@ async def get_file_info(file_id: str):
             status_code=500,
             detail=f"เกิดข้อผิดพลาดในการดึงข้อมูลไฟล์: {str(e)}"
         )
+
+
+@router.get("/preview")
+async def preview_file(file_path: str = None):
+    """
+    Stream ไฟล์สำหรับ preview (วิดีโอ/เสียง)
+    ใช้กับ <video src="..."> หรือ <audio src="...">
+    
+    Example: GET /api/upload/preview?file_path=uploads/xxx_video.mp4
+    """
+    from pathlib import Path
+    
+    if not file_path:
+        raise HTTPException(status_code=400, detail="ต้องระบุ file_path")
+    
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    
+    # Security: อนุญาตเฉพาะไฟล์ใน uploads เท่านั้น
+    uploads_resolved = Path("uploads").resolve()
+    try:
+        path.relative_to(uploads_resolved)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid path")
+    
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
+    
+    # กำหนด media type ตามนามสกุล
+    suffix = path.suffix.lower()
+    media_types = {
+        ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+        ".avi": "video/x-msvideo", ".mov": "video/quicktime",
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg", ".flac": "audio/flac", ".aac": "audio/aac"
+    }
+    media_type = media_types.get(suffix, "application/octet-stream")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path=str(path),
+        media_type=media_type,
+        filename=path.name,
+        headers={"Accept-Ranges": "bytes"}  # รองรับ seek ในวิดีโอ
+    )
+
+
+@router.get("/download")
+async def download_file(file_path: str = None):
+    """
+    ดาวน์โหลดไฟล์ (Content-Disposition: attachment)
+    ใช้เมื่อต้องการ save ไฟล์แทนการเปิดใน browser
+    
+    Example: GET /api/upload/download?file_path=uploads/xxx.mp4
+    """
+    from pathlib import Path
+    
+    if not file_path:
+        raise HTTPException(status_code=400, detail="ต้องระบุ file_path")
+    
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    
+    uploads_resolved = Path("uploads").resolve()
+    try:
+        path.relative_to(uploads_resolved)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid path")
+    
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
+    
+    suffix = path.suffix.lower()
+    media_types = {
+        ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+        ".avi": "video/x-msvideo", ".mov": "video/quicktime",
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg", ".flac": "audio/flac", ".aac": "audio/aac"
+    }
+    media_type = media_types.get(suffix, "application/octet-stream")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        path=str(path),
+        media_type=media_type,
+        filename=path.name,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": _content_disposition_for_filename(path.name),
+        },
+    )
 
 
 @router.get("/info/{file_path:path}")

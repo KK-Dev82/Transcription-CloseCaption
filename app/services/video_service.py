@@ -4,6 +4,7 @@ OPTIMIZATION: Decode audio ครั้งเดียวแล้ว slice เ�
 เพื่อลด I/O และ CPU overhead (GPU จะทำงานต่อเนื่องขึ้น)
 """
 import logging
+import wave
 import ffmpeg
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
@@ -13,6 +14,11 @@ import subprocess
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ค่าคงที่สำหรับ format ที่ต้องการ (transcription)
+VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.3gp')
+TARGET_SAMPLE_RATE = 16000
+TARGET_CHANNELS = 1
 
 # Import faster-whisper decode_audio (ถ้ามี)
 try:
@@ -28,6 +34,49 @@ class VideoService:
     
     def __init__(self):
         logger.info("✅ VideoService initialized")
+
+    def _is_already_wav_16k_mono(self, file_path: str) -> bool:
+        """
+        ตรวจสอบว่าไฟล์เป็น WAV 16 kHz mono อยู่แล้วหรือไม่ (ใช้ ffprobe)
+        Returns True ถ้าข้ามได้
+        """
+        try:
+            probe = ffmpeg.probe(str(file_path))
+            audio_stream = next(
+                (s for s in probe['streams'] if s.get('codec_type') == 'audio'),
+                None
+            )
+            if not audio_stream:
+                return False
+            sr = int(audio_stream.get('sample_rate', 0))
+            ch = int(audio_stream.get('channels', 0))
+            return sr == TARGET_SAMPLE_RATE and ch == TARGET_CHANNELS
+        except Exception:
+            return False
+
+    def _load_wav_16k_mono_fast(self, file_path: str) -> np.ndarray:
+        """
+        อ่าน WAV 16kHz mono 16-bit โดยตรงด้วย wave module (ไม่ใช้ PyAV)
+        เร็วกว่ามากสำหรับไฟล์ WAV ใหญ่ เพราะไม่ต้อง decode ผ่าน PyAV
+        
+        Returns:
+            np.ndarray: float32, mono, 16kHz (เหมือน decode_audio)
+        
+        Raises:
+            ValueError: ถ้า format ไม่ตรง (ไม่ใช่ 16kHz mono 16-bit)
+        """
+        with wave.open(file_path, 'rb') as wf:
+            nchannels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            if nchannels != TARGET_CHANNELS or framerate != TARGET_SAMPLE_RATE or sampwidth != 2:
+                raise ValueError(
+                    f"Not WAV 16kHz mono 16-bit: channels={nchannels}, rate={framerate}, sampwidth={sampwidth}"
+                )
+            frames = wf.readframes(wf.getnframes())
+        audio_s16 = np.frombuffer(frames, dtype=np.int16)
+        audio_f32 = audio_s16.astype(np.float32) / 32768.0
+        return audio_f32
     
     def extract_audio(self, video_path: str, task_id: Optional[str] = None) -> str:
         """
@@ -44,6 +93,12 @@ class VideoService:
             video_file = Path(video_path)
             if not video_file.exists():
                 raise FileNotFoundError(f"Video file not found: {video_path}")
+            
+            # ข้าม convert/extract ถ้าเป็นไฟล์ audio ที่ตรง format อยู่แล้ว (WAV 16kHz mono)
+            is_video = video_file.suffix.lower() in VIDEO_EXTENSIONS
+            if not is_video and self._is_already_wav_16k_mono(str(video_file)):
+                logger.info(f"⏭️ Skipped conversion: already WAV 16kHz mono: {video_path}")
+                return str(video_file)
             
             # สร้างชื่อไฟล์ output
             if task_id:
@@ -226,8 +281,17 @@ class VideoService:
                 # OPTIMIZATION: Decode ครั้งเดียวแล้ว slice เป็น chunks ใน RAM
                 logger.info(f"📦 Creating numpy chunks (optimized): {audio_path} -> {base_dir} (chunk={chunk_duration}s)")
                 
-                # Decode audio ครั้งเดียว
-                audio_array = self.decode_audio_once(audio_path, sampling_rate=sampling_rate)
+                # Fast path: WAV 16kHz mono 16-bit - ใช้ wave module (ไม่ใช้ PyAV, เร็วกว่ามากสำหรับไฟล์ใหญ่)
+                if audio_file.suffix.lower() == '.wav':
+                    try:
+                        audio_array = self._load_wav_16k_mono_fast(str(audio_file))
+                        logger.info(f"⏭️ Fast path: WAV 16kHz mono 16-bit - using wave module (no PyAV)")
+                    except (ValueError, Exception) as e:
+                        logger.debug(f"WAV fast path skipped ({e}), using PyAV decode")
+                        audio_array = self.decode_audio_once(audio_path, sampling_rate=sampling_rate)
+                else:
+                    # M4A, MP3, etc. - ต้องใช้ PyAV decode
+                    audio_array = self.decode_audio_once(audio_path, sampling_rate=sampling_rate)
                 
                 # Slice เป็น chunks ใน RAM
                 chunk_samples = chunk_duration * sampling_rate

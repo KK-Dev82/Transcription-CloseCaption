@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 import aiohttp
 import json
-import ffmpeg
 
 from .whisper_service import WhisperService
 from .file_service import FileService
@@ -178,49 +177,14 @@ class TranscriptionService:
             task.progress = 20
             self._save_task(task)
             
-            # แปลงไฟล์เป็น WAV 16k mono ก่อน chunking (ลด overhead)
+            # แปลงไฟล์เป็น WAV 16k mono ก่อน chunking (ข้ามถ้าตรง format อยู่แล้ว)
             import time
             conversion_start_time = time.time()
             from app.services.video_service import VideoService
             video_service = VideoService()
             
-            logger.info(f"🎬 Converting audio to WAV 16k mono before chunking...")
-            # ตรวจสอบว่าเป็นไฟล์วิดีโอหรือไม่
-            audio_path = file_path
-            if file_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.webm')):
-                audio_path = video_service.extract_audio(file_path, task_id)
-                logger.info(f"✅ Audio extracted: {audio_path}")
-            else:
-                # ถ้าเป็นไฟล์ audio อยู่แล้ว แต่ไม่ใช่ WAV 16k mono ให้แปลง
-                # (ตรวจสอบจาก extension หรือ probe)
-                try:
-                    probe = ffmpeg.probe(audio_path)
-                    audio_stream = next(
-                        (stream for stream in probe['streams'] if stream['codec_type'] == 'audio'),
-                        None
-                    )
-                    if audio_stream:
-                        sample_rate = int(audio_stream.get('sample_rate', 0))
-                        channels = int(audio_stream.get('channels', 0))
-                        if sample_rate != 16000 or channels != 1:
-                            logger.info(f"🔄 Converting audio to 16k mono (current: {sample_rate}Hz, {channels}ch)...")
-                            # แปลงเป็น WAV 16k mono
-                            output_path = Path("temp") / f"{Path(audio_path).stem}_converted.wav"
-                            output_path.parent.mkdir(parents=True, exist_ok=True)
-                            stream = ffmpeg.input(audio_path)
-                            audio = ffmpeg.output(
-                                stream,
-                                str(output_path),
-                                acodec='pcm_s16le',
-                                ac=1,
-                                ar='16000'
-                            )
-                            ffmpeg.run(audio, overwrite_output=True, quiet=True)
-                            audio_path = str(output_path)
-                            logger.info(f"✅ Audio converted: {audio_path}")
-                except Exception as e:
-                    logger.warning(f"⚠️  Could not probe audio, using original: {e}")
-            
+            logger.info(f"🎬 Preparing audio for chunking (extract/convert if needed)...")
+            audio_path = video_service.extract_audio(file_path, task_id)
             conversion_time = time.time() - conversion_start_time
             logger.info(f"✅ Audio conversion completed in {conversion_time:.2f}s")
             

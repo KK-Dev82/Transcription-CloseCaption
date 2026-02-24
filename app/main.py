@@ -178,6 +178,11 @@ from app.api import websocket_router
 if not MOCK_MODE:
     from app.api import upload_router, caption_router, video_router
     app.include_router(upload_router, prefix="/api", tags=["upload"])
+    try:
+        from app.api.selection import router as selection_router
+        app.include_router(selection_router, prefix="/api", tags=["selection"])
+    except ImportError as e:
+        logger.warning(f"Selection API not available: {e}")
     app.include_router(caption_router, prefix="/api", tags=["caption"])
     if video_router:
         app.include_router(video_router, prefix="/api", tags=["video"])

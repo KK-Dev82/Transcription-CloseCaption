@@ -17,12 +17,17 @@ router = APIRouter(prefix="/transcribe-enhanced", tags=["enhanced-transcription"
 transcription_service = TranscriptionService()
 
 class EnhancedTranscriptionRequest(BaseModel):
-    file_path: str
+    file_path: Optional[str] = None  # ใช้เมื่อไม่ใช้ chunk_group
     language: str = "th"
     model_size: Optional[str] = None  # ไม่ส่ง = ใช้จาก .env (WHISPER_MODEL)
     chunk_duration: Optional[int] = None  # ไม่ส่ง = ใช้จาก .env (TRANSCRIPTION_CHUNK_DURATION)
+    use_chunking: Optional[bool] = None  # None = ใช้ TRANSCRIPTION_USE_CHUNKING จาก .env
     enable_thai_processing: bool = True
     enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก .env (.env.runpod / .env.runpod-1GPU)
+    source: Optional[str] = None  # "video_record" = ลัดคิว (slot พิเศษ +1)
+    # Chunk Group
+    file_paths: Optional[List[str]] = None
+    chunk_group: bool = False
 
 @router.post("/start")
 async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
@@ -38,7 +43,94 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         from datetime import datetime, timezone
         from pathlib import Path
         
-        # ตรวจสอบไฟล์
+        # Chunk Group validation
+        if request.chunk_group:
+            if not request.file_paths:
+                raise HTTPException(status_code=400, detail="ต้องระบุ file_paths เมื่อใช้ chunk_group")
+            if request.file_path:
+                raise HTTPException(status_code=400, detail="เมื่อใช้ chunk_group ให้ระบุเฉพาะ file_paths")
+        elif request.file_paths:
+            raise HTTPException(status_code=400, detail="ต้องระบุ chunk_group=true เมื่อใช้ file_paths")
+        
+        # Flow ปกติ: ต้องมี file_path
+        if not request.chunk_group and not request.file_path:
+            raise HTTPException(status_code=400, detail="ต้องระบุ file_path หรือ file_paths+chunk_group")
+        
+        # ========== Chunk Group Flow ==========
+        if request.chunk_group and request.file_paths:
+            from app.services.chunk_group_validator import validate_chunk_group_request
+            validate_chunk_group_request(request.file_paths)
+            
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from ..utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+            else:
+                from ..utils.json_storage import JSONStorage
+                storage = JSONStorage()
+            
+            from ..services.close_caption_config import get_transcription_model_display
+            _raw = (request.model_size or "").strip().lower()
+            if _raw in ("", "default", "base"):
+                model_size = get_transcription_model_display()
+            else:
+                model_size = request.model_size
+            
+            task_id = str(uuid.uuid4())
+            enable_diarization = request.enable_diarization
+            if enable_diarization is None:
+                enable_diarization = os.getenv("ENABLE_DIARIZATION_DEFAULT", "0").lower() in ("1", "true", "yes")
+            
+            first_path = Path(request.file_paths[0])
+            display_name = f"{first_path.parent.name} ({len(request.file_paths)} chunks)"
+            task_dict = {
+                "task_id": task_id,
+                "status": "queued",
+                "progress": 0,
+                "file_path": request.file_paths[0],
+                "file_name": display_name,
+                "file_paths": request.file_paths,
+                "chunk_group": True,
+                "language": request.language,
+                "model_size": model_size,
+                "chunk_duration": int(os.getenv("TRANSCRIPTION_CHUNK_DURATION", "150")),
+                "use_chunking": True,
+                "full_text": "",
+                "chunks": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "enable_thai_processing": request.enable_thai_processing,
+                "enable_diarization": enable_diarization,
+            }
+            storage.save_transcription(task_id, task_dict)
+            
+            queue_service = get_redis_queue_service()
+            source = request.source if request.source == 'video_record' else None
+            try:
+                preprocess_job_id = queue_service.enqueue_preprocess_chunk_group(
+                    task_id=task_id,
+                    file_paths=request.file_paths,
+                    language=request.language,
+                    model_size=model_size,
+                    source=source
+                )
+                logger.info(f"✅ Chunk group enhanced transcription job enqueued: {preprocess_job_id}")
+            except Exception as e:
+                from app.services.redis_queue_service import QueueFullError
+                if isinstance(e, QueueFullError):
+                    raise HTTPException(status_code=429, detail=e.message)
+                raise
+            
+            return {
+                "task_id": task_id,
+                "status": "queued",
+                "message": "Chunk group Enhanced Transcription เริ่มแล้ว",
+                "chunk_group": True,
+                "file_paths": request.file_paths,
+                "queue": "redis",
+                "chunks": len(request.file_paths),
+            }
+        
+        # ========== Flow ปกติ (file_path) ==========
         file_path = request.file_path
         if not Path(file_path).exists():
             raise HTTPException(status_code=404, detail=f"ไม่พบไฟล์: {file_path}")
@@ -56,6 +148,11 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         chunk_duration = request.chunk_duration
         if chunk_duration is None:
             chunk_duration = int(os.getenv("TRANSCRIPTION_CHUNK_DURATION", "150"))
+
+        # use_chunking: None = ใช้ TRANSCRIPTION_USE_CHUNKING จาก .env
+        use_chunking = request.use_chunking
+        if use_chunking is None:
+            use_chunking = os.getenv("TRANSCRIPTION_USE_CHUNKING", "true").lower() in ("1", "true", "yes")
 
         # enable_diarization: None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก .env (.env.runpod / .env.runpod-1GPU)
         enable_diarization = request.enable_diarization
@@ -81,6 +178,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "language": request.language,
             "model_size": model_size,
             "chunk_duration": chunk_duration,
+            "use_chunking": use_chunking,
             "full_text": "",
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -91,13 +189,15 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         
         # Enqueue preprocessing job
         queue_service = get_redis_queue_service()
+        source = request.source if request.source == 'video_record' else None
         try:
             preprocess_job_id = queue_service.enqueue_preprocess(
                 task_id=task_id,
                 file_path=file_path,
                 language=request.language,
                 model_size=model_size,
-                chunk_duration=chunk_duration
+                chunk_duration=chunk_duration,
+                source=source
             )
             
             logger.info(f"✅ Enhanced transcription job enqueued: {preprocess_job_id}")

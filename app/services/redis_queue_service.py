@@ -123,32 +123,52 @@ class RedisQueueService:
             default_result_ttl=default_result_ttl
         )
         
-        logger.info("✅ Redis Queue Service initialized (GPU queues + CPU queue + Preprocess queue)")
+        # Preprocess queue สำหรับ Video Record — ลัดคิว (workers ฟังคิวนี้ก่อน)
+        self.preprocess_video_record_queue = Queue(
+            'transcription_preprocess_video_record',
+            connection=self.redis_conn,
+            default_result_ttl=default_result_ttl
+        )
+        
+        logger.info("✅ Redis Queue Service initialized (GPU queues + CPU queue + Preprocess queue + Preprocess Video Record)")
     
-    def _check_preprocess_queue_limit(self):
+    def _check_preprocess_queue_limit(self, source: Optional[str] = None):
         """
         ตรวจสอบว่า preprocess queue เต็มหรือไม่
+        
+        Args:
+            source: "video_record" = ใช้ slot พิเศษ (+1), ปกติ = ใช้ slot 50
         
         Raises:
             QueueFullError: ถ้า queue เต็ม (current >= max)
         """
-        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '25'))
-        queue_length = len(self.preprocess_queue)
+        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '50'))
+        video_record_slots = int(os.getenv('MAX_PREPROCESS_QUEUE_VIDEO_RECORD_SLOTS', '1'))
         
-        # รวม started jobs ด้วย (jobs ที่กำลังประมวลผล)
         from rq.registry import StartedJobRegistry
-        started_count = len(StartedJobRegistry(queue=self.preprocess_queue))
-        total_count = queue_length + started_count
+        preprocess_len = len(self.preprocess_queue)
+        video_record_len = len(self.preprocess_video_record_queue)
+        started_preprocess = len(StartedJobRegistry(queue=self.preprocess_queue))
+        started_video_record = len(StartedJobRegistry(queue=self.preprocess_video_record_queue))
+        total_count = preprocess_len + video_record_len + started_preprocess + started_video_record
         
-        if total_count >= max_size:
-            logger.warning(f"⚠️ Preprocess queue เต็ม: {total_count}/{max_size} (queued: {queue_length}, started: {started_count})")
+        # Video Record: ใช้ slot พิเศษ รวมสูงสุด max_size + video_record_slots
+        if source == 'video_record':
+            max_total = max_size + video_record_slots
+            queue_name = "transcription_preprocess_video_record"
+        else:
+            max_total = max_size
+            queue_name = "transcription_preprocess"
+        
+        if total_count >= max_total:
+            logger.warning(f"⚠️ Preprocess queue เต็ม: {total_count}/{max_total} (preprocess: {preprocess_len}+{started_preprocess}, video_record: {video_record_len}+{started_video_record})")
             raise QueueFullError(
                 current_count=total_count,
-                max_size=max_size,
-                queue_name="transcription_preprocess"
+                max_size=max_total,
+                queue_name=queue_name
             )
         
-        logger.debug(f"✅ Preprocess queue OK: {total_count}/{max_size} (queued: {queue_length}, started: {started_count})")
+        logger.debug(f"✅ Preprocess queue OK: {total_count}/{max_total} (source={source})")
     
     def enqueue_transcription(
         self,
@@ -245,7 +265,8 @@ class RedisQueueService:
         file_path: str,
         language: str = "th",
         model_size: Optional[str] = None,
-        chunk_duration: int = 90
+        chunk_duration: int = 90,
+        source: Optional[str] = None
     ) -> str:
         """
         Enqueue preprocessing job ไปยัง preprocess queue
@@ -256,6 +277,7 @@ class RedisQueueService:
             language: Language code
             model_size: Whisper model size
             chunk_duration: Chunk duration in seconds
+            source: "video_record" = ลัดคิว (ใช้ slot พิเศษ +1)
         
         Returns:
             Job ID
@@ -272,10 +294,14 @@ class RedisQueueService:
                 model_size = os.getenv("WHISPER_MODEL", "base")
         
         # ตรวจสอบ queue limit ก่อน enqueue
-        self._check_preprocess_queue_limit()
+        self._check_preprocess_queue_limit(source=source)
+        
+        # เลือก queue: video_record → ลัดคิว (workers ฟังคิวนี้ก่อน)
+        queue = self.preprocess_video_record_queue if source == 'video_record' else self.preprocess_queue
+        queue_name = queue.name
         
         # Preprocessing ไป preprocess queue
-        job = self.preprocess_queue.enqueue(
+        job = queue.enqueue(
             'app.workers.rq_worker.process_preprocess_job',
             task_id,
             file_path,
@@ -286,7 +312,43 @@ class RedisQueueService:
             job_timeout=1800,  # 30 minutes timeout
             result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
-        logger.info(f"✅ Preprocess job {task_id} enqueued to Preprocess queue (Job ID: {job.id})")
+        logger.info(f"✅ Preprocess job {task_id} enqueued to {queue_name} (Job ID: {job.id})")
+        return job.id
+    
+    def enqueue_preprocess_chunk_group(
+        self,
+        task_id: str,
+        file_paths: List[str],
+        language: str = "th",
+        model_size: Optional[str] = None,
+        source: Optional[str] = None
+    ) -> str:
+        """
+        Enqueue preprocessing job โหมด chunk group
+        ข้าม extract + create_chunks ใช้ file_paths เป็น chunks โดยตรง
+        """
+        if not model_size or str(model_size).strip().lower() in ("", "base", "default"):
+            try:
+                from app.services.close_caption_config import get_transcription_model_display
+                model_size = get_transcription_model_display()
+            except Exception:
+                model_size = os.getenv("WHISPER_MODEL", "base")
+        
+        self._check_preprocess_queue_limit(source=source)
+        queue = self.preprocess_video_record_queue if source == 'video_record' else self.preprocess_queue
+        queue_name = queue.name
+        
+        job = queue.enqueue(
+            'app.workers.rq_worker.process_preprocess_job_chunk_group',
+            task_id,
+            file_paths,
+            language,
+            model_size,
+            job_id=f"{task_id}_preprocess",
+            job_timeout=1800,
+            result_ttl=43200,
+        )
+        logger.info(f"✅ Chunk group preprocess job {task_id} enqueued to {queue_name} (Job ID: {job.id})")
         return job.id
     
     def enqueue_aggregator(
@@ -422,6 +484,68 @@ class RedisQueueService:
             logger.error(f"❌ Error cancelling job: {e}")
             return False
     
+    def cancel_task(self, task_id: str) -> Dict:
+        """
+        ยกเลิก transcription task และ jobs ที่เกี่ยวข้องใน Redis queue
+        
+        - Cancel preprocess job: {task_id}_preprocess
+        - Cancel aggregator job: {task_id}_aggregator  
+        - Cancel chunk jobs: {task_id}_chunk_{0..N}
+        - Cancel full job (non-chunked): task_id
+        - ลบ Redis keys: task:{task_id}:*
+        
+        Returns:
+            Dict with cancelled_jobs, redis_keys_deleted, success
+        """
+        result = {"cancelled_jobs": 0, "redis_keys_deleted": 0, "success": False}
+        
+        # รายการ job IDs ที่อาจมี (ตามลำดับความน่าจะเป็น)
+        known_job_ids = [
+            f"{task_id}_preprocess",
+            f"{task_id}_aggregator",
+            task_id,  # full file job (non-chunked)
+        ]
+        
+        # หา chunk jobs จาก Redis chunks_metadata หรือ scan
+        try:
+            chunks_meta_key = f"task:{task_id}:chunks_metadata"
+            chunks_meta = self.redis_conn.get(chunks_meta_key)
+            if chunks_meta:
+                meta = json.loads(chunks_meta.decode("utf-8") if isinstance(chunks_meta, bytes) else chunks_meta)
+                total = meta.get("total_chunks", 0)
+                for i in range(total):
+                    known_job_ids.append(f"{task_id}_chunk_{i}")
+        except Exception as e:
+            logger.debug(f"Could not get chunks_metadata for {task_id}: {e}")
+        
+        # Cancel แต่ละ job
+        for job_id in known_job_ids:
+            try:
+                job = Job.fetch(job_id, connection=self.redis_conn)
+                status = job.get_status()
+                if status in ("queued", "started", "deferred"):
+                    job.cancel()
+                    result["cancelled_jobs"] += 1
+                    logger.info(f"✅ Cancelled job {job_id} (was: {status})")
+            except Exception as e:
+                # Job อาจไม่มีหรือเสร็จไปแล้ว - ไม่ถือว่า error
+                if "No such job" not in str(e) and "Could not find" not in str(e):
+                    logger.debug(f"Job {job_id}: {e}")
+        
+        # Scan และลบ Redis keys ที่เกี่ยวกับ task นี้
+        prefix = f"task:{task_id}:"
+        try:
+            keys = list(self.redis_conn.scan_iter(match=prefix + "*", count=500))
+            if keys:
+                self.redis_conn.delete(*keys)
+                result["redis_keys_deleted"] = len(keys)
+                logger.info(f"✅ Deleted {len(keys)} Redis keys for task {task_id}")
+        except Exception as e:
+            logger.error(f"❌ Error deleting Redis keys for {task_id}: {e}")
+        
+        result["success"] = True
+        return result
+    
     def cleanup_finished_jobs(self, max_age_hours: int = 24) -> Dict:
         """
         Cleanup finished jobs ที่เก่ากว่า max_age_hours
@@ -444,7 +568,7 @@ class RedisQueueService:
         cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
         
         # Cleanup all queues
-        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue]
+        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
         
         for queue in all_queues:
             queue_name = queue.name
@@ -497,7 +621,7 @@ class RedisQueueService:
         cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
         
         # Cleanup all queues
-        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue]
+        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
         
         for queue in all_queues:
             queue_name = queue.name

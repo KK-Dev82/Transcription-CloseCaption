@@ -134,6 +134,15 @@ except ImportError:
     except ImportError:
         monitoring_proxy_routes = None
 
+# Upload resources (proxy to Main API)
+try:
+    from .routes import upload_resources_routes
+except ImportError:
+    try:
+        from routes import upload_resources_routes
+    except ImportError:
+        upload_resources_routes = None
+
 if monitoring_proxy_routes:
     app.include_router(monitoring_proxy_routes.router)
     logger.info("✅ Monitoring proxy routes included (lightweight)")
@@ -183,6 +192,13 @@ if rtmp_streaming_routes:
     except Exception as e:
         logger.debug(f"RTMP Streaming routes not available: {e}")
 
+if upload_resources_routes:
+    try:
+        app.include_router(upload_resources_routes.router)
+        logger.info("✅ Upload resources routes included")
+    except Exception as e:
+        logger.debug(f"Upload resources routes not available: {e}")
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -198,6 +214,11 @@ async def status_page(request: Request):
 async def logs_page(request: Request):
     """Logs page - CPU, GPU, FE CC, Transcription"""
     return templates.TemplateResponse("logs.html", {"request": request})
+
+@app.get("/upload-resources", response_class=HTMLResponse)
+async def upload_resources_page(request: Request):
+    """Upload Resources - รายการไฟล์ที่อัปโหลด"""
+    return templates.TemplateResponse("upload_resources.html", {"request": request})
 
 
 if __name__ == "__main__":

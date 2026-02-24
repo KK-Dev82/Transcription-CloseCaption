@@ -7,7 +7,8 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, Optional, List
 from datetime import datetime, timezone
 from redis import Redis
 
@@ -989,8 +990,8 @@ def process_transcription_job(
                 "language": language
             }
             
-            # Apply Thai processor
-            if language == "th":
+            # Apply Thai processor (PyThaiNLP + Attacut) — ปิดได้ผ่าน ENABLE_THAI_PROCESSING_FOR_TRANSCRIPTION
+            if language == "th" and os.getenv("ENABLE_THAI_PROCESSING_FOR_TRANSCRIPTION", "true").lower() == "true":
                 t_thai_start = time.time()
                 logger.warning(f"🇹🇭 Applying Thai processor... (text len={len(merged_result.get('text',''))})")
                 merged_result = transcription_service.whisper_service._apply_thai_processing(merged_result)
@@ -1490,15 +1491,21 @@ def process_preprocess_job(
                 logger.warning(f"⚠️ Diarization failed: {de}", exc_info=True)
                 get_redis_connection(decode_responses=True).delete(f"task:{task_id}:diarization")
         
-        # 2. Create chunks
+        # 2. Create chunks (หรือ full file ถ้า use_chunking=false)
+        use_chunking = task_data.get("use_chunking", True)
+        if use_chunking is None:
+            use_chunking = os.getenv("TRANSCRIPTION_USE_CHUNKING", "true").lower() in ("1", "true", "yes")
+        if not use_chunking:
+            chunk_duration = 36000  # 10 ชม. = 1 chunk (full file)
+            logger.info(f"📦 Full-file mode (use_chunking=false): ไม่แบ่ง chunk")
         t_chunk_start = time.time()
-        logger.info(f"📦 Creating chunks from {audio_path}...")
+        logger.info(f"📦 Creating chunks from {audio_path} (chunk_duration={chunk_duration}s)...")
         _update_task_stage_sync(
             task_id=task_id,
             progress=25,
             status="processing",
             stage="chunking",
-            stage_description="กำลังแบ่งไฟล์เป็นส่วนๆ",
+            stage_description="กำลังแบ่งไฟล์เป็นส่วนๆ" if use_chunking else "ใช้ไฟล์เต็ม (ไม่แบ่ง)",
             stage_progress=0,
             json_storage=json_storage if storage_type != 'sqlite' else None
         )
@@ -1721,6 +1728,236 @@ def process_preprocess_job(
         except Exception as save_error:
             logger.error(f"❌ Failed to save error status: {save_error}")
         raise
+
+
+def process_preprocess_job_chunk_group(
+    task_id: str,
+    file_paths: List[str],
+    language: str,
+    model_size: str,
+) -> Dict:
+    """
+    Preprocess โหมด chunk group:
+    - ข้าม extract_audio, create_chunks
+    - ใช้ file_paths เป็น chunks โดยตรง
+    - Convert เป็น 16k mono ถ้าจำเป็น
+    - Enqueue chunk jobs ไป GPU + aggregator
+    """
+    logger.info(f"🔧 RQ Worker: Starting chunk group preprocess job {task_id}")
+    logger.info(f"   Files: {len(file_paths)}")
+    
+    import time
+    from datetime import datetime, timezone
+    
+    try:
+        from app.services.video_service import VideoService
+        from app.services.redis_queue_service import get_redis_queue_service
+        import json
+        from redis import Redis
+        
+        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+        if storage_type == 'sqlite':
+            from app.utils.sqlite_storage import SQLiteStorage
+            storage = SQLiteStorage()
+            json_storage = None
+            task_data = storage.load_transcription(task_id, skip_migration=True)
+            if not task_data:
+                task_data = {}
+        else:
+            from app.utils.json_storage import JSONStorage
+            json_storage = JSONStorage()
+            storage = None
+            task_dir = json_storage.storage_dir / "transcriptions" / task_id
+            metadata_path = task_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    task_data = json.load(f)
+            else:
+                task_data = {}
+        
+        video_service = VideoService()
+        queue_service = get_redis_queue_service()
+        
+        task_data["file_path"] = file_paths[0]
+        task_data["file_name"] = f"{Path(file_paths[0]).parent.name} ({len(file_paths)} chunks)"
+        task_data["file_paths"] = file_paths
+        task_data["chunk_group"] = True
+        task_data["language"] = language
+        task_data["model_size"] = model_size
+        if not task_data.get("created_at"):
+            task_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        if not task_data.get("task_id"):
+            task_data["task_id"] = task_id
+        if "status" not in task_data:
+            task_data["status"] = "processing"
+        
+        if storage_type == 'sqlite' and storage:
+            storage.save_transcription(task_id, task_data)
+        elif storage_type != 'sqlite' and json_storage:
+            json_storage.save_transcription(task_id, task_data)
+        
+        _update_task_stage_sync(
+            task_id=task_id,
+            progress=10,
+            status="processing",
+            stage="preprocessing_chunk_group",
+            stage_description=f"กำลังเตรียม {len(file_paths)} ไฟล์",
+            stage_progress=0,
+            json_storage=json_storage if storage_type != 'sqlite' else None
+        )
+        
+        # Convert เป็น 16k mono ถ้าจำเป็น (ข้ามถ้าเป็น WAV 16k แล้ว)
+        chunks = []
+        for i, fp in enumerate(file_paths):
+            if video_service._is_already_wav_16k_mono(fp):
+                chunks.append(fp)
+                logger.debug(f"   Chunk {i}: skip convert (already WAV 16k): {fp}")
+            else:
+                converted = video_service.extract_audio(fp, task_id=f"{task_id}_cg{i}")
+                chunks.append(converted)
+                logger.debug(f"   Chunk {i}: converted to 16k mono: {converted}")
+        
+        total_chunks = len(chunks)
+        chunk_duration = 150  # ใช้ค่า default สำหรับ metadata
+        
+        _update_task_stage_sync(
+            task_id=task_id,
+            progress=25,
+            status="processing",
+            stage="enqueueing",
+            stage_description=f"กำลังส่ง {total_chunks} ส่วนไปประมวลผล",
+            stage_progress=0,
+            json_storage=json_storage if storage_type != 'sqlite' else None
+        )
+        
+        num_gpus = int(os.getenv('NUM_GPUS', '0'))
+        if num_gpus <= 0:
+            raise RuntimeError("NUM_GPUS is not set or invalid.")
+        
+        initial_window_size = int(os.getenv('CHUNK_ENQUEUE_WINDOW_SIZE', '4'))
+        enqueued_count = 0
+        chunk_data = []
+        conn = get_redis_connection(decode_responses=True)
+        ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+        
+        for i in range(min(initial_window_size, total_chunks)):
+            chunk_path = chunks[i]
+            chunk_task_id = f"{task_id}_chunk_{i}"
+            gpu_index = i % num_gpus
+            worker_gpu = f'gpu{gpu_index}'
+            job_id = queue_service.enqueue_transcription(
+                task_id=chunk_task_id,
+                file_path=chunk_path,
+                language=language,
+                model_size=model_size,
+                chunk_duration=chunk_duration,
+                priority=False,
+                worker_gpu=worker_gpu
+            )
+            chunk_data.append({
+                "i": i,
+                "job_id": job_id,
+                "chunk_task_id": chunk_task_id,
+                "chunk_path": chunk_path,
+                "worker_gpu": worker_gpu
+            })
+            enqueued_count += 1
+        
+        chunks_metadata = {
+            "chunk_paths": chunks,
+            "next_chunk_index": enqueued_count,
+            "total_chunks": total_chunks,
+            "chunk_duration": chunk_duration,
+            "language": language,
+            "model_size": model_size
+        }
+        conn.setex(
+            f"task:{task_id}:chunks_metadata",
+            ttl_seconds,
+            json.dumps(chunks_metadata)
+        )
+        
+        aggregator_task_id = f"{task_id}_aggregator"
+        queue_service.enqueue_aggregator(
+            task_id=aggregator_task_id,
+            language=language,
+            model_size=model_size,
+            chunk_duration=chunk_duration
+        )
+        
+        conn.setex(
+            f"task:{task_id}:chunk_jobs",
+            ttl_seconds,
+            json.dumps({
+                "chunk_duration": chunk_duration,
+                "total_chunks": total_chunks,
+                "chunks": chunk_data
+            })
+        )
+        conn.setex(f"task:{task_id}:total_chunks", ttl_seconds, str(total_chunks))
+        conn.setex(f"task:{task_id}:done_chunks", ttl_seconds, "0")
+        inflight_key = f"task:{task_id}:inflight_chunks"
+        conn.set(inflight_key, str(enqueued_count))
+        conn.expire(inflight_key, ttl_seconds)
+        enqueued_guard_prefix = f"task:{task_id}:enqueued"
+        for i in range(enqueued_count):
+            conn.setex(f"{enqueued_guard_prefix}:{i}", ttl_seconds, '1')
+        
+        if storage_type == 'sqlite' and storage:
+            storage.save_transcription(task_id, task_data)
+        elif storage_type != 'sqlite' and json_storage:
+            json_storage.save_transcription(task_id, task_data)
+        
+        try:
+            from app.services.websocket_service import websocket_manager
+            loop = get_event_loop()
+            loop.run_until_complete(
+                websocket_manager.notify_transcription_started(
+                    task_id=task_id,
+                    file_path=file_paths[0],
+                    language=language
+                )
+            )
+        except Exception as e:
+            logger.debug(f"WebSocket started notification failed: {e}")
+        
+        logger.info(f"✅ Chunk group preprocess job {task_id} completed ({total_chunks} chunks)")
+        return {
+            "task_id": task_id,
+            "total_chunks": total_chunks,
+            "chunk_data": chunk_data,
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Chunk group preprocess job {task_id} failed: {e}", exc_info=True)
+        try:
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = str(e)
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                storage.save_transcription(task_id, task_data)
+            else:
+                from app.utils.json_storage import JSONStorage
+                json_storage = JSONStorage()
+                task_data = {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = str(e)
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                json_storage.save_transcription(task_id, task_data)
+            loop = get_event_loop()
+            loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
+        except Exception as save_error:
+            logger.error(f"❌ Failed to save error status: {save_error}")
+        raise
+
 
 # ============================================================================
 # Module Initialization

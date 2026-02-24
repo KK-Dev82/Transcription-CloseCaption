@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, Literal, List, Dict, Any
 from datetime import datetime, timedelta
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v2/tasks", tags=["Tasks V2 (Unified)"])
@@ -173,6 +174,7 @@ def _build_progress_response(task: Dict) -> Dict:
     Format: progress (สำหรับ progress tracking)
     แทน: /api/progress/transcription/{task_id}
     """
+    file_path = task.get("file_path")
     response = {
         "task_id": task.get("task_id"),
         "status": task.get("status"),
@@ -180,7 +182,7 @@ def _build_progress_response(task: Dict) -> Dict:
         "current_stage": task.get("current_stage"),
         "current_stage_description": task.get("current_stage_description"),
         "stage_progress": task.get("stage_progress"),
-        "file_path": task.get("file_path"),
+        "file_path": file_path,
         "filename": task.get("filename"),
         "language": task.get("language"),
         "created_at": task.get("created_at"),
@@ -205,6 +207,10 @@ def _build_progress_response(task: Dict) -> Dict:
         response["stage_description"] = "เกิดข้อผิดพลาด"
         response["error"] = task.get("error")
     
+    # Path สำหรับ play audio (FE ต่อกับ baseUrl)
+    if file_path:
+        response["audio_preview"] = {"file_path": file_path, "endpoint": "/api/upload/preview"}
+    
     return response
 
 
@@ -217,12 +223,13 @@ def _build_full_response(
     Format: full (ข้อมูลแบบเต็ม)
     แทน: /api/tasks/{task_id}, /api/transcribe-enhanced/status/{task_id}
     """
+    file_path = task.get("file_path")
     response = {
         "task_id": task.get("task_id"),
         "status": task.get("status"),
         "progress": task.get("progress", 0),
         "filename": task.get("filename"),
-        "file_path": task.get("file_path"),
+        "file_path": file_path,
         "file_name": task.get("file_name") or task.get("filename"),  # Support both
         "language": task.get("language"),
         "model_size": task.get("model_size"),
@@ -234,6 +241,14 @@ def _build_full_response(
         "_format": "full",
         "full_text": task.get("full_text", "") or task.get("text", "")
     }
+    
+    # Path สำหรับ play audio (FE ต่อกับ baseUrl ของตัวเอง)
+    # ใช้: ${baseUrl}/api/upload/preview?file_path=${encodeURIComponent(audio_preview.file_path)}
+    if file_path:
+        response["audio_preview"] = {
+            "file_path": file_path,
+            "endpoint": "/api/upload/preview"
+        }
     
     # Add timing info
     timing = _calculate_elapsed_time(task)
@@ -310,7 +325,7 @@ def _build_full_response(
 
 def _build_list_item(task: Dict) -> Dict:
     """Build list item (summary view for list endpoints)"""
-    return {
+    item = {
         "task_id": task.get("task_id"),
         "id": task.get("task_id"),  # Alias for compatibility
         "filename": task.get("filename") or task.get("file_name"),
@@ -325,6 +340,11 @@ def _build_list_item(task: Dict) -> Dict:
         "duration": task.get("duration"),
         "total_duration": task.get("total_duration")
     }
+    # Path สำหรับ play audio (FE ต่อกับ baseUrl)
+    fp = task.get("file_path")
+    if fp:
+        item["audio_preview"] = {"file_path": fp, "endpoint": "/api/upload/preview"}
+    return item
 
 
 # ==================== API Endpoints ====================
@@ -361,6 +381,11 @@ async def get_task(
         - `minimal`: สำหรับ polling (เร็วที่สุด) - เฉพาะ status, progress
     - `include_chunks`: รวม chunks หรือไม่ (default: false)
     - `include_thai_processing`: รวมข้อมูล Thai processing (default: false)
+    
+    **Response - audio_preview** (เมื่อมี file_path):
+    - `audio_preview.file_path`: path ของไฟล์เสียง/วิดีโอ
+    - `audio_preview.endpoint`: endpoint สำหรับ stream (เช่น /api/upload/preview)
+    - FE ต่อ URL: ``${baseUrl}${audio_preview.endpoint}?file_path=${encodeURIComponent(audio_preview.file_path)}``
     
     **Examples:**
     ```
@@ -658,12 +683,96 @@ async def get_tasks_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# TODO: Pause/Resume - ดู docs/TODO_PAUSE_RESUME.md
+# POST /{task_id}/pause, POST /{task_id}/resume - วางแผนสำหรับอนาคต
+
+
+@router.post("/{task_id}/cancel")
+async def cancel_task(task_id: str) -> Dict:
+    """
+    🛑 **Cancel Task**
+    
+    ยกเลิก transcription task และ jobs ที่เกี่ยวข้องใน Redis queue
+    ใช้เมื่ออัปโหลดไฟล์ผิดและต้องการยกเลิก
+    
+    **Parameters:**
+    - `task_id`: Task ID ที่ต้องการยกเลิก
+    
+    **Returns:**
+    - `success`: True ถ้าสำเร็จ
+    - `cancelled`: True ถ้า task ถูกยกเลิก
+    - `cancelled_jobs`: จำนวน jobs ที่ยกเลิก
+    - `redis_keys_deleted`: จำนวน Redis keys ที่ลบ
+    
+    **Examples:**
+    ```
+    POST /api/v2/tasks/dc534414-5fef-49b9-a5aa-4f597396d16d/cancel
+    ```
+    """
+    try:
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        status = task_data.get("status", "")
+        if status in ("completed", "failed", "cancelled"):
+            return {
+                "success": True,
+                "cancelled": False,
+                "message": f"Task อยู่ในสถานะ {status} แล้ว ไม่สามารถยกเลิกได้",
+                "status": status
+            }
+        
+        # ใช้ logic จาก transcribe.py
+        from datetime import datetime, timezone
+        sqlite_storage, json_storage = _get_storage()
+        storage = sqlite_storage
+        
+        # Cancel Redis jobs
+        cancelled_jobs = 0
+        redis_keys_deleted = 0
+        try:
+            from app.services.redis_queue_service import get_redis_queue_service
+            queue_service = get_redis_queue_service()
+            cancel_result = queue_service.cancel_task(task_id)
+            cancelled_jobs = cancel_result.get("cancelled_jobs", 0)
+            redis_keys_deleted = cancel_result.get("redis_keys_deleted", 0)
+        except Exception as e:
+            logger.warning(f"Error cancelling Redis jobs: {e}")
+        
+        # อัปเดต task status
+        task_data["status"] = "cancelled"
+        task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        task_data["current_stage"] = "cancelled"
+        task_data["current_stage_description"] = "ยกเลิกโดยผู้ใช้"
+        if "error_message" in task_data:
+            del task_data["error_message"]
+        storage.save_transcription(task_id, task_data)
+        
+        return {
+            "success": True,
+            "cancelled": True,
+            "message": "ยกเลิก task สำเร็จ",
+            "task_id": task_id,
+            "status": "cancelled",
+            "cancelled_jobs": cancelled_jobs,
+            "redis_keys_deleted": redis_keys_deleted
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/{task_id}/retry")
 async def retry_task(task_id: str) -> Dict:
     """
-    🔄 **Retry Stuck Task**
+    🔄 **Retry Task (Stuck หรือ Failed)**
     
-    Retry task ที่ stuck โดยใช้ stuck task monitor
+    - **Failed tasks**: ใช้ task เดิม ล้าง Redis + re-enqueue preprocess
+    - **Stuck tasks**: ใช้ StuckTaskMonitor แก้ไข
     
     **Parameters:**
     - `task_id`: Task ID ที่ต้องการ retry
@@ -671,7 +780,7 @@ async def retry_task(task_id: str) -> Dict:
     **Returns:**
     - `success`: True ถ้าสำเร็จ
     - `message`: ข้อความอธิบาย
-    - `fixed`: True ถ้า task ถูก fix แล้ว
+    - `fixed` / `retried`: สถานะการดำเนินการ
     
     **Examples:**
     ```
@@ -679,14 +788,79 @@ async def retry_task(task_id: str) -> Dict:
     ```
     """
     try:
-        from app.services.stuck_task_monitor import StuckTaskMonitor
-        
-        monitor = StuckTaskMonitor()
-        
-        # ตรวจสอบว่า task นี้ stuck หรือไม่
         task_data = _get_task_from_storage(task_id)
         if not task_data:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        status = task_data.get('status', '')
+        
+        # กรณี Failed: ใช้ task เดิม re-enqueue
+        if status == "failed":
+            file_path = task_data.get('file_path')
+            if not file_path:
+                raise HTTPException(status_code=400, detail="Task ไม่มี file_path ไม่สามารถ retry ได้")
+            
+            from pathlib import Path
+            if not Path(file_path).exists():
+                raise HTTPException(status_code=404, detail=f"ไม่พบไฟล์: {file_path}")
+            
+            from datetime import datetime, timezone
+            from app.api.transcribe import TranscriptionRequest
+            from app.services.redis_queue_service import get_redis_queue_service
+            from app.services.close_caption_config import get_transcription_model_display
+            
+            sqlite_storage, json_storage = _get_storage()
+            storage = sqlite_storage
+            
+            # ล้าง Redis keys ของ task
+            redis_url = os.getenv('REDIS_URL')
+            if redis_url:
+                try:
+                    from redis import Redis
+                    r = Redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=10)
+                    prefix = f"task:{task_id}:"
+                    keys = list(r.scan_iter(match=prefix + "*", count=500))
+                    if keys:
+                        r.delete(*keys)
+                        logger.info(f"✅ ลบ Redis keys: {len(keys)} keys สำหรับ retry {task_id}")
+                except Exception as e:
+                    logger.warning(f"Could not clear Redis: {e}")
+            
+            # อัปเดต task เป็น queued
+            task_data["status"] = "queued"
+            task_data["progress"] = 0
+            task_data["current_stage"] = None
+            task_data["current_stage_description"] = None
+            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if "error_message" in task_data:
+                del task_data["error_message"]
+            storage.save_transcription(task_id, task_data)
+            
+            # Enqueue preprocess
+            queue_service = get_redis_queue_service()
+            model_size = task_data.get('model_size') or get_transcription_model_display()
+            chunk_duration = task_data.get('chunk_duration', 150)
+            
+            preprocess_job_id = queue_service.enqueue_preprocess(
+                task_id=task_id,
+                file_path=file_path,
+                language=task_data.get('language', 'th'),
+                model_size=model_size,
+                chunk_duration=chunk_duration
+            )
+            
+            logger.info(f"✅ Retried failed task {task_id} (re-enqueued preprocess)")
+            return {
+                "success": True,
+                "message": f"Task {task_id} retry initiated (ใช้ task เดิม)",
+                "retried": True,
+                "status": "queued",
+                "preprocess_job_id": preprocess_job_id
+            }
+        
+        # กรณี Stuck: ใช้ StuckTaskMonitor
+        from app.services.stuck_task_monitor import StuckTaskMonitor
+        monitor = StuckTaskMonitor()
         
         is_stuck, reason = monitor.is_task_really_stuck(task_id, task_data)
         
@@ -700,21 +874,19 @@ async def retry_task(task_id: str) -> Dict:
                 "progress": task_data.get('progress', 0)
             }
         
-        # Fix stuck task
         fixed = monitor.fix_stuck_task(task_id, reason)
         
         if fixed:
             logger.info(f"✅ Successfully retried stuck task {task_id}: {reason}")
             return {
                 "success": True,
-                "message": f"Task {task_id} retry initiated",
+                "message": f"Task {task_id} retry initiated (stuck fix)",
                 "fixed": True,
                 "reason": reason,
                 "status": task_data.get('status'),
                 "progress": task_data.get('progress', 0)
             }
         else:
-            logger.warning(f"⚠️  Could not fix stuck task {task_id}: {reason}")
             return {
                 "success": False,
                 "message": f"Could not fix task {task_id}",

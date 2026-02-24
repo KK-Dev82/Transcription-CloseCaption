@@ -528,8 +528,28 @@ async function refreshServerTasks(serverName) {
 }
 
 async function retryServerTask(serverName, taskId) {
-    // TODO: Implement retry logic
-    alert(`Retry task ${taskId} on ${serverName} - Not implemented yet`);
+    if (!confirm(`Retry task ${taskId.substring(0, 16)}... on ${serverName}?`)) {
+        return;
+    }
+    try {
+        const serverConfig = window.SERVER_CONFIGS?.[serverName];
+        if (!serverConfig) {
+            alert('Server not found');
+            return;
+        }
+        const response = await fetch(`${serverConfig.api_url}/v2/tasks/${taskId}/retry`, {
+            method: 'POST'
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data.success) {
+            alert('Task retry initiated successfully');
+            refreshServerTasks(serverName);
+        } else {
+            alert(`Failed to retry: ${data.message || data.detail || response.statusText}`);
+        }
+    } catch (error) {
+        alert(`Error: ${error.message}`);
+    }
 }
 
 async function cancelServerTask(serverName, taskId) {

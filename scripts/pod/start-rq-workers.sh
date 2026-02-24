@@ -257,7 +257,7 @@ for i in $(seq 0 $((NUM_PREPROCESS_WORKERS - 1))); do
         RQ_PRELOAD_MODEL=false \
         rq worker \
         --url "$REDIS_URL" \
-        transcription_preprocess \
+        transcription_preprocess_video_record transcription_preprocess \
         --name worker-preprocess-$i \
         --pid /tmp/rq-worker-preprocess-$i.pid \
         > /tmp/rq-worker-preprocess-$i.log 2>&1 &

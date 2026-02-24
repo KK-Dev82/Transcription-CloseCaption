@@ -6,6 +6,13 @@ Script สำหรับยกเลิก (cancel) jobs ทั้งหมด�
 
 import sys
 import os
+from pathlib import Path
+
+# เพิ่ม project root เพื่อ import app
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+os.chdir(PROJECT_ROOT)
+
 import requests
 import redis
 from dotenv import load_dotenv
@@ -30,6 +37,7 @@ def clear_redis_queues():
         queues = [
             'transcription_preprocess',
             'transcription_priority',
+            'transcription_preprocess_video_record',
             'transcription_cpu',
             'transcription_aggregator'
         ] + [f'transcription_gpu{i}' for i in range(num_gpus)]
@@ -197,20 +205,14 @@ def cancel_all_jobs():
         
         tasks = all_tasks
         
-        if response.status_code != 200:
-            print(f"⚠️  Failed to get tasks: {response.status_code}")
-            return False
-        
-        data = response.json()
-        tasks = data.get("tasks", [])
-        
-        queued = [t for t in tasks if t.get("status", "").lower() == "queued"]
+        # รวม queued, pending, processing — ทั้งหมดที่ยังไม่เสร็จ
+        queued = [t for t in tasks if t.get("status", "").lower() in ("queued", "pending")]
         processing = [t for t in tasks if t.get("status", "").lower() == "processing"]
         
         total_to_cancel = len(queued) + len(processing)
         
         print(f"📊 Found:")
-        print(f"   QUEUED: {len(queued)} jobs")
+        print(f"   QUEUED/PENDING: {len(queued)} jobs")
         print(f"   PROCESSING: {len(processing)} jobs")
         print(f"   Total to cancel: {total_to_cancel} jobs")
         print("")
