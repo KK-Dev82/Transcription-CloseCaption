@@ -25,15 +25,17 @@ logger = logging.getLogger(__name__)
 class RateLimiter:
     """Rate Limiter สำหรับจำกัดจำนวน concurrent requests"""
     
-    def __init__(self, max_concurrent: int = 25, redis_url: Optional[str] = None):
+    def __init__(self, max_concurrent: int = 25, redis_url: Optional[str] = None, record_slots: int = 1):
         """
         Initialize Rate Limiter
         
         Args:
-            max_concurrent: จำนวน concurrent requests สูงสุด (default: 25)
+            max_concurrent: จำนวน concurrent requests สูงสุดสำหรับ Upload (default: 25)
             redis_url: Redis URL (ถ้าไม่ระบุจะใช้ REDIS_URL จาก env)
+            record_slots: slot สำรองสำหรับ Record (+1) — รวมสูงสุด = max_concurrent + record_slots
         """
         self.max_concurrent = max_concurrent
+        self.record_slots = record_slots
         self.redis_url = redis_url or os.getenv('REDIS_URL', 'redis://localhost:6379')
         self.redis_conn: Optional[Redis] = None
         self.counter_key = "transcription:concurrent_requests"
@@ -99,22 +101,29 @@ class RateLimiter:
         return current < self.max_concurrent
     
     @contextmanager
-    def acquire(self):
+    def acquire(self, source: Optional[str] = None):
         """
         Context manager สำหรับ acquire/release request slot
+        
+        Args:
+            source: "video_record" = ใช้ slot สำรอง (+1) — รับได้แม้ Upload เต็ม
+        
         Usage:
             with rate_limiter.acquire():
-                # process request
-                pass
+                # process Upload request
+            with rate_limiter.acquire(source="video_record"):
+                # process Record request — รับได้แม้ 25 Upload เต็ม (รวมสูงสุด 26)
         """
+        # Record: max = 25 + 1 = 26; Upload: max = 25
+        max_allowed = self.max_concurrent + (self.record_slots if source == "video_record" else 0)
         current_count = self.increment()
         
-        if current_count > self.max_concurrent:
+        if current_count > max_allowed:
             # ถ้าเกิน limit ให้ลด counter กลับ
             self.decrement()
             raise RateLimitExceeded(
                 current_count=current_count - 1,
-                max_concurrent=self.max_concurrent
+                max_concurrent=max_allowed
             )
         
         try:
@@ -137,12 +146,13 @@ class RateLimitExceeded(Exception):
 # Singleton instance
 _rate_limiter: Optional[RateLimiter] = None
 
-def get_rate_limiter(max_concurrent: Optional[int] = None) -> RateLimiter:
+def get_rate_limiter(max_concurrent: Optional[int] = None, record_slots: Optional[int] = None) -> RateLimiter:
     """
     Get or create Rate Limiter singleton instance
     
     Args:
-        max_concurrent: จำนวน concurrent requests สูงสุด (ถ้าไม่ระบุจะใช้จาก env หรือ default 25)
+        max_concurrent: จำนวน concurrent requests สูงสุดสำหรับ Upload (ถ้าไม่ระบุจะใช้จาก env หรือ default 25)
+        record_slots: slot สำรองสำหรับ Record (+1) — รวมสูงสุด = max_concurrent + record_slots
     
     Returns:
         RateLimiter instance
@@ -152,7 +162,9 @@ def get_rate_limiter(max_concurrent: Optional[int] = None) -> RateLimiter:
     if _rate_limiter is None:
         if max_concurrent is None:
             max_concurrent = int(os.getenv('MAX_CONCURRENT_REQUESTS', '25'))
-        _rate_limiter = RateLimiter(max_concurrent=max_concurrent)
+        if record_slots is None:
+            record_slots = int(os.getenv('MAX_CONCURRENT_RECORD_SLOTS', '1'))
+        _rate_limiter = RateLimiter(max_concurrent=max_concurrent, record_slots=record_slots)
     
     return _rate_limiter
 

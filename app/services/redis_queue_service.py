@@ -87,20 +87,45 @@ class RedisQueueService:
         default_result_ttl = int(os.getenv('RQ_DEFAULT_RESULT_TTL', '43200'))  # 12 hours
         
         # สร้าง queue สำหรับแต่ละ GPU (ไม่ใช้ default queue)
+        # queues = legacy (deprecated), queues_record/queues_upload = Shared Pool + Priority
         for i in range(num_gpus):
             gpu_key = f'gpu{i}'
             queue_name = f'transcription_gpu{i}'
             self.queues[gpu_key] = Queue(
-                queue_name, 
+                queue_name,
+                connection=self.redis_conn,
+                default_result_ttl=default_result_ttl
+            )
+        
+        # Record queues (Shared Pool + Priority: Record แซง Upload)
+        self.queues_record = {}
+        for i in range(num_gpus):
+            gpu_key = f'gpu{i}'
+            queue_name = f'transcription_gpu_record_{i}'
+            self.queues_record[gpu_key] = Queue(
+                queue_name,
+                connection=self.redis_conn,
+                default_result_ttl=default_result_ttl
+            )
+        
+        # Upload queues (Shared Pool + Priority)
+        self.queues_upload = {}
+        for i in range(num_gpus):
+            gpu_key = f'gpu{i}'
+            queue_name = f'transcription_gpu_upload_{i}'
+            self.queues_upload[gpu_key] = Queue(
+                queue_name,
                 connection=self.redis_conn,
                 default_result_ttl=default_result_ttl
             )
         
         # Round-robin counter สำหรับ load balancing
         self._rr_counter = 0
+        self._rr_counter_record = 0
+        self._rr_counter_upload = 0
         self._num_gpus = num_gpus
         
-        logger.info(f"✅ Created {num_gpus} GPU queues: {list(self.queues.keys())} (default_result_ttl={default_result_ttl}s)")
+        logger.info(f"✅ Created {num_gpus} GPU queues + record + upload (default_result_ttl={default_result_ttl}s)")
         
         # Queue สำหรับ priority tasks (เช่น live streaming)
         self.priority_queue = Queue(
@@ -178,7 +203,8 @@ class RedisQueueService:
         model_size: str = "base",
         chunk_duration: int = 150,
         priority: bool = False,
-        worker_gpu: Optional[str] = None
+        worker_gpu: Optional[str] = None,
+        source: Optional[str] = None
     ) -> str:
         """
         เพิ่ม transcription job เข้า queue
@@ -191,46 +217,65 @@ class RedisQueueService:
             chunk_duration: Chunk duration in seconds
             priority: Whether this is a priority task (live streaming)
             worker_gpu: Specific GPU worker to use ('gpu0', 'gpu1', 'gpu2', 'gpu3', or None for round-robin)
+            source: "video_record" = Record queue (แซง Upload), อื่นๆ = Upload queue
         
         Returns:
             Job ID
         """
-        # เลือก queue
+        # เลือก queue: priority -> record -> upload
         if priority:
             queue = self.priority_queue
             logger.info(f"📌 Enqueueing priority job {task_id} to priority queue")
-        elif worker_gpu and worker_gpu in self.queues:
-            queue = self.queues[worker_gpu]
-            logger.info(f"🎯 Enqueueing job {task_id} to {worker_gpu} queue")
-        else:
-            # Round-robin: เลือก GPU queue ที่มี load น้อยที่สุด
-            # ใช้ least-loaded strategy: ดู queue length + started jobs
-            from rq.registry import StartedJobRegistry
-            
-            best_queue = None
-            best_load = float('inf')
-            
-            for i in range(self._num_gpus):
-                gpu_key = f'gpu{i}'
-                gpu_queue = self.queues[gpu_key]
-                queue_length = len(gpu_queue)
-                started_count = len(StartedJobRegistry(queue=gpu_queue))
-                total_load = queue_length + started_count
-                
-                if total_load < best_load:
-                    best_load = total_load
-                    best_queue = gpu_queue
-            
-            if best_queue is None:
-                # Fallback: round-robin
-                self._rr_counter = (self._rr_counter + 1) % self._num_gpus
-                gpu_key = f'gpu{self._rr_counter}'
-                best_queue = self.queues[gpu_key]
-                logger.info(f"🔄 Enqueueing job {task_id} to {gpu_key} (round-robin fallback)")
+        elif source == "video_record":
+            # Record queue (Shared Pool + Priority)
+            queue_set = self.queues_record
+            rr_attr = "_rr_counter_record"
+            if worker_gpu and worker_gpu in queue_set:
+                queue = queue_set[worker_gpu]
+                logger.info(f"🎯 Enqueueing Record job {task_id} to {worker_gpu} (record queue)")
             else:
-                logger.info(f"⚖️  Enqueueing job {task_id} to least-loaded queue (load: {best_load})")
-            
-            queue = best_queue
+                from rq.registry import StartedJobRegistry
+                best_queue = None
+                best_load = float('inf')
+                for i in range(self._num_gpus):
+                    gpu_key = f'gpu{i}'
+                    gpu_queue = queue_set[gpu_key]
+                    total_load = len(gpu_queue) + len(StartedJobRegistry(queue=gpu_queue))
+                    if total_load < best_load:
+                        best_load = total_load
+                        best_queue = gpu_queue
+                if best_queue is None:
+                    counter = (getattr(self, rr_attr) + 1) % self._num_gpus
+                    setattr(self, rr_attr, counter)
+                    queue = queue_set[f'gpu{counter}']
+                else:
+                    queue = best_queue
+                logger.info(f"⚖️  Enqueueing Record job {task_id} to least-loaded record queue (load: {best_load})")
+        else:
+            # Upload queue (Shared Pool + Priority)
+            queue_set = self.queues_upload
+            rr_attr = "_rr_counter_upload"
+            if worker_gpu and worker_gpu in queue_set:
+                queue = queue_set[worker_gpu]
+                logger.info(f"🎯 Enqueueing Upload job {task_id} to {worker_gpu} (upload queue)")
+            else:
+                from rq.registry import StartedJobRegistry
+                best_queue = None
+                best_load = float('inf')
+                for i in range(self._num_gpus):
+                    gpu_key = f'gpu{i}'
+                    gpu_queue = queue_set[gpu_key]
+                    total_load = len(gpu_queue) + len(StartedJobRegistry(queue=gpu_queue))
+                    if total_load < best_load:
+                        best_load = total_load
+                        best_queue = gpu_queue
+                if best_queue is None:
+                    counter = (getattr(self, rr_attr) + 1) % self._num_gpus
+                    setattr(self, rr_attr, counter)
+                    queue = queue_set[f'gpu{counter}']
+                else:
+                    queue = best_queue
+                logger.info(f"⚖️  Enqueueing Upload job {task_id} to least-loaded upload queue (load: {best_load})")
         
         # สร้าง job data
         job_data = {
@@ -427,6 +472,22 @@ class RedisQueueService:
         logger.info(f"📌 Live chunk job {session_id} enqueued to PRIORITY queue (Job ID: {job.id})")
         return job.id
     
+    def get_record_backlog_count(self) -> int:
+        """
+        จำนวน Record jobs ที่รอหรือกำลังรัน (preprocess + GPU record queues)
+        ใช้สำหรับ On Hold: เมื่อ record_backlog > 0 ให้ hold Upload chunks
+        """
+        from rq.registry import StartedJobRegistry
+        count = 0
+        # Preprocess video_record queue
+        count += len(self.preprocess_video_record_queue)
+        count += len(StartedJobRegistry(queue=self.preprocess_video_record_queue))
+        # Record chunks ใน GPU queues
+        for gpu_key, q in self.queues_record.items():
+            count += len(q)
+            count += len(StartedJobRegistry(queue=q))
+        return count
+    
     def get_job_status(self, job_id: str) -> Dict:
         """Get job status"""
         try:
@@ -457,6 +518,22 @@ class RedisQueueService:
         
         for queue_name, queue in self.queues.items():
             stats[queue_name] = {
+                'length': len(queue),
+                'started': len(StartedJobRegistry(queue=queue)),
+                'finished': len(FinishedJobRegistry(queue=queue)),
+                'failed': len(FailedJobRegistry(queue=queue)),
+            }
+        
+        for queue_name, queue in self.queues_record.items():
+            stats[f'record_{queue_name}'] = {
+                'length': len(queue),
+                'started': len(StartedJobRegistry(queue=queue)),
+                'finished': len(FinishedJobRegistry(queue=queue)),
+                'failed': len(FailedJobRegistry(queue=queue)),
+            }
+        
+        for queue_name, queue in self.queues_upload.items():
+            stats[f'upload_{queue_name}'] = {
                 'length': len(queue),
                 'started': len(StartedJobRegistry(queue=queue)),
                 'finished': len(FinishedJobRegistry(queue=queue)),
@@ -568,7 +645,12 @@ class RedisQueueService:
         cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
         
         # Cleanup all queues
-        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
+        all_queues = (
+            list(self.queues.values())
+            + list(self.queues_record.values())
+            + list(self.queues_upload.values())
+            + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
+        )
         
         for queue in all_queues:
             queue_name = queue.name
@@ -621,7 +703,12 @@ class RedisQueueService:
         cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
         
         # Cleanup all queues
-        all_queues = list(self.queues.values()) + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
+        all_queues = (
+            list(self.queues.values())
+            + list(self.queues_record.values())
+            + list(self.queues_upload.values())
+            + [self.priority_queue, self.cpu_queue, self.preprocess_queue, self.preprocess_video_record_queue]
+        )
         
         for queue in all_queues:
             queue_name = queue.name

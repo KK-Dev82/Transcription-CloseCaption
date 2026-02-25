@@ -113,6 +113,8 @@ async def get_queue_stats():
         queues_to_check = ['transcription_priority', 'transcription_preprocess', 'transcription_preprocess_video_record', 'transcription_cpu']
         for i in range(num_gpus):
             queues_to_check.append(f'transcription_gpu{i}')
+            queues_to_check.append(f'transcription_gpu_record_{i}')
+            queues_to_check.append(f'transcription_gpu_upload_{i}')
         
         queue_stats = []
         for queue_name in queues_to_check:

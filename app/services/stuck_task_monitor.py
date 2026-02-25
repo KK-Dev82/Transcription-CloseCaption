@@ -233,6 +233,7 @@ class StuckTaskMonitor:
             language = chunks_metadata.get('language', 'th')
             model_size = chunks_metadata.get('model_size', 'base')
             chunk_duration = chunks_metadata.get('chunk_duration', 150)
+            source = chunks_metadata.get('source', 'upload')
             
             # หา chunks ที่ต้อง re-enqueue
             missing_chunks = self._get_missing_chunks(task_id, total_chunks, 0)
@@ -328,7 +329,8 @@ class StuckTaskMonitor:
                             model_size=model_size,
                             chunk_duration=chunk_duration,
                             priority=False,
-                            worker_gpu=worker_gpu
+                            worker_gpu=worker_gpu,
+                            source=source
                         )
                         
                         # Increment inflight

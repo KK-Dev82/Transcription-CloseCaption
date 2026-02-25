@@ -100,6 +100,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "enable_thai_processing": request.enable_thai_processing,
                 "enable_diarization": enable_diarization,
+                "source": "video_record" if request.source == "video_record" else "upload",
             }
             storage.save_transcription(task_id, task_dict)
             
@@ -184,6 +185,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "enable_thai_processing": request.enable_thai_processing,
             "enable_diarization": enable_diarization,
+            "source": "video_record" if request.source == "video_record" else "upload",
         }
         storage.save_transcription(task_id, task_dict)
         

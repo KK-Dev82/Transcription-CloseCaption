@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-อัปเดต tasks ทั้งหมดที่ยังไม่เสร็จ (queued, processing) เป็น cancelled
+Cancel tasks ทั้งหมดที่ยังไม่เสร็จ (queued, processing, on_hold)
+- ยกเลิก jobs ใน Redis (preprocess, chunks, aggregator)
+- ลบ Redis keys
+- อัปเดต status เป็น cancelled ใน storage
 """
-import os
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -14,36 +16,49 @@ load_dotenv(Path(__file__).parent.parent / ".env.runpod")
 
 def main():
     from app.utils.sqlite_storage import SQLiteStorage
-    import sqlite3
+    from app.services.redis_queue_service import get_redis_queue_service
 
     storage = SQLiteStorage()
-    db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT task_id, status FROM transcriptions WHERE status IN ('queued', 'processing')"
-    )
-    rows = cur.fetchall()
-    conn.close()
+    queue_service = get_redis_queue_service()
 
-    if not rows:
+    # หา tasks ที่ยังไม่เสร็จ
+    all_list = storage.list_all_transcriptions()
+    to_cancel = [
+        t for t in all_list
+        if t.get("status") in ("queued", "processing", "pending", "on_hold")
+    ]
+
+    if not to_cancel:
         print("ไม่มี tasks ที่ต้อง cancel")
         return 0
 
-    print(f"Cancel {len(rows)} tasks...")
-    for tid, old_status in rows:
-        t = storage.load_transcription(tid)
-        if not t:
+    print(f"Cancel {len(to_cancel)} tasks (Redis + Storage)...")
+    total_jobs = 0
+    total_keys = 0
+    for t in to_cancel:
+        tid = t.get("task_id")
+        if not tid:
             continue
-        t["status"] = "cancelled"
-        t["current_stage"] = "cancelled"
-        t["current_stage_description"] = "ยกเลิกโดยผู้ใช้ (restart preparation)"
-        if "error_message" in t:
-            del t["error_message"]
-        t["updated_at"] = datetime.now(timezone.utc).isoformat()
-        storage.save_transcription(tid, t)
-        print(f"  {tid[:8]}... {old_status} → cancelled")
-    print(f"Done: {len(rows)} tasks cancelled")
+        old_status = t.get("status", "?")
+        # Cancel jobs ใน Redis
+        try:
+            result = queue_service.cancel_task(tid)
+            total_jobs += result.get("cancelled_jobs", 0)
+            total_keys += result.get("redis_keys_deleted", 0)
+        except Exception as e:
+            print(f"  ⚠️ Redis cancel {tid[:8]}...: {e}")
+        # อัปเดต storage
+        full = storage.load_transcription(tid, skip_migration=True)
+        if full:
+            full["status"] = "cancelled"
+            full["current_stage"] = "cancelled"
+            full["current_stage_description"] = "ยกเลิกโดยผู้ใช้ (restart preparation)"
+            if "error_message" in full:
+                del full["error_message"]
+            full["updated_at"] = datetime.now(timezone.utc).isoformat()
+            storage.save_transcription(tid, full)
+        print(f"  ✅ {tid[:8]}... {old_status} → cancelled")
+    print(f"Done: {len(to_cancel)} tasks cancelled ({total_jobs} jobs, {total_keys} Redis keys)")
     return 0
 
 

@@ -41,6 +41,8 @@ def clear_redis_queues():
             'transcription_cpu',
             'transcription_aggregator'
         ] + [f'transcription_gpu{i}' for i in range(num_gpus)]
+        queues += [f'transcription_gpu_record_{i}' for i in range(num_gpus)]
+        queues += [f'transcription_gpu_upload_{i}' for i in range(num_gpus)]
         
         total_cleared = 0
         for queue_name in queues:

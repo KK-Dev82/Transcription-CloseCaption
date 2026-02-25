@@ -683,8 +683,90 @@ async def get_tasks_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# TODO: Pause/Resume - ดู docs/TODO_PAUSE_RESUME.md
-# POST /{task_id}/pause, POST /{task_id}/resume - วางแผนสำหรับอนาคต
+@router.post("/{task_id}/pause")
+async def pause_task(task_id: str) -> Dict:
+    """
+    ⏸️ **Pause Task**
+    
+    หยุดชั่วคราว — ไม่ enqueue chunk ถัดไป (chunk ที่กำลังรันจะทำงานต่อจนเสร็จ)
+    
+    **Returns:**
+    - `success`: True ถ้าสำเร็จ
+    - `status`: "paused"
+    """
+    try:
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        status = task_data.get("status", "")
+        if status in ("completed", "failed", "cancelled"):
+            return {"success": False, "message": f"Task อยู่ในสถานะ {status} แล้ว", "status": status}
+        from redis import Redis
+        from app.services.redis_queue_service import get_redis_queue_service
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+        conn = Redis.from_url(redis_url, decode_responses=True)
+        ttl = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+        conn.setex(f"task:{task_id}:paused", ttl, "1")
+        from datetime import datetime, timezone
+        task_data["status"] = "paused"
+        task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        task_data["current_stage"] = "paused"
+        task_data["current_stage_description"] = "หยุดชั่วคราว (รอ Resume)"
+        sqlite_storage, _ = _get_storage()
+        sqlite_storage.save_transcription(task_id, task_data)
+        return {"success": True, "message": "หยุดชั่วคราวแล้ว", "task_id": task_id, "status": "paused"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error pausing task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{task_id}/resume")
+async def resume_task(task_id: str) -> Dict:
+    """
+    ▶️ **Resume Task (จาก Paused)**
+    
+    ดำเนินการต่อ — enqueue chunk ถัดไป
+    """
+    try:
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        status = task_data.get("status", "")
+        if status not in ("paused", "on_hold"):
+            return {"success": False, "message": f"Task อยู่ในสถานะ {status} — Resume ได้เฉพาะ paused/on_hold", "status": status}
+        from redis import Redis
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+        conn = Redis.from_url(redis_url, decode_responses=True)
+        ttl = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+        conn.delete(f"task:{task_id}:paused")
+        conn.srem("tasks:on_hold", task_id)
+        conn.delete(f"task:{task_id}:on_hold")
+        chunks_metadata_key = f"task:{task_id}:chunks_metadata"
+        inflight_key = f"task:{task_id}:inflight_chunks"
+        enqueued_guard_prefix = f"task:{task_id}:enqueued"
+        inflight_limit = int(os.getenv('CHUNK_INFLIGHT_LIMIT_PER_JOB', '2'))
+        from app.workers.rq_worker import _do_claim_and_enqueue_next_chunk, _update_task_stage_sync
+        enqueued = _do_claim_and_enqueue_next_chunk(
+            conn, task_id, chunks_metadata_key, inflight_key,
+            enqueued_guard_prefix, inflight_limit, ttl
+        )
+        if enqueued:
+            from datetime import datetime, timezone
+            task_data["status"] = "processing"
+            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            task_data["current_stage"] = "transcribing"
+            task_data["current_stage_description"] = "กำลังแปลงเสียงเป็นข้อความ (ต่อจาก Resume)"
+            sqlite_storage, _ = _get_storage()
+            sqlite_storage.save_transcription(task_id, task_data)
+            return {"success": True, "message": "ดำเนินการต่อแล้ว", "task_id": task_id, "status": "processing"}
+        return {"success": True, "message": "ไม่มี chunk ถัดไป (อาจเสร็จหมดแล้ว)", "task_id": task_id, "status": status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resuming task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{task_id}/cancel")
@@ -840,13 +922,15 @@ async def retry_task(task_id: str) -> Dict:
             queue_service = get_redis_queue_service()
             model_size = task_data.get('model_size') or get_transcription_model_display()
             chunk_duration = task_data.get('chunk_duration', 150)
+            source = task_data.get('source') if task_data.get('source') == 'video_record' else None
             
             preprocess_job_id = queue_service.enqueue_preprocess(
                 task_id=task_id,
                 file_path=file_path,
                 language=task_data.get('language', 'th'),
                 model_size=model_size,
-                chunk_duration=chunk_duration
+                chunk_duration=chunk_duration,
+                source=source
             )
             
             logger.info(f"✅ Retried failed task {task_id} (re-enqueued preprocess)")
@@ -974,18 +1058,21 @@ async def resubmit_task(task_id: str) -> Dict:
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source": task_data.get("source", "upload"),
         }
         storage.save_transcription(new_task_id, task_dict)
         
         # Enqueue preprocessing job
         queue_service = get_redis_queue_service()
+        source = task_data.get("source") if task_data.get("source") == "video_record" else None
         try:
             preprocess_job_id = queue_service.enqueue_preprocess(
                 task_id=new_task_id,
                 file_path=file_path,
                 language=request.language,
                 model_size=request.model_size,
-                chunk_duration=request.chunk_duration or 150
+                chunk_duration=request.chunk_duration or 150,
+                source=source
             )
             
             logger.info(f"✅ Resubmitted task {task_id} as new task {new_task_id}")

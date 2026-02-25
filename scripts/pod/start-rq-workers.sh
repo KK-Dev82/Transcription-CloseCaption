@@ -201,11 +201,11 @@ for i in $(seq 0 $((NUM_GPUS - 1))); do
     for w in $(seq 0 $((GPU_WORKERS_PER_GPU - 1))); do
         worker_name="worker-gpu${i}-w${w}"
         if [ "$w" -lt "$GPU_WORKERS_FOR_CC_PER_GPU" ]; then
-            RQ_QUEUES="transcription_priority transcription_gpu$i"
-            print_info "   Starting ${worker_name} (CC+file: priority + gpu$i)..."
+            RQ_QUEUES="transcription_priority transcription_gpu_record_$i transcription_gpu_upload_$i"
+            print_info "   Starting ${worker_name} (CC+file: priority + record$i + upload$i)..."
         else
-            RQ_QUEUES="transcription_gpu$i"
-            print_info "   Starting ${worker_name} (file-only: gpu$i)..."
+            RQ_QUEUES="transcription_gpu_record_$i transcription_gpu_upload_$i"
+            print_info "   Starting ${worker_name} (file-only: record$i + upload$i)..."
         fi
         
     # ⚠️ สำคัญ: ส่งต่อ environment variables ทั้งหมดที่จำเป็นสำหรับ GPU
@@ -291,7 +291,7 @@ done
 print_success "✅ RQ Workers started successfully!"
 print_info "Workers:"
 for i in $(seq 0 $((NUM_GPUS - 1))); do
-    print_info "  - GPU $i: ${GPU_WORKERS_FOR_CC_PER_GPU} CC+file (priority + gpu$i), $((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU)) file-only (gpu$i)"
+    print_info "  - GPU $i: ${GPU_WORKERS_FOR_CC_PER_GPU} CC+file (priority + record$i + upload$i), $((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU)) file-only (record$i + upload$i)"
 done
 print_info "  - Preprocess: ${NUM_PREPROCESS_WORKERS} workers (transcription_preprocess)"
 print_info "  - CPU: ${NUM_CPU_WORKERS} workers (transcription_cpu for aggregator)"

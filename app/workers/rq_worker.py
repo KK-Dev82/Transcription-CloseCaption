@@ -190,6 +190,13 @@ async def _update_task_stage_and_webhook(
             if not task_data:
                 task_data = {}
             
+            # FIX: Completed/Failed status guard - ห้าม overwrite status ที่เสร็จแล้วด้วย processing
+            # แก้ race condition: chunk completion อาจ save ทับ aggregator ที่ save completed แล้ว
+            existing_status = task_data.get("status", "")
+            if existing_status in ("completed", "failed", "cancelled") and status in ("processing", "queued", "pending", "on_hold"):
+                logger.debug(f"⏭️ Skip stage update for {task_id}: existing status={existing_status} (final), new={status}")
+                return
+            
             # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
             old_progress = task_data.get("progress", 0)
             if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
@@ -222,6 +229,12 @@ async def _update_task_stage_and_webhook(
                     task_data = json.load(f)
             else:
                 task_data = {}
+            
+            # FIX: Completed/Failed status guard - ห้าม overwrite status ที่เสร็จแล้วด้วย processing
+            existing_status = task_data.get("status", "")
+            if existing_status in ("completed", "failed", "cancelled") and status in ("processing", "queued", "pending", "on_hold"):
+                logger.debug(f"⏭️ Skip stage update for {task_id}: existing status={existing_status} (final), new={status}")
+                return
             
             # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
             old_progress = task_data.get("progress", 0)
@@ -313,6 +326,98 @@ def _update_task_stage_sync(
         )
     except Exception as e:
         logger.warning(f"⚠️  Error in sync stage update: {e}")
+
+
+def _do_claim_and_enqueue_next_chunk(
+    conn, main_task_id: str, chunks_metadata_key: str, inflight_key: str,
+    enqueued_guard_prefix: str, inflight_limit: int, ttl_seconds: int
+) -> bool:
+    """Claim next chunk index และ enqueue — ใช้ทั้งจาก chunk completion และ Resume/On Hold release"""
+    try:
+        from app.workers.lua_scripts import CLAIM_NEXT_CHUNK_INDEX_SCRIPT
+        claim_script = conn.register_script(CLAIM_NEXT_CHUNK_INDEX_SCRIPT)
+        result = claim_script(
+            keys=[chunks_metadata_key, inflight_key, enqueued_guard_prefix],
+            args=[inflight_limit, ttl_seconds]
+        )
+        claimed_index = result[0] if result and len(result) >= 2 else None
+        inflight_after = result[1] if result and len(result) >= 2 else None
+        if claimed_index is None:
+            return False
+        chunks_metadata_str = conn.get(chunks_metadata_key)
+        if not chunks_metadata_str:
+            return False
+        chunks_metadata = json.loads(chunks_metadata_str)
+        chunk_paths = chunks_metadata.get("chunk_paths", [])
+        total_chunks = chunks_metadata.get("total_chunks", 0)
+        if claimed_index >= len(chunk_paths):
+            return False
+        from app.services.redis_queue_service import get_redis_queue_service
+        from app.services.close_caption_config import get_transcription_model_display
+        queue_service = get_redis_queue_service()
+        language = chunks_metadata.get("language", "th")
+        model_size = chunks_metadata.get("model_size") or get_transcription_model_display()
+        chunk_duration = chunks_metadata.get("chunk_duration", 150)
+        source = chunks_metadata.get("source", "upload")
+        num_gpus = int(os.getenv('NUM_GPUS', '1'))
+        next_chunk_path = chunk_paths[claimed_index]
+        next_chunk_task_id = f"{main_task_id}_chunk_{claimed_index}"
+        gpu_index = claimed_index % num_gpus
+        worker_gpu = f'gpu{gpu_index}'
+        queue_service.enqueue_transcription(
+            task_id=next_chunk_task_id,
+            file_path=next_chunk_path,
+            language=language,
+            model_size=model_size,
+            chunk_duration=chunk_duration,
+            priority=False,
+            worker_gpu=worker_gpu,
+            source=source
+        )
+        logger.debug(f"📤 Enqueued chunk {claimed_index + 1}/{total_chunks} (inflight: {inflight_after})")
+        return True
+    except Exception as e:
+        logger.warning(f"⚠️  Error in claim+enqueue: {e}", exc_info=True)
+        return False
+
+
+def _try_release_on_hold_tasks(conn, ttl_seconds: int):
+    """เมื่อ record_backlog == 0 ให้ enqueue chunk ถัดไปของ tasks ที่ on_hold"""
+    try:
+        from app.services.redis_queue_service import get_redis_queue_service
+        queue_svc = get_redis_queue_service()
+        if queue_svc.get_record_backlog_count() > 0:
+            return
+        task_ids = conn.smembers("tasks:on_hold")
+        if not task_ids:
+            return
+        for main_task_id in task_ids:
+            main_task_id = main_task_id.decode() if isinstance(main_task_id, bytes) else main_task_id
+            if conn.get(f"task:{main_task_id}:paused"):
+                continue
+            conn.srem("tasks:on_hold", main_task_id)
+            conn.delete(f"task:{main_task_id}:on_hold")
+            chunks_metadata_key = f"task:{main_task_id}:chunks_metadata"
+            inflight_key = f"task:{main_task_id}:inflight_chunks"
+            enqueued_guard_prefix = f"task:{main_task_id}:enqueued"
+            inflight_limit = int(os.getenv('CHUNK_INFLIGHT_LIMIT_PER_JOB', '2'))
+            if _do_claim_and_enqueue_next_chunk(
+                conn, main_task_id, chunks_metadata_key, inflight_key,
+                enqueued_guard_prefix, inflight_limit, ttl_seconds
+            ):
+                _update_task_stage_sync(
+                    task_id=main_task_id,
+                    progress=50,
+                    status="processing",
+                    stage="transcribing",
+                    stage_description="กำลังแปลงเสียงเป็นข้อความ (ต่อจาก On Hold)",
+                    stage_progress=None,
+                    json_storage=None
+                )
+                logger.info(f"▶️ Released task {main_task_id} from On Hold")
+    except Exception as e:
+        logger.warning(f"⚠️  Error releasing on_hold tasks: {e}", exc_info=True)
+
 
 async def _send_completion_callback(task_id: str, status: str = "completed", error_message: Optional[str] = None):
     """
@@ -567,62 +672,67 @@ def process_transcription_job(
                     logger.warning(f"⚠️  Failed to decrement inflight counter: {fallback_error}")
             
             # FIX: Windowed/JIT Enqueue - atomic claim next chunk index
-            # ใช้ Lua script เพื่อป้องกัน race conditions
             chunks_metadata_key = f"task:{main_task_id}:chunks_metadata"
             enqueued_guard_prefix = f"task:{main_task_id}:enqueued"
             inflight_limit = int(os.getenv('CHUNK_INFLIGHT_LIMIT_PER_JOB', '2'))
             
-            try:
-                from app.workers.lua_scripts import CLAIM_NEXT_CHUNK_INDEX_SCRIPT
-                claim_script = conn.register_script(CLAIM_NEXT_CHUNK_INDEX_SCRIPT)
-                
-                # Atomic claim next chunk index
-                result = claim_script(
-                    keys=[chunks_metadata_key, inflight_key, enqueued_guard_prefix],
-                    args=[inflight_limit, ttl_seconds]
+            # Pause: User หยุดชั่วคราว — ไม่ enqueue chunk ถัดไป
+            paused_key = f"task:{main_task_id}:paused"
+            if conn.get(paused_key):
+                logger.info(f"⏸️ Task {main_task_id} is paused — skipping next chunk enqueue")
+                _update_task_stage_sync(
+                    task_id=main_task_id,
+                    progress=int((done_count / int(conn.get(f"task:{main_task_id}:total_chunks") or 1)) * 50) + 40,
+                    status="paused",
+                    stage="paused",
+                    stage_description="หยุดชั่วคราว (รอ Resume)",
+                    stage_progress=int((done_count / int(conn.get(f"task:{main_task_id}:total_chunks") or 1)) * 100),
+                    json_storage=None
                 )
-                
-                claimed_index = result[0] if result and len(result) >= 2 else None
-                inflight_after = result[1] if result and len(result) >= 2 else None
-                
-                if claimed_index is not None:
-                    # Claim สำเร็จ → enqueue chunk
-                    chunks_metadata_str = conn.get(chunks_metadata_key)
-                    if chunks_metadata_str:
-                        chunks_metadata = json.loads(chunks_metadata_str)
-                        chunk_paths = chunks_metadata.get("chunk_paths", [])
-                        total_chunks = chunks_metadata.get("total_chunks", 0)
-                        language = chunks_metadata.get("language", "th")
-                        from app.services.close_caption_config import get_transcription_model_display
-                        model_size = chunks_metadata.get("model_size") or get_transcription_model_display()
-                        chunk_duration = chunks_metadata.get("chunk_duration", 150)
-                        
-                        if claimed_index < len(chunk_paths):
-                            from app.services.redis_queue_service import get_redis_queue_service
-                            queue_service = get_redis_queue_service()
-                            num_gpus = int(os.getenv('NUM_GPUS', '1'))
-                            
-                            # Enqueue chunk
-                            next_chunk_path = chunk_paths[claimed_index]
-                            next_chunk_task_id = f"{main_task_id}_chunk_{claimed_index}"
-                            gpu_index = claimed_index % num_gpus
-                            worker_gpu = f'gpu{gpu_index}'
-                            
-                            job_id = queue_service.enqueue_transcription(
-                                task_id=next_chunk_task_id,
-                                file_path=next_chunk_path,
-                                language=language,
-                                model_size=model_size,
-                                chunk_duration=chunk_duration,
-                                priority=False,
-                                worker_gpu=worker_gpu
+                # ยังต้อง try_release_on_hold_tasks สำหรับ tasks อื่น
+                _try_release_on_hold_tasks(conn, ttl_seconds)
+                # Skip claim+enqueue
+            else:
+                # On Hold: Record backlog > 0 — hold Upload chunks รอ Record เสร็จก่อน
+                chunks_metadata_str = conn.get(chunks_metadata_key)
+                if chunks_metadata_str:
+                    chunks_meta = json.loads(chunks_metadata_str)
+                    source = chunks_meta.get("source", "upload")
+                    if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'true').lower() in ('1', 'true', 'yes'):
+                        from app.services.redis_queue_service import get_redis_queue_service
+                        queue_svc = get_redis_queue_service()
+                        record_backlog = queue_svc.get_record_backlog_count()
+                        if record_backlog > 0:
+                            on_hold_key = f"task:{main_task_id}:on_hold"
+                            conn.setex(on_hold_key, ttl_seconds, "1")
+                            conn.sadd("tasks:on_hold", main_task_id)
+                            conn.expire("tasks:on_hold", ttl_seconds)
+                            logger.info(f"⏳ Task {main_task_id} On Hold (record_backlog={record_backlog}) — รอ Record เสร็จ")
+                            _update_task_stage_sync(
+                                task_id=main_task_id,
+                                progress=int((done_count / int(conn.get(f"task:{main_task_id}:total_chunks") or 1)) * 50) + 40,
+                                status="on_hold",
+                                stage="on_hold",
+                                stage_description="รอ Record เสร็จก่อน",
+                                stage_progress=int((done_count / int(conn.get(f"task:{main_task_id}:total_chunks") or 1)) * 100),
+                                json_storage=None
                             )
-                            
-                            logger.debug(f"📤 Windowed enqueue: chunk {claimed_index + 1}/{total_chunks} enqueued (inflight: {inflight_after}/{inflight_limit})")
+                            _try_release_on_hold_tasks(conn, ttl_seconds)
+                            # Skip claim+enqueue
                         else:
-                            logger.warning(f"⚠️  Claimed index {claimed_index} out of bounds (chunks: {len(chunk_paths)})")
-            except Exception as e:
-                logger.warning(f"⚠️  Error in atomic windowed enqueue: {e}", exc_info=True)
+                            _do_claim_and_enqueue_next_chunk(
+                                conn, main_task_id, chunks_metadata_key, inflight_key,
+                                enqueued_guard_prefix, inflight_limit, ttl_seconds
+                            )
+                            _try_release_on_hold_tasks(conn, ttl_seconds)
+                    else:
+                        _do_claim_and_enqueue_next_chunk(
+                            conn, main_task_id, chunks_metadata_key, inflight_key,
+                            enqueued_guard_prefix, inflight_limit, ttl_seconds
+                        )
+                        _try_release_on_hold_tasks(conn, ttl_seconds)
+                else:
+                    _try_release_on_hold_tasks(conn, ttl_seconds)
             
             # ตรวจสอบว่าทุก chunks เสร็จแล้วหรือยัง
             total_key = f"task:{main_task_id}:total_chunks"
@@ -1498,6 +1608,9 @@ def process_preprocess_job(
         if not use_chunking:
             chunk_duration = 36000  # 10 ชม. = 1 chunk (full file)
             logger.info(f"📦 Full-file mode (use_chunking=false): ไม่แบ่ง chunk")
+        elif task_data.get("source") == "video_record":
+            chunk_duration = int(os.getenv("RECORD_CHUNK_DURATION", "120"))
+            logger.info(f"📦 Record mode: ใช้ RECORD_CHUNK_DURATION={chunk_duration}s")
         t_chunk_start = time.time()
         logger.info(f"📦 Creating chunks from {audio_path} (chunk_duration={chunk_duration}s)...")
         _update_task_stage_sync(
@@ -1542,51 +1655,121 @@ def process_preprocess_job(
         # Windowed enqueue: enqueue แค่ N chunks แรก (ไม่ใช่ทั้งหมด)
         # ค่าเริ่มต้น: 4 chunks (สามารถปรับได้ผ่าน env var)
         initial_window_size = int(os.getenv('CHUNK_ENQUEUE_WINDOW_SIZE', '4'))
-        logger.info(f"📝 Enqueueing {min(initial_window_size, total_chunks)}/{total_chunks} chunks initially (windowed enqueue)...")
+        source = task_data.get("source", "upload")
         
-        chunk_data = []
-        enqueued_count = 0
+        # On Hold ตั้งแต่ preprocess: ถ้า Record รออยู่ ให้ไม่ enqueue Upload chunks เลย (ปล่อย slot ให้ Record)
+        # ป้องกันกรณี "ติด Job" — Upload chunks รอ slot ไม่ได้รัน → On Hold ไม่เกิด
+        if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'true').lower() in ('1', 'true', 'yes'):
+            record_backlog = queue_service.get_record_backlog_count()
+            logger.debug(f"📊 Preprocess {task_id}: record_backlog={record_backlog}")
+            if record_backlog > 0:
+                logger.info(f"⏳ Task {task_id} On Hold ตั้งแต่ preprocess (record_backlog={record_backlog}) — ไม่ enqueue chunks")
+                conn = get_redis_connection(decode_responses=True)
+                ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
+                conn.setex(f"task:{task_id}:on_hold", ttl_seconds, "1")
+                conn.sadd("tasks:on_hold", task_id)
+                conn.expire("tasks:on_hold", ttl_seconds)
+                enqueued_count = 0
+                chunks_metadata = {
+                    "chunk_paths": chunks,
+                    "next_chunk_index": 0,
+                    "total_chunks": total_chunks,
+                    "chunk_duration": chunk_duration,
+                    "language": language,
+                    "model_size": model_size,
+                    "source": source,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                conn.setex(f"task:{task_id}:chunks_metadata", ttl_seconds, json.dumps(chunks_metadata))
+                conn.setex(f"task:{task_id}:total_chunks", ttl_seconds, str(total_chunks))
+                conn.setex(f"task:{task_id}:done_chunks", ttl_seconds, "0")
+                conn.set(f"task:{task_id}:inflight_chunks", "0")
+                conn.expire(f"task:{task_id}:inflight_chunks", ttl_seconds)
+                _update_task_stage_sync(
+                    task_id=task_id,
+                    progress=35,
+                    status="on_hold",
+                    stage="on_hold",
+                    stage_description="รอ Record เสร็จก่อน",
+                    stage_progress=0,
+                    json_storage=json_storage if storage_type != 'sqlite' else None
+                )
+                chunk_data = []
+                # ข้ามไปยัง aggregator enqueue (ยังต้อง enqueue aggregator)
+            else:
+                chunk_data = []
+                enqueued_count = 0
+                logger.info(f"📝 Enqueueing {min(initial_window_size, total_chunks)}/{total_chunks} chunks initially (windowed enqueue)...")
+                for i in range(min(initial_window_size, total_chunks)):
+                    chunk_path = chunks[i]
+                    chunk_task_id = f"{task_id}_chunk_{i}"
+                    gpu_index = i % num_gpus
+                    worker_gpu = f'gpu{gpu_index}'
+                    job_id = queue_service.enqueue_transcription(
+                        task_id=chunk_task_id,
+                        file_path=chunk_path,
+                        language=language,
+                        model_size=model_size,
+                        chunk_duration=chunk_duration,
+                        priority=False,
+                        worker_gpu=worker_gpu,
+                        source=source
+                    )
+                    chunk_data.append({
+                        "i": i,
+                        "job_id": job_id,
+                        "chunk_task_id": chunk_task_id,
+                        "chunk_path": chunk_path,
+                        "worker_gpu": worker_gpu
+                    })
+                    enqueued_count += 1
+                    logger.debug(f"   Chunk {i+1}/{total_chunks} enqueued to {worker_gpu}")
+        else:
+            chunk_data = []
+            enqueued_count = 0
+            logger.info(f"📝 Enqueueing {min(initial_window_size, total_chunks)}/{total_chunks} chunks initially (windowed enqueue)...")
+            for i in range(min(initial_window_size, total_chunks)):
+                chunk_path = chunks[i]
+                chunk_task_id = f"{task_id}_chunk_{i}"
+                gpu_index = i % num_gpus
+                worker_gpu = f'gpu{gpu_index}'
+                job_id = queue_service.enqueue_transcription(
+                    task_id=chunk_task_id,
+                    file_path=chunk_path,
+                    language=language,
+                    model_size=model_size,
+                    chunk_duration=chunk_duration,
+                    priority=False,
+                    worker_gpu=worker_gpu,
+                    source=source
+                )
+                chunk_data.append({
+                    "i": i,
+                    "job_id": job_id,
+                    "chunk_task_id": chunk_task_id,
+                    "chunk_path": chunk_path,
+                    "worker_gpu": worker_gpu
+                })
+                enqueued_count += 1
+                logger.debug(f"   Chunk {i+1}/{total_chunks} enqueued to {worker_gpu}")
         
-        # Enqueue แค่ initial window
-        for i in range(min(initial_window_size, total_chunks)):
-            chunk_path = chunks[i]
-            chunk_task_id = f"{task_id}_chunk_{i}"
-            gpu_index = i % num_gpus
-            worker_gpu = f'gpu{gpu_index}'
-            
-            job_id = queue_service.enqueue_transcription(
-                task_id=chunk_task_id,
-                file_path=chunk_path,
-                language=language,
-                model_size=model_size,
-                chunk_duration=chunk_duration,
-                priority=False,
-                worker_gpu=worker_gpu
-            )
-            chunk_data.append({
-                "i": i,
-                "job_id": job_id,
-                "chunk_task_id": chunk_task_id,
-                "chunk_path": chunk_path,
-                "worker_gpu": worker_gpu
-            })
-            enqueued_count += 1
-            logger.debug(f"   Chunk {i+1}/{total_chunks} enqueued to {worker_gpu}")
-        
-        # เก็บ metadata สำหรับ windowed enqueue
+        # เก็บ metadata สำหรับ windowed enqueue (ข้ามถ้า On Hold — set ไว้แล้ว)
         # - next_chunk_index: chunk ถัดไปที่จะ enqueue
         # - chunks: รายการ chunk paths ทั้งหมด
         conn = get_redis_connection(decode_responses=True)
         ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))  # Default: 12 hours
         
         # เก็บ chunk paths ทั้งหมดไว้ใน Redis (สำหรับ enqueue ถัดไป)
+        source = task_data.get("source", "upload")
         chunks_metadata = {
             "chunk_paths": chunks,  # เก็บ paths ทั้งหมด
             "next_chunk_index": enqueued_count,  # chunk ถัดไปที่จะ enqueue
             "total_chunks": total_chunks,
             "chunk_duration": chunk_duration,
             "language": language,
-            "model_size": model_size
+            "model_size": model_size,
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         conn.setex(
             f"task:{task_id}:chunks_metadata",
@@ -1818,7 +2001,7 @@ def process_preprocess_job_chunk_group(
                 logger.debug(f"   Chunk {i}: converted to 16k mono: {converted}")
         
         total_chunks = len(chunks)
-        chunk_duration = 150  # ใช้ค่า default สำหรับ metadata
+        chunk_duration = int(os.getenv("RECORD_CHUNK_DURATION", "120")) if task_data.get("source") == "video_record" else 150
         
         _update_task_stage_sync(
             task_id=task_id,
@@ -1840,6 +2023,7 @@ def process_preprocess_job_chunk_group(
         conn = get_redis_connection(decode_responses=True)
         ttl_seconds = int(os.getenv('REDIS_CHUNK_TTL_SECONDS', '43200'))
         
+        source = task_data.get("source", "upload")
         for i in range(min(initial_window_size, total_chunks)):
             chunk_path = chunks[i]
             chunk_task_id = f"{task_id}_chunk_{i}"
@@ -1852,7 +2036,8 @@ def process_preprocess_job_chunk_group(
                 model_size=model_size,
                 chunk_duration=chunk_duration,
                 priority=False,
-                worker_gpu=worker_gpu
+                worker_gpu=worker_gpu,
+                source=source
             )
             chunk_data.append({
                 "i": i,
@@ -1863,13 +2048,16 @@ def process_preprocess_job_chunk_group(
             })
             enqueued_count += 1
         
+        source = task_data.get("source", "upload")
         chunks_metadata = {
             "chunk_paths": chunks,
             "next_chunk_index": enqueued_count,
             "total_chunks": total_chunks,
             "chunk_duration": chunk_duration,
             "language": language,
-            "model_size": model_size
+            "model_size": model_size,
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         conn.setex(
             f"task:{task_id}:chunks_metadata",

@@ -57,6 +57,8 @@ class RedisQueueWrapper:
         for i in range(num_gpus):
             queue_name = f'transcription_gpu{i}'
             self.queue_map[queue_name] = Queue(queue_name, connection=self.redis_conn)
+            self.queue_map[f'transcription_gpu_record_{i}'] = Queue(f'transcription_gpu_record_{i}', connection=self.redis_conn)
+            self.queue_map[f'transcription_gpu_upload_{i}'] = Queue(f'transcription_gpu_upload_{i}', connection=self.redis_conn)
         
         # Priority and CPU queues
         self.queue_map['transcription_priority'] = Queue('transcription_priority', connection=self.redis_conn)

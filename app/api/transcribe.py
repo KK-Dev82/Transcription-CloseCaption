@@ -166,7 +166,7 @@ async def debug_queue():
                     'failed': failed
                 }
             
-            # GPU queues
+            # GPU queues (legacy)
             for gpu_key, queue in queue_service.queues.items():
                 queue_length = len(queue)
                 started = len(StartedJobRegistry(queue=queue))
@@ -174,6 +174,36 @@ async def debug_queue():
                 failed = len(FailedJobRegistry(queue=queue))
                 
                 queue_stats[gpu_key] = {
+                    'queue_name': queue.name,
+                    'length': queue_length,
+                    'started': started,
+                    'finished': finished,
+                    'failed': failed
+                }
+            
+            # Record queues (Shared Pool + Priority)
+            for gpu_key, queue in queue_service.queues_record.items():
+                queue_length = len(queue)
+                started = len(StartedJobRegistry(queue=queue))
+                finished = len(FinishedJobRegistry(queue=queue))
+                failed = len(FailedJobRegistry(queue=queue))
+                
+                queue_stats[f'record_{gpu_key}'] = {
+                    'queue_name': queue.name,
+                    'length': queue_length,
+                    'started': started,
+                    'finished': finished,
+                    'failed': failed
+                }
+            
+            # Upload queues (Shared Pool + Priority)
+            for gpu_key, queue in queue_service.queues_upload.items():
+                queue_length = len(queue)
+                started = len(StartedJobRegistry(queue=queue))
+                finished = len(FinishedJobRegistry(queue=queue))
+                failed = len(FailedJobRegistry(queue=queue))
+                
+                queue_stats[f'upload_{gpu_key}'] = {
                     'queue_name': queue.name,
                     'length': queue_length,
                     'started': started,
@@ -236,13 +266,15 @@ async def start_transcription(request: TranscriptionRequest):
     - ถ้าเกิน limit จะ return HTTP 429 (Too Many Requests)
     """
     # Rate Limiting: ตรวจสอบจำนวน concurrent requests
+    # Record (source=video_record) ได้ slot สำรอง +1 — รับได้แม้ Upload เต็ม (25+1=26)
     try:
         from app.services.rate_limiter import get_rate_limiter, RateLimitExceeded
         
         rate_limiter = get_rate_limiter()
+        source = getattr(request, "source", None)  # "video_record" = slot สำรอง
         
         # ใช้ context manager เพื่อ acquire/release request slot
-        with rate_limiter.acquire():
+        with rate_limiter.acquire(source=source):
             # ผ่าน rate limit check แล้ว - process request
             pass
     except RateLimitExceeded as e:
@@ -338,6 +370,7 @@ async def start_transcription(request: TranscriptionRequest):
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "callback_url": request.callback_url,
                 "enable_diarization": enable_diarization,
+                "source": "video_record" if request.source == "video_record" else "upload",
             }
             storage.save_transcription(task_id, task_dict)
             
@@ -473,6 +506,7 @@ async def start_transcription(request: TranscriptionRequest):
             "created_at": task.created_at.isoformat(),
             "callback_url": request.callback_url,
             "enable_diarization": enable_diarization,
+            "source": "video_record" if request.source == "video_record" else "upload",
         }
         storage.save_transcription(task_id, task_dict)
         
