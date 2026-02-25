@@ -4,22 +4,39 @@ Cancel tasks ทั้งหมดที่ยังไม่เสร็จ (qu
 - ยกเลิก jobs ใน Redis (preprocess, chunks, aggregator)
 - ลบ Redis keys
 - อัปเดต status เป็น cancelled ใน storage
+
+รองรับ STORAGE_TYPE=sqlite และ json (โหลด storage ตาม env)
 """
+import os
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env.runpod")
+for env_file in [Path(__file__).parent.parent / ".env.runpod", Path(__file__).parent.parent / ".env"]:
+    if env_file.exists():
+        load_dotenv(env_file)
+        break
+
+
+def get_storage():
+    """โหลด storage ตาม STORAGE_TYPE (sqlite หรือ json)"""
+    storage_type = os.getenv("STORAGE_TYPE", "sqlite").lower()
+    if storage_type == "sqlite":
+        from app.utils.sqlite_storage import SQLiteStorage
+        return SQLiteStorage()
+    from app.utils.json_storage import JSONStorage
+    return JSONStorage()
 
 
 def main():
-    from app.utils.sqlite_storage import SQLiteStorage
     from app.services.redis_queue_service import get_redis_queue_service
 
-    storage = SQLiteStorage()
+    storage = get_storage()
     queue_service = get_redis_queue_service()
+    storage_type = os.getenv("STORAGE_TYPE", "sqlite").lower()
+    print(f"📦 Storage: {storage_type}")
 
     # หา tasks ที่ยังไม่เสร็จ
     all_list = storage.list_all_transcriptions()
@@ -47,8 +64,12 @@ def main():
             total_keys += result.get("redis_keys_deleted", 0)
         except Exception as e:
             print(f"  ⚠️ Redis cancel {tid[:8]}...: {e}")
-        # อัปเดต storage
-        full = storage.load_transcription(tid, skip_migration=True)
+        # อัปเดต storage (SQLite ใช้ skip_migration เพื่อป้องกัน recursion)
+        from app.utils.sqlite_storage import SQLiteStorage
+        if isinstance(storage, SQLiteStorage):
+            full = storage.load_transcription(tid, skip_migration=True)
+        else:
+            full = storage.load_transcription(tid)
         if full:
             full["status"] = "cancelled"
             full["current_stage"] = "cancelled"

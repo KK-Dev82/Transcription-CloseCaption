@@ -3,7 +3,7 @@ Enhanced Transcription API with Thai Processing
 แก้ปัญหาความเร็วโดยใช้ base model + post-processing
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 import logging
@@ -35,6 +35,11 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
     
     หมายเหตุ: Endpoint นี้ใช้ logic เดียวกับ /api/transcribe/ 
     แต่เพิ่ม Thai processing ในภายหลัง
+    
+    Rate Limiting & Queue:
+    - จำกัด concurrent requests: Upload 25, Record +5, FE CC รับได้ตลอด
+    - ถ้าเกิน limit → HTTP 429 พร้อมข้อความแจ้งเตือน
+    - Response มี queue_slots_* เพื่อให้ FE แสดงสถานะคิว (เต็ม/ยังรับได้)
     """
     try:
         import os
@@ -42,6 +47,19 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         import uuid
         from datetime import datetime, timezone
         from pathlib import Path
+        
+        # Rate Limiting: เหมือน /api/transcribe/ — reject เมื่อเกิน 25 (หรือ 30 สำหรับ Record)
+        try:
+            from ..services.rate_limiter import get_rate_limiter, RateLimitExceeded
+            rate_limiter = get_rate_limiter()
+            source = getattr(request, "source", None)  # "video_record" | "fe_cc"
+            with rate_limiter.acquire(source=source):
+                pass
+        except RateLimitExceeded as e:
+            logger.warning(f"⚠️ Rate limit exceeded: {e.message}")
+            raise HTTPException(status_code=429, detail=e.message)
+        except Exception as e:
+            logger.warning(f"⚠️ Rate limiter error (continuing anyway): {e}")
         
         # Chunk Group validation
         if request.chunk_group:
@@ -121,6 +139,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                     raise HTTPException(status_code=429, detail=e.message)
                 raise
             
+            cap = queue_service.get_preprocess_queue_capacity(source=source)
             return {
                 "task_id": task_id,
                 "status": "queued",
@@ -129,6 +148,10 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                 "file_paths": request.file_paths,
                 "queue": "redis",
                 "chunks": len(request.file_paths),
+                "queue_slots_used": cap["slots_used"],
+                "queue_slots_max": cap["slots_max"],
+                "queue_slots_remaining": cap["slots_remaining"],
+                "queue_accepting": cap["queue_accepting"],
             }
         
         # ========== Flow ปกติ (file_path) ==========
@@ -215,6 +238,7 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             # ถ้าไม่ใช่ QueueFullError ให้ raise ใหม่
             raise
         
+        cap = queue_service.get_preprocess_queue_capacity(source=source)
         return {
             "task_id": task_id,
             "status": "queued",
@@ -223,7 +247,11 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "estimated_time": "3-5 นาทีสำหรับวิดีโอ 10 นาที",
             "queue": "redis",
             "enable_thai_processing": request.enable_thai_processing,
-            "enable_diarization": enable_diarization
+            "enable_diarization": enable_diarization,
+            "queue_slots_used": cap["slots_used"],
+            "queue_slots_max": cap["slots_max"],
+            "queue_slots_remaining": cap["slots_remaining"],
+            "queue_accepting": cap["queue_accepting"],
         }
         
     except HTTPException:
@@ -231,6 +259,36 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
     except Exception as e:
         logger.error(f"Enhanced transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/queue-status", include_in_schema=True)
+async def get_queue_status(source: Optional[str] = Query(None, description="video_record = Record queue")):
+    """
+    ตรวจสอบสถานะคิวก่อนส่ง transcription
+    สำหรับให้ FE แสดงแจ้งเตือน "คิวเต็ม" หรือ "ยังรับได้ X งาน"
+    
+    Query: source=video_record สำหรับ Record, ไม่ส่ง = Upload
+    """
+    try:
+        from ..services.redis_queue_service import get_redis_queue_service
+        queue_service = get_redis_queue_service()
+        cap = queue_service.get_preprocess_queue_capacity(source=source)
+        return {
+            "queue_accepting": cap["queue_accepting"],
+            "queue_slots_used": cap["slots_used"],
+            "queue_slots_max": cap["slots_max"],
+            "queue_slots_remaining": cap["slots_remaining"],
+            "message": "คิวเต็ม โปรดรอซักครู่" if not cap["queue_accepting"] else f"ยังรับได้ {cap['slots_remaining']} งาน",
+        }
+    except Exception as e:
+        logger.warning(f"Queue status error: {e}")
+        return {
+            "queue_accepting": True,
+            "queue_slots_used": 0,
+            "queue_slots_max": 25,
+            "queue_slots_remaining": 25,
+            "message": "ไม่สามารถตรวจสอบคิวได้ (ยังรับได้)",
+            "error": str(e),
+        }
 
 @router.get("/status/{task_id}")
 async def get_enhanced_status(task_id: str):

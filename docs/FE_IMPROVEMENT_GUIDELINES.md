@@ -224,9 +224,12 @@ POST /api/v2/tasks/{task_id}/resubmit
   "new_task_id": "xyz-456",
   "status": "queued",
   "file_path": "/path/to/audio.wav",
-  "preprocess_job_id": "xyz-456_preprocess"
+  "preprocess_job_id": "xyz-456_preprocess",
+  "chunk_group": false
 }
 ```
+
+**สำคัญ**: หลัง Resubmit ต้องใช้ `new_task_id` ในการ polling — ไม่ใช่ `original_task_id`
 
 ### แนวทาง FE
 
@@ -236,8 +239,8 @@ POST /api/v2/tasks/{task_id}/resubmit
    - แสดงข้อความว่า "ส่งใหม่แล้ว Task ID: xyz-456"
    - เริ่ม polling สำหรับ `new_task_id`
 3. **Error cases**:
-   - `400`: Task ไม่มี `file_path`
-   - `404`: ไม่พบไฟล์
+   - `400`: Task ไม่มี `file_path` (หรือ `file_paths` สำหรับ chunk_group)
+   - `404`: ไม่พบไฟล์ หรือ task ไม่พบ
 
 ### ตัวอย่างโค้ด
 

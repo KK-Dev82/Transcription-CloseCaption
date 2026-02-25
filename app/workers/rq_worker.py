@@ -1493,6 +1493,16 @@ def process_preprocess_job(
     logger.info(f"🔧 RQ Worker: Starting preprocess job {task_id}")
     logger.info(f"   File: {file_path}")
     
+    # FIX: Release on_hold tasks ก่อนเริ่ม preprocess (trigger อัตโนมัติเมื่อมี job ใหม่ เช่น Resubmit)
+    # แก้ปัญหา: task on_hold ค้างเมื่อ Main API ไม่รัน (StuckTaskMonitor อยู่ที่ API)
+    try:
+        from app.services.on_hold_release import try_release_on_hold_tasks
+        released = try_release_on_hold_tasks()
+        if released > 0:
+            logger.info(f"▶️ Released {released} on_hold task(s) (preprocess trigger)")
+    except Exception as e:
+        logger.debug(f"On-hold release at preprocess start: {e}")
+    
     # FIX: เพิ่ม phase-based timing metrics
     import time
     from datetime import datetime, timezone

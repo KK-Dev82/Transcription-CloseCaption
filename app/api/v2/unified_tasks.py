@@ -1013,18 +1013,24 @@ async def resubmit_task(task_id: str) -> Dict:
         if not task_data:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
         
-        # ตรวจสอบ file_path
+        # รองรับทั้ง file_path (ไฟล์เดียว) และ chunk_group (file_paths)
         file_path = task_data.get('file_path')
-        if not file_path:
-            raise HTTPException(status_code=400, detail="Original task has no file_path")
+        file_paths = task_data.get('file_paths') or []
+        chunk_group = task_data.get('chunk_group', False) and file_paths
         
-        # ตรวจสอบว่าไฟล์ยังมีอยู่หรือไม่
-        from pathlib import Path
-        if not Path(file_path).exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        if chunk_group:
+            # ตรวจสอบทุกไฟล์ใน file_paths
+            from pathlib import Path
+            missing = [p for p in file_paths if not Path(p).exists()]
+            if missing:
+                raise HTTPException(status_code=404, detail=f"Files not found: {missing[:3]}{'...' if len(missing) > 3 else ''}")
+        else:
+            if not file_path:
+                raise HTTPException(status_code=400, detail="Original task has no file_path (required for resubmit)")
+            from pathlib import Path
+            if not Path(file_path).exists():
+                raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
         
-        # ใช้ logic จาก transcribe.py
-        from app.api.transcribe import TranscriptionRequest
         import uuid
         from datetime import datetime, timezone
         from app.services.redis_queue_service import get_redis_queue_service
@@ -1034,13 +1040,8 @@ async def resubmit_task(task_id: str) -> Dict:
         # สร้าง request ใหม่ (model_size: ใช้จาก task หรือ default จาก WHISPER_MODEL)
         from app.services.close_caption_config import get_transcription_model_display
         model_size = task_data.get('model_size') or get_transcription_model_display()
-        request = TranscriptionRequest(
-            file_path=file_path,
-            language=task_data.get('language', 'th'),
-            model_size=model_size,
-            chunk_duration=task_data.get('chunk_duration', 150),
-            use_chunking=task_data.get('use_chunking', True)
-        )
+        language = task_data.get('language', 'th')
+        source = task_data.get("source") if task_data.get("source") == "video_record" else None
         
         # สร้าง task และบันทึกลง storage
         sqlite_storage, json_storage = _get_storage()
@@ -1049,42 +1050,56 @@ async def resubmit_task(task_id: str) -> Dict:
             "task_id": new_task_id,
             "status": "queued",
             "progress": 0,
-            "file_path": file_path,
-            "language": request.language,
-            "model_size": request.model_size,
-            "chunk_duration": request.chunk_duration or 150,
-            "use_chunking": request.use_chunking,
+            "language": language,
+            "model_size": model_size,
             "full_text": "",
             "chunks": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "source": task_data.get("source", "upload"),
         }
+        if chunk_group:
+            task_dict["file_path"] = file_paths[0]
+            task_dict["file_paths"] = file_paths
+            task_dict["chunk_group"] = True
+        else:
+            task_dict["file_path"] = file_path
+            task_dict["chunk_duration"] = task_data.get('chunk_duration', 150)
+            task_dict["use_chunking"] = task_data.get('use_chunking', True)
         storage.save_transcription(new_task_id, task_dict)
         
         # Enqueue preprocessing job
         queue_service = get_redis_queue_service()
-        source = task_data.get("source") if task_data.get("source") == "video_record" else None
         try:
-            preprocess_job_id = queue_service.enqueue_preprocess(
-                task_id=new_task_id,
-                file_path=file_path,
-                language=request.language,
-                model_size=request.model_size,
-                chunk_duration=request.chunk_duration or 150,
-                source=source
-            )
+            if chunk_group:
+                preprocess_job_id = queue_service.enqueue_preprocess_chunk_group(
+                    task_id=new_task_id,
+                    file_paths=file_paths,
+                    language=language,
+                    model_size=model_size,
+                    source=source
+                )
+            else:
+                preprocess_job_id = queue_service.enqueue_preprocess(
+                    task_id=new_task_id,
+                    file_path=file_path,
+                    language=language,
+                    model_size=model_size,
+                    chunk_duration=task_data.get('chunk_duration', 150),
+                    source=source
+                )
             
-            logger.info(f"✅ Resubmitted task {task_id} as new task {new_task_id}")
+            logger.info(f"✅ Resubmitted task {task_id} as new task {new_task_id} (chunk_group={chunk_group})")
             
             return {
                 "success": True,
-                "message": f"Task resubmitted successfully",
+                "message": "Task resubmitted successfully",
                 "original_task_id": task_id,
                 "new_task_id": new_task_id,
                 "status": "queued",
-                "file_path": file_path,
-                "preprocess_job_id": preprocess_job_id
+                "file_path": file_paths[0] if chunk_group else file_path,
+                "preprocess_job_id": preprocess_job_id,
+                "chunk_group": chunk_group,
             }
         except Exception as e:
             logger.error(f"❌ Error enqueueing resubmit job: {e}", exc_info=True)

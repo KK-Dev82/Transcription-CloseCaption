@@ -388,6 +388,7 @@ async def start_transcription(request: TranscriptionRequest):
             except QueueFullError as e:
                 raise HTTPException(status_code=429, detail=e.message)
             
+            cap = queue_service.get_preprocess_queue_capacity(source=source)
             return {
                 "task_id": task_id,
                 "status": "queued",
@@ -396,6 +397,10 @@ async def start_transcription(request: TranscriptionRequest):
                 "chunk_group": True,
                 "queue": "redis",
                 "chunks": len(request.file_paths),
+                "queue_slots_used": cap["slots_used"],
+                "queue_slots_max": cap["slots_max"],
+                "queue_slots_remaining": cap["slots_remaining"],
+                "queue_accepting": cap["queue_accepting"],
             }
         
         # ========== Flow ปกติ (file_path / file_url) ==========
@@ -560,13 +565,18 @@ async def start_transcription(request: TranscriptionRequest):
                 # ถ้าไม่ใช่ QueueFullError ให้ raise ใหม่
                 raise
             
+            cap = queue_service.get_preprocess_queue_capacity(source=source)
             return {
                 "task_id": task_id,
                 "status": "queued",
                 "message": "Transcription job queued successfully (preprocessing in background)",
                 "file_path": file_path,
                 "queue": "redis",
-                "chunks": 0  # ยังไม่รู้จำนวน chunks (จะรู้หลัง preprocessing เสร็จ)
+                "chunks": 0,  # ยังไม่รู้จำนวน chunks (จะรู้หลัง preprocessing เสร็จ)
+                "queue_slots_used": cap["slots_used"],
+                "queue_slots_max": cap["slots_max"],
+                "queue_slots_remaining": cap["slots_remaining"],
+                "queue_accepting": cap["queue_accepting"],
             }
         except ImportError:
             # Fallback: ใช้ async task ถ้า Redis Queue ไม่พร้อม

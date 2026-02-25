@@ -201,6 +201,30 @@ class RedisQueueService:
         
         logger.debug(f"✅ Preprocess queue OK: {total_count}/{max_total} (source={source})")
     
+    def get_preprocess_queue_capacity(self, source: Optional[str] = None) -> Dict:
+        """
+        ดึงข้อมูล queue capacity สำหรับแสดงใน response
+        Returns: { slots_used, slots_max, slots_remaining, queue_accepting }
+        """
+        if source == 'fe_cc':
+            return {"slots_used": 0, "slots_max": -1, "slots_remaining": -1, "queue_accepting": True}
+        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '25'))
+        video_record_slots = int(os.getenv('MAX_PREPROCESS_QUEUE_VIDEO_RECORD_SLOTS', '5'))
+        from rq.registry import StartedJobRegistry
+        preprocess_len = len(self.preprocess_queue)
+        video_record_len = len(self.preprocess_video_record_queue)
+        started_preprocess = len(StartedJobRegistry(queue=self.preprocess_queue))
+        started_video_record = len(StartedJobRegistry(queue=self.preprocess_video_record_queue))
+        slots_used = preprocess_len + video_record_len + started_preprocess + started_video_record
+        slots_max = max_size + (video_record_slots if source == 'video_record' else 0)
+        slots_remaining = max(0, slots_max - slots_used)
+        return {
+            "slots_used": slots_used,
+            "slots_max": slots_max,
+            "slots_remaining": slots_remaining,
+            "queue_accepting": slots_remaining > 0,
+        }
+    
     def enqueue_transcription(
         self,
         task_id: str,
@@ -625,6 +649,14 @@ class RedisQueueService:
                 logger.info(f"✅ Deleted {len(keys)} Redis keys for task {task_id}")
         except Exception as e:
             logger.error(f"❌ Error deleting Redis keys for {task_id}: {e}")
+        
+        # ลบ task_id ออกจาก tasks:on_hold (ป้องกัน stale entries)
+        try:
+            on_hold_key = "tasks:on_hold"
+            if self.redis_conn.srem(on_hold_key, task_id):
+                logger.info(f"✅ Removed {task_id} from tasks:on_hold")
+        except Exception as e:
+            logger.debug(f"tasks:on_hold srem: {e}")
         
         result["success"] = True
         return result

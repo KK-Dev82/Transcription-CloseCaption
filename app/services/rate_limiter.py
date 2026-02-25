@@ -154,7 +154,7 @@ class RateLimitExceeded(Exception):
     def __init__(self, current_count: int, max_concurrent: int):
         self.current_count = current_count
         self.max_concurrent = max_concurrent
-        self.message = f"ถึงจำนวนจำกัดแล้ว (มี {current_count}/{max_concurrent} requests กำลังประมวลผล) โปรดรอซักครู่"
+        self.message = "การแปลงเสียงเป็นข้อความในขณะนี้ มีจำนวนมาก โปรดรอซักครู่"
         super().__init__(self.message)
 
 

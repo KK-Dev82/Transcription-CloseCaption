@@ -422,6 +422,16 @@ class StuckTaskMonitor:
         
         while True:
             try:
+                # Release on_hold tasks เมื่อ record_backlog == 0 (periodic trigger)
+                # แก้ปัญหา: task on_hold ค้างเพราะไม่มี chunk รัน → ไม่มี trigger
+                try:
+                    from app.services.on_hold_release import try_release_on_hold_tasks
+                    released = try_release_on_hold_tasks()
+                    if released > 0:
+                        logger.info(f"▶️ Released {released} on_hold task(s) (periodic trigger)")
+                except Exception as e:
+                    logger.debug(f"On-hold release check: {e}")
+                
                 result = self.check_and_fix_stuck_tasks()
                 logger.info(
                     f"📊 Stuck Task Check: {result['checked']} checked, "
