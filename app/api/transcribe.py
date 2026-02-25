@@ -234,7 +234,7 @@ class TranscriptionRequest(BaseModel):
     use_chunking: bool = False
     callback_url: Optional[str] = None
     enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT
-    source: Optional[str] = None  # "video_record" = ลัดคิว (slot พิเศษ +1)
+    source: Optional[str] = None  # "video_record" = Record (+5), "fe_cc" = FE CC (รับได้ตลอด)
     # Chunk Group: หลายไฟล์ pre-chunked
     file_paths: Optional[List[str]] = None
     chunk_group: bool = False
@@ -265,13 +265,12 @@ async def start_transcription(request: TranscriptionRequest):
     - จำกัดจำนวน concurrent requests ไม่เกิน 25 requests
     - ถ้าเกิน limit จะ return HTTP 429 (Too Many Requests)
     """
-    # Rate Limiting: ตรวจสอบจำนวน concurrent requests
-    # Record (source=video_record) ได้ slot สำรอง +1 — รับได้แม้ Upload เต็ม (25+1=26)
+    # Rate Limiting: Upload 25, Record +5, FE CC รับได้ตลอด
     try:
         from app.services.rate_limiter import get_rate_limiter, RateLimitExceeded
         
         rate_limiter = get_rate_limiter()
-        source = getattr(request, "source", None)  # "video_record" = slot สำรอง
+        source = getattr(request, "source", None)  # "video_record" | "fe_cc"
         
         # ใช้ context manager เพื่อ acquire/release request slot
         with rate_limiter.acquire(source=source):

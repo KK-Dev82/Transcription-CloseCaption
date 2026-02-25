@@ -162,13 +162,19 @@ class RedisQueueService:
         ตรวจสอบว่า preprocess queue เต็มหรือไม่
         
         Args:
-            source: "video_record" = ใช้ slot พิเศษ (+1), ปกติ = ใช้ slot 50
+            source: "video_record" = Record (+5 slots), "fe_cc" = FE CC (ข้าม check), ปกติ = Upload (25)
+        
+        Logic: Upload 25, Record +5, FE CC รับได้ตลอด
         
         Raises:
             QueueFullError: ถ้า queue เต็ม (current >= max)
         """
-        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '50'))
-        video_record_slots = int(os.getenv('MAX_PREPROCESS_QUEUE_VIDEO_RECORD_SLOTS', '1'))
+        # FE CC: รับได้ตลอด ไม่ตรวจสอบ limit
+        if source == 'fe_cc':
+            return
+
+        max_size = int(os.getenv('MAX_PREPROCESS_QUEUE_SIZE', '25'))
+        video_record_slots = int(os.getenv('MAX_PREPROCESS_QUEUE_VIDEO_RECORD_SLOTS', '5'))
         
         from rq.registry import StartedJobRegistry
         preprocess_len = len(self.preprocess_queue)
@@ -338,11 +344,11 @@ class RedisQueueService:
             except Exception:
                 model_size = os.getenv("WHISPER_MODEL", "base")
         
-        # ตรวจสอบ queue limit ก่อน enqueue
+        # ตรวจสอบ queue limit ก่อน enqueue (fe_cc ข้าม check)
         self._check_preprocess_queue_limit(source=source)
         
-        # เลือก queue: video_record → ลัดคิว (workers ฟังคิวนี้ก่อน)
-        queue = self.preprocess_video_record_queue if source == 'video_record' else self.preprocess_queue
+        # เลือก queue: video_record / fe_cc → ลัดคิว (workers ฟังคิวนี้ก่อน)
+        queue = self.preprocess_video_record_queue if source in ('video_record', 'fe_cc') else self.preprocess_queue
         queue_name = queue.name
         
         # Preprocessing ไป preprocess queue
@@ -380,7 +386,7 @@ class RedisQueueService:
                 model_size = os.getenv("WHISPER_MODEL", "base")
         
         self._check_preprocess_queue_limit(source=source)
-        queue = self.preprocess_video_record_queue if source == 'video_record' else self.preprocess_queue
+        queue = self.preprocess_video_record_queue if source in ('video_record', 'fe_cc') else self.preprocess_queue
         queue_name = queue.name
         
         job = queue.enqueue(

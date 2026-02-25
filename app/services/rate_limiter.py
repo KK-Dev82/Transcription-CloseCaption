@@ -106,15 +106,30 @@ class RateLimiter:
         Context manager สำหรับ acquire/release request slot
         
         Args:
-            source: "video_record" = ใช้ slot สำรอง (+1) — รับได้แม้ Upload เต็ม
+            source: "video_record" = Record (+5 slots), "fe_cc" = FE CC (รับได้ตลอด ไม่นับ limit)
+        
+        Logic:
+            - Upload: max 25
+            - Record: +5 slots เมื่อ Upload เต็ม (25+5=30 total)
+            - FE CC: รับได้ตลอด, priority สูงสุด (ไม่นับ limit)
         
         Usage:
             with rate_limiter.acquire():
-                # process Upload request
+                # process Upload request (max 25)
             with rate_limiter.acquire(source="video_record"):
-                # process Record request — รับได้แม้ 25 Upload เต็ม (รวมสูงสุด 26)
+                # process Record request (25+5=30 total)
+            with rate_limiter.acquire(source="fe_cc"):
+                # process FE CC request (always accepted)
         """
-        # Record: max = 25 + 1 = 26; Upload: max = 25
+        # FE CC: รับได้ตลอด ไม่นับ limit
+        if source == "fe_cc":
+            try:
+                yield 0
+            finally:
+                pass
+            return
+
+        # Record: max = 25 + 5 = 30; Upload: max = 25
         max_allowed = self.max_concurrent + (self.record_slots if source == "video_record" else 0)
         current_count = self.increment()
         
