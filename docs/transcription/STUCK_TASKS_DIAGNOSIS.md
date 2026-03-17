@@ -5,10 +5,11 @@
 - มี tasks status=processing
 - CPU/GPU มีการใช้งาน (จาก watch_resources)
 - แต่ไม่มีการแปลงเสียงเป็นข้อความ
+- **Task ค้างที่ 40%** — Aggregator รอ chunks แต่ done_chunks ไม่เพิ่ม
 
 ## สาเหตุที่พบจาก Diagnostic
 
-### 1. Tasks ติด On Hold
+### 1. Tasks ติด On Hold (Priority feature)
 - Tasks อยู่ใน Redis `tasks:on_hold`
 - `next_chunk_index=0`, `done_chunks=0`, `inflight=0` → **ไม่มี chunk ถูก enqueue เลย**
 - Preprocess เสร็จแล้ว แต่ chunk ไม่ถูกส่งไป GPU queue เพราะ record_backlog > 0 ตอนนั้น
@@ -90,6 +91,11 @@ On Hold → รอ record_backlog = 0
 ```
 
 **สำคัญ**: Trigger 3 ทำให้ Resubmit หรือ job ใหม่ใดๆ จะ release on_hold อัตโนมัติ แม้ Main API ไม่รัน
+
+### 5. แก้ไขตั้งแต่ Priority (2026-02)
+- **ENABLE_ON_HOLD_FOR_RECORD=false** เป็น default — ป้องกัน task ค้างเมื่อใช้แค่ Upload
+- **get_record_backlog_count** กรอง stale jobs (worker ตาย, orphan ใน StartedJobRegistry)
+- ถ้าใช้แค่ Upload → ตั้ง `ENABLE_ON_HOLD_FOR_RECORD=false` ใน .env
 
 ---
 

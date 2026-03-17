@@ -92,6 +92,17 @@ def main():
     for k, q in queue_svc.queues_upload.items():
         print(f"   {k}: queued={len(q)}, started={len(StartedJobRegistry(queue=q))}")
     
+    # record_backlog + on_hold config
+    record_backlog = queue_svc.get_record_backlog_count()
+    on_hold_enabled = os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'false').lower() in ('1', 'true', 'yes')
+    on_hold_set = conn.scard("tasks:on_hold") if conn.exists("tasks:on_hold") else 0
+    print()
+    print("📊 record_backlog:", record_backlog, "| ENABLE_ON_HOLD_FOR_RECORD:", on_hold_enabled, "| tasks:on_hold:", on_hold_set)
+    if on_hold_enabled and record_backlog > 0 and on_hold_set > 0:
+        print("   → Upload tasks ถูก hold รอ Record | ลอง: ./scripts/run_release_on_hold.sh")
+    elif on_hold_enabled and on_hold_set > 0 and record_backlog == 0:
+        print("   → on_hold แต่ record_backlog=0 (stale?) | ลอง: ./scripts/run_release_on_hold.sh")
+    
     return 0
 
 

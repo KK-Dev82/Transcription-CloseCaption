@@ -79,4 +79,7 @@ class TranscriptionResponse(BaseModel):
     # Detailed Stage Information
     current_stage: Optional[str] = None  # ขั้นตอนปัจจุบัน: "downloading", "extracting_audio", "transcribing", "merging", "finalizing"
     current_stage_description: Optional[str] = None  # คำอธิบายขั้นตอนปัจจุบัน (เช่น "กำลังแยกเสียงจากวิดีโอ")
-    stage_progress: Optional[int] = None  # Progress ของ stage ปัจจุบัน (0-100) 
+    stage_progress: Optional[int] = None  # Progress ของ stage ปัจจุบัน (0-100)
+    
+    # Source type สำหรับ callback — ให้ผู้รับ callback รู้ว่าไฟล์เป็นประเภทไหน
+    source: Optional[str] = None  # "upload" | "video_record" | "fe_cc" 

@@ -504,19 +504,32 @@ class RedisQueueService:
     
     def get_record_backlog_count(self) -> int:
         """
-        จำนวน Record jobs ที่รอหรือกำลังรัน (preprocess + GPU record queues)
+        จำนวน Record tasks ที่ยัง active (queued/processing/pending)
         ใช้สำหรับ On Hold: เมื่อ record_backlog > 0 ให้ hold Upload chunks
+
+        แก้ปัญหา: ใช้ storage เป็น source of truth — ถ้าไม่มี Record ที่ active เลย return 0
+        (Redis อาจมี stale/orphan jobs จาก failed/cancelled tasks ที่ยังค้างใน queue/registry)
         """
-        from rq.registry import StartedJobRegistry
-        count = 0
-        # Preprocess video_record queue
-        count += len(self.preprocess_video_record_queue)
-        count += len(StartedJobRegistry(queue=self.preprocess_video_record_queue))
-        # Record chunks ใน GPU queues
-        for gpu_key, q in self.queues_record.items():
-            count += len(q)
-            count += len(StartedJobRegistry(queue=q))
-        return count
+        # 1. ใช้ storage เป็น source of truth — นับ Record ที่ active (queued/processing/pending/on_hold)
+        # แก้ปัญหา: Redis อาจมี stale jobs จาก failed/cancelled ที่ยังค้างใน queue/registry
+        try:
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from app.utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+            else:
+                from app.utils.json_storage import JSONStorage
+                storage = JSONStorage()
+            all_tasks = storage.list_all_transcriptions()
+            active_record = sum(
+                1 for t in all_tasks
+                if t.get("source") == "video_record"
+                and t.get("status") in ("queued", "processing", "pending", "on_hold")
+            )
+            return active_record
+        except Exception as e:
+            logger.debug(f"get_record_backlog_count storage: {e}")
+            return 0
     
     def get_job_status(self, job_id: str) -> Dict:
         """Get job status"""

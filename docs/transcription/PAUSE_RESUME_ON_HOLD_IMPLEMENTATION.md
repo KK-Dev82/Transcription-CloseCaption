@@ -44,4 +44,4 @@ On Hold    → (Record backlog == 0) → Processing (enqueue chunk ถัดไ�
 4. เมื่อ chunk ใดๆ เสร็จ → `_try_release_on_hold_tasks()` ตรวจ `record_backlog == 0` ถ้าใช่ → วน `tasks:on_hold` แล้ว enqueue chunk ถัดไป ✅
 
 ### Env
-- `ENABLE_ON_HOLD_FOR_RECORD=true` — เปิด/ปิด On Hold (default: true)
+- `ENABLE_ON_HOLD_FOR_RECORD=false` — เปิด/ปิด On Hold (default: false — ป้องกัน task ค้างเมื่อใช้แค่ Upload)

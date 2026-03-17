@@ -19,7 +19,7 @@
 
 เมื่อมี Record ในคิว (record_backlog > 0) Upload chunks จะถูก hold — ไม่ enqueue chunk ถัดไปจนกว่า Record จะเสร็จ
 
-- เปิด/ปิด: `ENABLE_ON_HOLD_FOR_RECORD=true` (default: true)
+- เปิด/ปิด: `ENABLE_ON_HOLD_FOR_RECORD=false` (default: false — ป้องกัน task ค้างเมื่อใช้แค่ Upload)
 
 ## หมายเหตุ
 

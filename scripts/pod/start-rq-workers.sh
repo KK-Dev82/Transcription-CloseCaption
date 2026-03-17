@@ -289,6 +289,17 @@ for i in $(seq 0 $((NUM_CPU_WORKERS - 1))); do
 done
 
 print_success "✅ RQ Workers started successfully!"
+
+# Release on_hold tasks หลัง restart (record_backlog=0 → enqueue chunks ที่รอ)
+# แก้ปัญหา: restart แล้ว task on_hold ไม่ทำงาน (ไม่มี chunk รัน → ไม่มี trigger)
+print_info "Releasing on_hold tasks (if record_backlog=0)..."
+sleep 3
+if bash "$SCRIPT_DIR/../run_release_on_hold.sh" 2>/dev/null; then
+    print_success "On-hold release check done"
+else
+    print_warning "On-hold release skipped (non-fatal)"
+fi
+
 print_info "Workers:"
 for i in $(seq 0 $((NUM_GPUS - 1))); do
     print_info "  - GPU $i: ${GPU_WORKERS_FOR_CC_PER_GPU} CC+file (priority + record$i + upload$i), $((GPU_WORKERS_PER_GPU - GPU_WORKERS_FOR_CC_PER_GPU)) file-only (record$i + upload$i)"

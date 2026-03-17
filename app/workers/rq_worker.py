@@ -495,7 +495,8 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                     callback_url=callback_url,
                     progress=task_data.get("progress", 100 if status == "completed" else 0),
                     full_text=task_data.get("full_text", "") or task_data.get("text", ""),
-                    total_duration=task_data.get("total_duration", 0)
+                    total_duration=task_data.get("total_duration", 0),
+                    source=task_data.get("source"),  # "upload" | "video_record" | "fe_cc" — ส่งใน callback
                 )
                 
                 if status == "completed":
@@ -698,7 +699,7 @@ def process_transcription_job(
                 if chunks_metadata_str:
                     chunks_meta = json.loads(chunks_metadata_str)
                     source = chunks_meta.get("source", "upload")
-                    if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'true').lower() in ('1', 'true', 'yes'):
+                    if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'false').lower() in ('1', 'true', 'yes'):
                         from app.services.redis_queue_service import get_redis_queue_service
                         queue_svc = get_redis_queue_service()
                         record_backlog = queue_svc.get_record_backlog_count()
@@ -1669,7 +1670,7 @@ def process_preprocess_job(
         
         # On Hold ตั้งแต่ preprocess: ถ้า Record รออยู่ ให้ไม่ enqueue Upload chunks เลย (ปล่อย slot ให้ Record)
         # ป้องกันกรณี "ติด Job" — Upload chunks รอ slot ไม่ได้รัน → On Hold ไม่เกิด
-        if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'true').lower() in ('1', 'true', 'yes'):
+        if source == "upload" and os.getenv('ENABLE_ON_HOLD_FOR_RECORD', 'false').lower() in ('1', 'true', 'yes'):
             record_backlog = queue_service.get_record_backlog_count()
             logger.debug(f"📊 Preprocess {task_id}: record_backlog={record_backlog}")
             if record_backlog > 0:

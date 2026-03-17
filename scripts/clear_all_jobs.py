@@ -23,6 +23,48 @@ load_dotenv('.env.runpod')
 API_BASE = "http://localhost:8010/api"
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 
+
+def clear_failed_jobs():
+    """Clear all failed jobs from FailedJobRegistry (ล้าง failed jobs ทั้งหมด)"""
+    print("=" * 85)
+    print("=== Clearing Failed Jobs ===")
+    print("=" * 85)
+    print("")
+
+    try:
+        r = redis.from_url(REDIS_URL, decode_responses=True)
+        num_gpus = int(os.getenv('NUM_GPUS', '2'))
+        queues = [
+            'transcription_preprocess',
+            'transcription_priority',
+            'transcription_preprocess_video_record',
+            'transcription_cpu',
+            'transcription_aggregator'
+        ] + [f'transcription_gpu{i}' for i in range(num_gpus)]
+        queues += [f'transcription_gpu_record_{i}' for i in range(num_gpus)]
+        queues += [f'transcription_gpu_upload_{i}' for i in range(num_gpus)]
+
+        total_cleared = 0
+        for queue_name in queues:
+            failed_key = f"rq:failed:{queue_name}"
+            count = r.zcard(failed_key)
+            if count > 0:
+                r.delete(failed_key)
+                print(f"✅ Cleared {queue_name}: {count} failed jobs")
+                total_cleared += count
+
+        print("")
+        print(f"📊 Total cleared failed jobs: {total_cleared}")
+        print("")
+        return True
+
+    except Exception as e:
+        print(f"❌ Error clearing failed jobs: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def clear_redis_queues():
     """Clear all RQ queues in Redis"""
     print("=" * 85)
@@ -295,7 +337,12 @@ def main():
     if not cancel_all_jobs():
         print("❌ Failed to cancel jobs")
         return 1
-    
+
+    # Step 3: Clear failed jobs
+    if not clear_failed_jobs():
+        print("❌ Failed to clear failed jobs")
+        return 1
+
     print("=" * 85)
     print("=== ✅ Cleanup Complete ===")
     print("=" * 85)

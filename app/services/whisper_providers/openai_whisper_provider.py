@@ -22,13 +22,13 @@ from .base_provider import WhisperProvider, TranscriptionResult
 
 logger = logging.getLogger(__name__)
 
-# Import openai-whisper
+# Import openai-whisper (optional — ใช้ faster-whisper เป็น default)
 try:
     import whisper
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
-    logger.warning("openai-whisper not installed. Please install: pip install openai-whisper")
+    logger.debug("openai-whisper not installed (optional; use faster-whisper as default)")
 
 # Global model cache with thread-safe loading
 _model_cache = {}

@@ -424,6 +424,7 @@ class TranscriptionService:
                 "file_name": getattr(task, 'file_name', None),
                 "language": getattr(task, 'language', 'th'),
                 "model_size": getattr(task, 'model_size', 'base'),
+                "source": getattr(task, 'source', None),  # "upload" | "video_record" | "fe_cc" — ให้ผู้รับ callback รู้ประเภทไฟล์
                 "created_at": task.created_at.isoformat() if task.created_at else None,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "completed_at": task.completed_at.isoformat() if hasattr(task, 'completed_at') and task.completed_at else None,

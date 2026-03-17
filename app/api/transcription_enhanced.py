@@ -25,6 +25,7 @@ class EnhancedTranscriptionRequest(BaseModel):
     enable_thai_processing: bool = True
     enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT จาก .env (.env.runpod / .env.runpod-1GPU)
     source: Optional[str] = None  # "video_record" = ลัดคิว (slot พิเศษ +1)
+    callback_url: Optional[str] = None  # Webhook URL สำหรับรับผลลัพธ์ (พร้อม source type)
     # Chunk Group
     file_paths: Optional[List[str]] = None
     chunk_group: bool = False
@@ -118,12 +119,13 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "enable_thai_processing": request.enable_thai_processing,
                 "enable_diarization": enable_diarization,
-                "source": "video_record" if request.source == "video_record" else "upload",
+                "callback_url": request.callback_url,
+                "source": request.source if request.source in ("video_record", "fe_cc") else "upload",
             }
             storage.save_transcription(task_id, task_dict)
             
             queue_service = get_redis_queue_service()
-            source = request.source if request.source == 'video_record' else None
+            source = request.source if request.source in ('video_record', 'fe_cc') else None
             try:
                 preprocess_job_id = queue_service.enqueue_preprocess_chunk_group(
                     task_id=task_id,
@@ -208,13 +210,14 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "enable_thai_processing": request.enable_thai_processing,
             "enable_diarization": enable_diarization,
-            "source": "video_record" if request.source == "video_record" else "upload",
+            "callback_url": request.callback_url,
+            "source": request.source if request.source in ("video_record", "fe_cc") else "upload",
         }
         storage.save_transcription(task_id, task_dict)
         
         # Enqueue preprocessing job
         queue_service = get_redis_queue_service()
-        source = request.source if request.source == 'video_record' else None
+        source = request.source if request.source in ('video_record', 'fe_cc') else None
         try:
             preprocess_job_id = queue_service.enqueue_preprocess(
                 task_id=task_id,

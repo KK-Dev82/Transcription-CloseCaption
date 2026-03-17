@@ -24,16 +24,19 @@
 **1. ส่ง Transcription Request พร้อม callback_url:**
 
 ```json
-POST /api/transcribe/
+POST /api/transcribe/ หรือ POST /api/transcribe-enhanced/start
 Content-Type: application/json
 
 {
   "file_url": "https://example.com/video.mp4",
   "language": "th",
   "model_size": "Vinxscribe/biodatlab-whisper-th-medium-faster",
-  "callback_url": "https://your-server.com/webhook/transcription"
+  "callback_url": "https://your-server.com/webhook/transcription",
+  "source": "upload"
 }
 ```
+
+**source** (optional): `"upload"` | `"video_record"` | `"fe_cc"` — จะถูกส่งกลับใน callback payload ให้ผู้รับรู้ประเภทไฟล์
 
 **2. Server จะ POST ข้อมูลกลับไปที่ callback_url เมื่อ:**
 
@@ -45,23 +48,24 @@ Content-Type: application/json
 
 ```json
 {
-  "event": "transcription.completed",
-  "timestamp": "2026-01-12T20:00:00Z",
   "task_id": "uuid-here",
-  "data": {
-    "task_id": "uuid-here",
-    "status": "completed",
-    "text_length": 1234,
-    "chunks_count": 10,
-    "processing_stats": {
-      "total_time": 150.5,
-      "preprocess_time": 20.3,
-      "transcription_time": 120.2,
-      "merge_time": 10.0
-    }
-  }
+  "status": "completed",
+  "progress": 100,
+  "file_path": "/path/to/file.wav",
+  "file_name": "video.wav",
+  "language": "th",
+  "model_size": "base",
+  "source": "upload",
+  "full_text": "...",
+  "chunks_count": 10,
+  "total_duration": 120.5,
+  "created_at": "...",
+  "updated_at": "...",
+  "completed_at": "..."
 }
 ```
+
+**source**: `"upload"` | `"video_record"` | `"fe_cc"` — ประเภทไฟล์ที่ส่งมา (ให้ผู้รับ callback รู้ว่าเป็น Upload, Record หรือ FE CC)
 
 **4. Webhook Payload (Progress Update):**
 
