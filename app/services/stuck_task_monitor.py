@@ -416,10 +416,105 @@ class StuckTaskMonitor:
                 'error': str(e)
             }
     
+    def check_and_retry_failed_rq_jobs(self) -> Dict:
+        """
+        Auto-retry failed RQ jobs ที่ยังอายุน้อยพอ
+
+        ควบคุมด้วย env vars:
+        - AUTO_RETRY_FAILED_JOBS=true  (default: false)
+        - AUTO_RETRY_MAX_ATTEMPTS=3
+        - AUTO_RETRY_MIN_AGE_SECONDS=60
+        - AUTO_RETRY_MAX_AGE_HOURS=1
+        """
+        if os.getenv("AUTO_RETRY_FAILED_JOBS", "false").lower() != "true":
+            return {"enabled": False}
+
+        max_attempts = int(os.getenv("AUTO_RETRY_MAX_ATTEMPTS", "3"))
+        min_age_seconds = int(os.getenv("AUTO_RETRY_MIN_AGE_SECONDS", "60"))
+        max_age_hours = float(os.getenv("AUTO_RETRY_MAX_AGE_HOURS", "1"))
+
+        from datetime import datetime, timedelta, timezone
+        from rq.registry import FailedJobRegistry
+        from rq.job import Job
+
+        now_utc = datetime.now(timezone.utc)
+        cutoff_old = now_utc - timedelta(hours=max_age_hours)
+        cutoff_young = now_utc - timedelta(seconds=min_age_seconds)
+
+        # รวม queues ทั้งหมด
+        try:
+            from app.services.redis_queue_service import get_redis_queue_service
+            svc = get_redis_queue_service()
+        except Exception as e:
+            logger.warning(f"Auto-retry: cannot get queue service: {e}")
+            return {"enabled": True, "error": str(e)}
+
+        all_queues = (
+            list(svc.queues.values())
+            + list(svc.queues_record.values())
+            + list(svc.queues_upload.values())
+            + [svc.priority_queue, svc.cpu_queue, svc.preprocess_queue, svc.preprocess_video_record_queue]
+        )
+
+        retried = skipped_too_young = skipped_too_old = skipped_max_attempts = errors = 0
+
+        for queue in all_queues:
+            try:
+                failed_registry = FailedJobRegistry(queue=queue, connection=self.redis_conn)
+                for job_id in list(failed_registry.get_job_ids()):
+                    try:
+                        job = Job.fetch(job_id, connection=self.redis_conn)
+
+                        # ตรวจสอบอายุ
+                        ended = job.ended_at
+                        if ended:
+                            if ended.tzinfo is None:
+                                ended = ended.replace(tzinfo=timezone.utc)
+                            if ended > cutoff_young:
+                                skipped_too_young += 1
+                                continue
+                            if ended < cutoff_old:
+                                skipped_too_old += 1
+                                continue
+
+                        # ตรวจสอบ retry count
+                        retry_key = f"job:{job_id}:retry_count"
+                        raw = self.redis_conn.get(retry_key)
+                        current_retries = int(raw.decode() if raw else 0)
+                        if current_retries >= max_attempts:
+                            skipped_max_attempts += 1
+                            continue
+
+                        # Re-enqueue
+                        queue.enqueue_job(job)
+                        self.redis_conn.incr(retry_key)
+                        self.redis_conn.expire(retry_key, 86400)
+                        retried += 1
+                        logger.info(f"🔄 Auto-retried failed job {job_id} (attempt {current_retries + 1}/{max_attempts})")
+
+                    except Exception as job_err:
+                        logger.debug(f"Auto-retry job {job_id}: {job_err}")
+                        errors += 1
+            except Exception as q_err:
+                logger.debug(f"Auto-retry queue {queue.name}: {q_err}")
+
+        logger.info(
+            f"🔄 Auto-retry: retried={retried}, skipped_too_young={skipped_too_young}, "
+            f"skipped_too_old={skipped_too_old}, skipped_max_attempts={skipped_max_attempts}"
+        )
+        return {
+            "enabled": True,
+            "retried": retried,
+            "skipped_too_young": skipped_too_young,
+            "skipped_too_old": skipped_too_old,
+            "skipped_max_attempts": skipped_max_attempts,
+            "errors": errors,
+        }
+
     async def run_periodic_check(self):
         """รัน periodic check ใน background"""
         logger.info(f"🔄 Stuck Task Monitor started (check every {self.check_interval_seconds}s)")
-        
+
         while True:
             try:
                 # Release on_hold tasks เมื่อ record_backlog == 0 (periodic trigger)
@@ -431,17 +526,23 @@ class StuckTaskMonitor:
                         logger.info(f"▶️ Released {released} on_hold task(s) (periodic trigger)")
                 except Exception as e:
                     logger.debug(f"On-hold release check: {e}")
-                
+
                 result = self.check_and_fix_stuck_tasks()
                 logger.info(
                     f"📊 Stuck Task Check: {result['checked']} checked, "
                     f"{result['stuck']} stuck, {result['fixed']} fixed"
                 )
-                
+
                 if result['stuck'] > 0:
                     logger.warning(f"⚠️  Found {result['stuck']} stuck tasks")
-                
+
+                # Auto-retry failed RQ jobs (opt-in)
+                try:
+                    self.check_and_retry_failed_rq_jobs()
+                except Exception as e:
+                    logger.debug(f"Auto-retry check: {e}")
+
             except Exception as e:
                 logger.error(f"❌ Error in periodic check: {e}", exc_info=True)
-            
+
             await asyncio.sleep(self.check_interval_seconds)

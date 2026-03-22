@@ -3,6 +3,7 @@ API endpoints สำหรับจัดการ Queue (รองรับท�
 """
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from typing import Dict, List, Any, Optional
 import logging
 import pika
@@ -132,8 +133,30 @@ async def get_queue_status():
             # Rough estimate: 10 minutes per task, 2 concurrent = 5 min per task in queue
             estimated_wait_time = (bottleneck_size * 5 * 60)  # seconds
         
+        # Global pause state + ETA
+        pause_state = {}
+        eta_seconds = estimated_wait_time
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            rq_svc = get_redis_queue_service()
+            pause_state = rq_svc.get_global_pause_state()
+            avg_duration = rq_svc.get_avg_task_duration()
+            # Count total queued tasks across preprocess queues
+            from rq.registry import StartedJobRegistry
+            preprocess_queued = len(rq_svc.preprocess_queue) + len(rq_svc.preprocess_video_record_queue)
+            started_count = (
+                len(StartedJobRegistry(queue=rq_svc.preprocess_queue)) +
+                len(StartedJobRegistry(queue=rq_svc.preprocess_video_record_queue))
+            )
+            active_workers = max(1, started_count)
+            eta_seconds = int(preprocess_queued * avg_duration / active_workers)
+        except Exception:
+            pass
+
         return {
-            "available": available,
+            "available": available and not pause_state.get("paused"),
+            "paused": pause_state.get("paused", False),
+            "paused_reason": pause_state.get("reason"),
             "queues": {
                 "request": {
                     "current": request_size,
@@ -154,11 +177,12 @@ async def get_queue_status():
                     "percentage": round((transcription_size / MAX_QUEUE_TRANSCRIBE) * 100, 1)
                 }
             },
-            "estimated_wait_time_seconds": estimated_wait_time,
-            "estimated_wait_time_minutes": round(estimated_wait_time / 60, 1),
+            "estimated_wait_time_seconds": eta_seconds,
+            "estimated_wait_time_minutes": round(eta_seconds / 60, 1),
             "recommendation": (
-                "You can submit new requests" if available 
-                else f"Queue is full. Please wait approximately {round(estimated_wait_time / 60, 1)} minutes before retrying."
+                "Queue is globally paused" if pause_state.get("paused")
+                else "You can submit new requests" if available
+                else f"Queue is full. Please wait approximately {round(eta_seconds / 60, 1)} minutes before retrying."
             )
         }
     except Exception as e:
@@ -405,6 +429,44 @@ async def test_queue_flow(count: int = 1):
     except Exception as e:
         logger.error(f"Error in test_queue_flow: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error testing queue flow: {str(e)}")
+
+class PauseRequest(BaseModel):
+    reason: str = ""
+
+
+@router.post("/pause")
+async def pause_queue(request: PauseRequest = PauseRequest()):
+    """
+    ⏸️ **Global Queue Pause**
+
+    หยุดรับ job ใหม่ทั้งหมด — in-flight jobs ทำงานต่อจนเสร็จ
+    """
+    try:
+        from ..services.redis_queue_service import get_redis_queue_service
+        svc = get_redis_queue_service()
+        result = svc.set_global_pause(reason=request.reason)
+        return {"status": "paused", **result}
+    except Exception as e:
+        logger.error(f"Error pausing queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/resume")
+async def resume_queue():
+    """
+    ▶️ **Global Queue Resume**
+
+    กลับมารับ job ตามปกติ
+    """
+    try:
+        from ..services.redis_queue_service import get_redis_queue_service
+        svc = get_redis_queue_service()
+        result = svc.clear_global_pause()
+        return {"status": "running", **result}
+    except Exception as e:
+        logger.error(f"Error resuming queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/check-task/{task_id}")
 async def check_task_in_queue(task_id: str):

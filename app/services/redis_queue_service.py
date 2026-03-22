@@ -327,7 +327,7 @@ class RedisQueueService:
             model_size,
             chunk_duration,
             job_id=task_id,  # ใช้ task_id เป็น job_id เพื่อให้ track ได้ง่าย
-            job_timeout=3600,  # 1 hour timeout
+            job_timeout=int(os.getenv("RQ_JOB_TIMEOUT_SECONDS", "3600")),
             result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
         
@@ -368,6 +368,17 @@ class RedisQueueService:
             except Exception:
                 model_size = os.getenv("WHISPER_MODEL", "base")
         
+        # ตรวจสอบ global pause (fe_cc ข้าม check)
+        if source != 'fe_cc':
+            pause_state = self.get_global_pause_state()
+            if pause_state.get("paused"):
+                reason = pause_state.get("reason", "Queue globally paused")
+                raise QueueFullError(
+                    current_count=-1,
+                    max_size=0,
+                    queue_name=f"globally_paused: {reason}"
+                )
+
         # ตรวจสอบ queue limit ก่อน enqueue (fe_cc ข้าม check)
         self._check_preprocess_queue_limit(source=source)
         
@@ -384,7 +395,7 @@ class RedisQueueService:
             model_size,
             chunk_duration,
             job_id=f"{task_id}_preprocess",
-            job_timeout=1800,  # 30 minutes timeout
+            job_timeout=int(os.getenv("RQ_PREPROCESS_TIMEOUT_SECONDS", "1800")),
             result_ttl=43200,  # Keep result for 12 hours (reduced from 24h)
         )
         logger.info(f"✅ Preprocess job {task_id} enqueued to {queue_name} (Job ID: {job.id})")
@@ -674,6 +685,62 @@ class RedisQueueService:
         result["success"] = True
         return result
     
+    # ==================== Global Queue Pause/Resume ====================
+
+    _GLOBAL_PAUSE_KEY = "queue:global:paused"
+    _AVG_DURATION_KEY = "queue:stats:avg_duration_seconds"
+
+    def set_global_pause(self, reason: str = "") -> Dict:
+        """หยุดรับ job ใหม่ทั้งหมด (in-flight jobs ทำต่อตามปกติ)"""
+        payload = json.dumps({
+            "paused": True,
+            "reason": reason,
+            "paused_at": datetime.utcnow().isoformat()
+        })
+        self.redis_conn.set(self._GLOBAL_PAUSE_KEY, payload)
+        logger.info(f"⏸️  Queue globally paused: {reason}")
+        return {"paused": True, "reason": reason}
+
+    def clear_global_pause(self) -> Dict:
+        """กลับมารับ job ตามปกติ"""
+        self.redis_conn.delete(self._GLOBAL_PAUSE_KEY)
+        logger.info("▶️  Queue globally resumed")
+        return {"paused": False}
+
+    def get_global_pause_state(self) -> Dict:
+        """ดูสถานะ global pause"""
+        raw = self.redis_conn.get(self._GLOBAL_PAUSE_KEY)
+        if not raw:
+            return {"paused": False}
+        try:
+            state = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+            return state
+        except Exception:
+            return {"paused": True}
+
+    def update_avg_task_duration(self, duration_seconds: float) -> None:
+        """อัปเดต rolling average ของ task duration (เรียกจาก worker เมื่อ task completed)"""
+        try:
+            raw = self.redis_conn.get(self._AVG_DURATION_KEY)
+            if raw:
+                current = float(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+                new_avg = current * 0.8 + duration_seconds * 0.2  # EWMA alpha=0.2
+            else:
+                new_avg = duration_seconds
+            self.redis_conn.set(self._AVG_DURATION_KEY, str(new_avg))
+        except Exception as e:
+            logger.debug(f"update_avg_task_duration: {e}")
+
+    def get_avg_task_duration(self) -> float:
+        """ดู rolling average task duration (วินาที)"""
+        try:
+            raw = self.redis_conn.get(self._AVG_DURATION_KEY)
+            if raw:
+                return float(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except Exception:
+            pass
+        return float(os.getenv("DEFAULT_TASK_DURATION_SECONDS", "120"))
+
     def cleanup_finished_jobs(self, max_age_hours: int = 24) -> Dict:
         """
         Cleanup finished jobs ที่เก่ากว่า max_age_hours

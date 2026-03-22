@@ -207,7 +207,7 @@ async def get_monitoring_stats():
         redis_stats = await get_redis_stats()
         queue_stats = await get_queue_stats()
         system_stats = await get_system_stats()
-        
+
         return MonitoringResponse(
             redis=redis_stats,
             queues=queue_stats,
@@ -216,3 +216,197 @@ async def get_monitoring_stats():
     except Exception as e:
         logger.error(f"Error getting monitoring stats: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting monitoring stats: {str(e)}")
+
+
+@router.get("/dashboard-summary")
+async def get_dashboard_summary():
+    """
+    📊 **Dashboard Summary**
+
+    ภาพรวมทั้งระบบใน 1 API call — queue state, workers, tasks, webhooks
+    """
+    try:
+        import sqlite3
+        from datetime import datetime, timedelta
+
+        conn = get_redis_connection()
+        num_gpus = int(os.getenv('NUM_GPUS', '2'))
+
+        # ---- Queue ----
+        pause_state = {}
+        preprocess_depth = 0
+        transcription_depth = 0
+        eta_seconds = 0
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            from rq.registry import StartedJobRegistry as SJR
+            svc = get_redis_queue_service()
+            pause_state = svc.get_global_pause_state()
+            preprocess_depth = len(svc.preprocess_queue) + len(svc.preprocess_video_record_queue)
+            transcription_depth = sum(
+                len(svc.queues_record.get(f'gpu{i}', Queue(f'gpu{i}', connection=conn))) +
+                len(svc.queues_upload.get(f'gpu{i}', Queue(f'gpu{i}', connection=conn)))
+                for i in range(num_gpus)
+            )
+            avg_dur = svc.get_avg_task_duration()
+            started = len(SJR(queue=svc.preprocess_queue)) + len(SJR(queue=svc.preprocess_video_record_queue))
+            eta_seconds = int(preprocess_depth * avg_dur / max(1, started))
+        except Exception:
+            pass
+
+        # ---- Workers ----
+        workers_total = workers_busy = workers_idle = 0
+        try:
+            from rq import Worker
+            all_workers = Worker.all(connection=conn)
+            workers_total = len(all_workers)
+            workers_busy = sum(1 for w in all_workers if w.get_state() == "busy")
+            workers_idle = workers_total - workers_busy
+        except Exception:
+            pass
+
+        # ---- Tasks ----
+        tasks_by_status: Dict = {}
+        tasks_by_source: Dict = {}
+        completed_today = 0
+        try:
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from ..utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+            else:
+                from ..utils.json_storage import JSONStorage
+                storage = JSONStorage()
+            all_tasks = storage.list_all_transcriptions()
+            today = datetime.utcnow().date()
+            for t in all_tasks:
+                s = t.get("status", "unknown")
+                tasks_by_status[s] = tasks_by_status.get(s, 0) + 1
+                src = t.get("source", "upload")
+                tasks_by_source[src] = tasks_by_source.get(src, 0) + 1
+                if s == "completed":
+                    ca = t.get("completed_at") or t.get("updated_at", "")
+                    if ca and ca[:10] == str(today):
+                        completed_today += 1
+        except Exception:
+            pass
+        tasks_by_status["completed_today"] = completed_today
+
+        # ---- Webhook dead-letter ----
+        dead_letter_count = 0
+        try:
+            db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+            db_conn = sqlite3.connect(db_path, check_same_thread=False)
+            row = db_conn.execute(
+                "SELECT COUNT(*) FROM webhook_dead_letter WHERE resolved = 0"
+            ).fetchone()
+            dead_letter_count = row[0] if row else 0
+            db_conn.close()
+        except Exception:
+            pass
+
+        return {
+            "queue": {
+                "paused": pause_state.get("paused", False),
+                "paused_reason": pause_state.get("reason"),
+                "eta_seconds": eta_seconds,
+                "depth_preprocess": preprocess_depth,
+                "depth_transcription": transcription_depth,
+            },
+            "workers": {
+                "total": workers_total,
+                "busy": workers_busy,
+                "idle": workers_idle,
+            },
+            "tasks": {
+                **{k: v for k, v in tasks_by_status.items()},
+                "by_source": tasks_by_source,
+            },
+            "webhook": {
+                "dead_letter_unresolved": dead_letter_count,
+            },
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        logger.error(f"Error getting dashboard summary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/metrics")
+async def get_prometheus_metrics():
+    """
+    📈 **Prometheus Metrics**
+
+    ข้อมูลในรูปแบบ Prometheus text format สำหรับ scraping
+    """
+    from fastapi.responses import PlainTextResponse
+    import sqlite3
+    from datetime import datetime
+
+    lines = []
+
+    try:
+        conn = get_redis_connection()
+        num_gpus = int(os.getenv('NUM_GPUS', '2'))
+
+        # Queue depth
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            svc = get_redis_queue_service()
+            pause_val = 1 if svc.get_global_pause_state().get("paused") else 0
+            pre_depth = len(svc.preprocess_queue) + len(svc.preprocess_video_record_queue)
+            lines.append(f'transcription_queue_depth{{queue="preprocess"}} {pre_depth}')
+            lines.append(f'transcription_queue_paused {pause_val}')
+        except Exception:
+            lines.append('transcription_queue_depth{queue="preprocess"} -1')
+
+        # Workers
+        try:
+            from rq import Worker
+            all_workers = Worker.all(connection=conn)
+            busy = sum(1 for w in all_workers if w.get_state() == "busy")
+            lines.append(f'transcription_workers_total {len(all_workers)}')
+            lines.append(f'transcription_workers_busy {busy}')
+        except Exception:
+            lines.append('transcription_workers_total -1')
+
+        # Tasks by status
+        try:
+            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if storage_type == 'sqlite':
+                from ..utils.sqlite_storage import SQLiteStorage
+                storage = SQLiteStorage()
+            else:
+                from ..utils.json_storage import JSONStorage
+                storage = JSONStorage()
+            all_tasks = storage.list_all_transcriptions()
+            status_counts: Dict = {}
+            source_status_counts: Dict = {}
+            for t in all_tasks:
+                s = t.get("status", "unknown")
+                src = t.get("source", "upload")
+                status_counts[s] = status_counts.get(s, 0) + 1
+                key = (src, s)
+                source_status_counts[key] = source_status_counts.get(key, 0) + 1
+            for (src, s), cnt in source_status_counts.items():
+                lines.append(f'transcription_tasks_total{{status="{s}",source="{src}"}} {cnt}')
+        except Exception:
+            lines.append('transcription_tasks_total{status="unknown",source="unknown"} -1')
+
+        # Dead-letter
+        try:
+            db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+            db_conn = sqlite3.connect(db_path, check_same_thread=False)
+            row = db_conn.execute(
+                "SELECT COUNT(*) FROM webhook_dead_letter WHERE resolved = 0"
+            ).fetchone()
+            dead_count = row[0] if row else 0
+            db_conn.close()
+            lines.append(f'transcription_webhook_dead_letter_unresolved {dead_count}')
+        except Exception:
+            lines.append('transcription_webhook_dead_letter_unresolved -1')
+
+    except Exception as e:
+        lines.append(f'# ERROR: {e}')
+
+    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")

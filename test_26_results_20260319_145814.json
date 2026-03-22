@@ -1,0 +1,248 @@
+{
+  "test_time": "20260319_145814",
+  "config": {
+    "total_tasks": 26,
+    "expected_accepted": 25,
+    "expected_rejected": 1,
+    "target_max_minutes": 25,
+    "file": "/workspace/transcription-service/uploads/a0f43cec-aed9-4dea-82d8-a7c11d59674e_260128_1020 อนุฯ พัฒนาระบบ (บริหารราชการแผ่นดิน) 2.wav"
+  },
+  "results": {
+    "test1_queue_reject": {
+      "pass": false,
+      "accepted": 26,
+      "rejected": 0,
+      "errors": 0
+    },
+    "test2_completion_time": {
+      "pass": false,
+      "completed": 26,
+      "failed": 0,
+      "total_minutes": 29.16,
+      "per_task_minutes": {
+        "min": 15.08,
+        "median": 28.73,
+        "max": 29.6
+      }
+    },
+    "test3_char_consistency": {
+      "pass": true,
+      "unique_counts": 1,
+      "char_counts": [
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402,
+        19402
+      ]
+    },
+    "all_pass": false
+  },
+  "accepted_tasks": [
+    {
+      "idx": 0,
+      "task_id": "3ec02272-8843-4b54-bac1-f346887f5e4f",
+      "status": "completed",
+      "wall_time_sec": 905.02,
+      "char_count": 19402
+    },
+    {
+      "idx": 1,
+      "task_id": "0d3d63aa-aae8-49c7-bd4e-1381d71c96c4",
+      "status": "completed",
+      "wall_time_sec": 1296.35,
+      "char_count": 19402
+    },
+    {
+      "idx": 2,
+      "task_id": "46440c69-347e-4573-b65a-df960695fa82",
+      "status": "completed",
+      "wall_time_sec": 1111.9,
+      "char_count": 19402
+    },
+    {
+      "idx": 3,
+      "task_id": "f7670da2-16cf-4bd5-8533-64a5c2fc4bbf",
+      "status": "completed",
+      "wall_time_sec": 1469.14,
+      "char_count": 19402
+    },
+    {
+      "idx": 4,
+      "task_id": "9e58b54a-1f6d-4c3c-8ca4-7320f6490445",
+      "status": "completed",
+      "wall_time_sec": 1658.03,
+      "char_count": 19402
+    },
+    {
+      "idx": 5,
+      "task_id": "c4311757-bb3d-486b-bbec-e4355e731702",
+      "status": "completed",
+      "wall_time_sec": 1642.08,
+      "char_count": 19402
+    },
+    {
+      "idx": 6,
+      "task_id": "6805ecf7-2747-4fe2-97c1-7b938f0068c6",
+      "status": "completed",
+      "wall_time_sec": 1647.27,
+      "char_count": 19402
+    },
+    {
+      "idx": 7,
+      "task_id": "a95f6735-192c-4883-90e8-6f2762c27f0f",
+      "status": "completed",
+      "wall_time_sec": 1657.6,
+      "char_count": 19402
+    },
+    {
+      "idx": 8,
+      "task_id": "24fb8ab8-db43-4aa1-8938-231a4cb5e119",
+      "status": "completed",
+      "wall_time_sec": 1667.87,
+      "char_count": 19402
+    },
+    {
+      "idx": 9,
+      "task_id": "935a7119-240a-4d12-b30e-eec12c85b5ac",
+      "status": "completed",
+      "wall_time_sec": 1662.75,
+      "char_count": 19402
+    },
+    {
+      "idx": 10,
+      "task_id": "dbd78228-76e1-43f6-9f37-acaaecb3bb35",
+      "status": "completed",
+      "wall_time_sec": 1655.0,
+      "char_count": 19402
+    },
+    {
+      "idx": 11,
+      "task_id": "e859c076-4bd3-4be4-8d56-05d9f8b738e2",
+      "status": "completed",
+      "wall_time_sec": 1732.21,
+      "char_count": 19402
+    },
+    {
+      "idx": 12,
+      "task_id": "7ef193e8-6c74-42c6-86d7-994bbaea6fdf",
+      "status": "completed",
+      "wall_time_sec": 1720.4,
+      "char_count": 19402
+    },
+    {
+      "idx": 13,
+      "task_id": "8b018584-cc41-4e61-8802-0bd8d46e021b",
+      "status": "completed",
+      "wall_time_sec": 1665.27,
+      "char_count": 19402
+    },
+    {
+      "idx": 14,
+      "task_id": "c948579f-7d87-45e9-82f4-4ae38614c1e7",
+      "status": "completed",
+      "wall_time_sec": 1737.68,
+      "char_count": 19402
+    },
+    {
+      "idx": 15,
+      "task_id": "01195edb-8748-4e17-8092-c464ffb428b7",
+      "status": "completed",
+      "wall_time_sec": 1726.67,
+      "char_count": 19402
+    },
+    {
+      "idx": 16,
+      "task_id": "83802a3d-ffdb-4fd5-a809-7d8c7701d9ea",
+      "status": "completed",
+      "wall_time_sec": 1731.86,
+      "char_count": 19402
+    },
+    {
+      "idx": 17,
+      "task_id": "39b1ff6f-d717-40fc-b531-1c6ade772e84",
+      "status": "completed",
+      "wall_time_sec": 1742.04,
+      "char_count": 19402
+    },
+    {
+      "idx": 18,
+      "task_id": "cf19a19c-d080-4965-bd51-0fdedbc748d2",
+      "status": "completed",
+      "wall_time_sec": 1747.09,
+      "char_count": 19402
+    },
+    {
+      "idx": 19,
+      "task_id": "bf902469-fe0b-4d25-aca8-e3f310332bed",
+      "status": "completed",
+      "wall_time_sec": 1757.46,
+      "char_count": 19402
+    },
+    {
+      "idx": 20,
+      "task_id": "279aa4b0-31a8-46bb-b7fd-7b8e627aab83",
+      "status": "completed",
+      "wall_time_sec": 1740.16,
+      "char_count": 19402
+    },
+    {
+      "idx": 21,
+      "task_id": "1759af6e-5fac-40aa-b34f-a968b93d2004",
+      "status": "completed",
+      "wall_time_sec": 1750.27,
+      "char_count": 19402
+    },
+    {
+      "idx": 22,
+      "task_id": "355c3538-428f-4e08-9b90-9c5e16990f24",
+      "status": "completed",
+      "wall_time_sec": 1755.32,
+      "char_count": 19402
+    },
+    {
+      "idx": 23,
+      "task_id": "80f091a2-179c-46c5-a484-6a06226a73e3",
+      "status": "completed",
+      "wall_time_sec": 1775.77,
+      "char_count": 19402
+    },
+    {
+      "idx": 24,
+      "task_id": "4d0551ec-a799-433e-95cc-6eeb8d12306b",
+      "status": "completed",
+      "wall_time_sec": 1765.4,
+      "char_count": 19402
+    },
+    {
+      "idx": 25,
+      "task_id": "fb940714-e14c-48ed-b7ff-5265850b30b3",
+      "status": "completed",
+      "wall_time_sec": 1748.53,
+      "char_count": 19402
+    }
+  ],
+  "rejected_tasks": [],
+  "submit_errors": []
+}

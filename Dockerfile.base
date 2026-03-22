@@ -1,0 +1,119 @@
+# ============================================================================
+# Base Image: Self-Hosted Server
+# ทดแทน runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
+#
+# สิ่งที่ image นี้มี (เหมือน RunPod):
+#   - Ubuntu 24.04
+#   - CUDA 12.8.1 + cuDNN 9
+#   - PyTorch 2.8.0 + torchaudio (cu128)
+#   - Python 3.12 (Ubuntu 24.04 default)
+#   - FFmpeg, libmagic1, libsndfile1 และ system tools
+#   - ldconfig ตั้งค่า cuDNN paths ไว้ล่วงหน้า
+#
+# สิ่งที่ไม่ได้อยู่ใน image (ทำหลัง container start เหมือน RunPod):
+#   - Application code  → git clone / git pull
+#   - Python packages   → pip install -r requirements.runpod-unified.txt
+#
+# Build:
+#   docker build -f Dockerfile.base -t transcription-base:cu1281-torch280 .
+#
+# ใช้งาน (workflow เหมือน RunPod):
+#   docker run --gpus all -it --rm \
+#     -v /data/transcription:/workspace/transcription-service \
+#     transcription-base:cu1281-torch280 bash
+#   # จากนั้น: git pull && pip install -r requirements.runpod-unified.txt
+#   #           ./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh
+# ============================================================================
+
+FROM nvidia/cuda:12.8.1-cudnn9-devel-ubuntu24.04
+
+# ป้องกัน interactive prompt ระหว่าง apt install
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Bangkok
+
+# ============================================================================
+# 1. System tools + FFmpeg + Audio/File libraries
+#    (RunPod ต้องรัน apt install ffmpeg ทุก start — image นี้มีไว้เลย)
+# ============================================================================
+RUN apt-get update && apt-get install -y \
+    # Python
+    python3 \
+    python3-pip \
+    python3-dev \
+    # Source control + download
+    git \
+    wget \
+    curl \
+    # Audio/Video processing
+    ffmpeg \
+    libsndfile1 \
+    libsox-dev \
+    sox \
+    # File type detection (python-magic)
+    libmagic1 \
+    # Build tools (สำหรับ NeMo + native extensions)
+    build-essential \
+    cmake \
+    # Timezone (PyThaiNLP)
+    tzdata \
+    # Misc utilities
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Default python → python3
+RUN ln -sf /usr/bin/python3 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip
+
+# ============================================================================
+# 2. PyTorch 2.8.0 + torchaudio (CUDA 12.8)
+#    RunPod image มาพร้อม torch/torchaudio — requirements.runpod-unified.txt
+#    ระบุ "ไม่ต้องติดตั้ง" ดังนั้น image นี้ต้องมีให้พร้อม
+# ============================================================================
+RUN pip install --no-cache-dir \
+    torch==2.8.0 \
+    torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# ============================================================================
+# 3. ldconfig: ตั้งค่า cuDNN + CUDA paths ให้ถาวร
+#    setup-cudnn-env.sh ทำสิ่งนี้บน RunPod — image นี้ทำไว้ให้เลย
+#    Order: cuDNN (PyTorch) → system → CUDA → CTranslate2 (ติดตั้งทีหลัง)
+# ============================================================================
+RUN SITE_PKG=$(python3 -c "import sysconfig; print(sysconfig.get_path('purelib'))") && \
+    echo "${SITE_PKG}/nvidia/cudnn/lib"  >  /etc/ld.so.conf.d/cudnn-cuda.conf && \
+    echo "/usr/lib/x86_64-linux-gnu"     >> /etc/ld.so.conf.d/cudnn-cuda.conf && \
+    echo "/usr/local/cuda-12.8/lib64"   >> /etc/ld.so.conf.d/cudnn-cuda.conf && \
+    echo "/usr/local/cuda/lib64"         >> /etc/ld.so.conf.d/cudnn-cuda.conf && \
+    ldconfig && \
+    echo "ldconfig paths:" && cat /etc/ld.so.conf.d/cudnn-cuda.conf
+
+# ============================================================================
+# 4. Environment variables (เหมือน RunPod image)
+# ============================================================================
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:$PATH
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
+
+# LD_LIBRARY_PATH: start-rq-workers.sh จะสร้างเองจาก paths ที่มีจริง
+# แต่ตั้ง fallback ไว้เพื่อให้ใช้งานได้ทันทีโดยไม่ต้องรัน setup-cudnn-env.sh
+# (scripts ยังคง override ค่านี้ตอน start)
+RUN SITE_PKG=$(python3 -c "import sysconfig; print(sysconfig.get_path('purelib'))") && \
+    echo "export LD_LIBRARY_PATH=${SITE_PKG}/nvidia/cudnn/lib:/usr/lib/x86_64-linux-gnu:/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}" \
+    > /etc/profile.d/cudnn-ctranslate2.sh
+
+# ============================================================================
+# 5. Working directory (RunPod ใช้ /workspace)
+# ============================================================================
+WORKDIR /workspace
+
+# ============================================================================
+# Verify: ตรวจสอบ PyTorch + CUDA ตอน build
+# ============================================================================
+RUN python3 -c "\
+import torch; \
+print(f'PyTorch: {torch.__version__}'); \
+print(f'CUDA available: {torch.cuda.is_available()}'); \
+print(f'cuDNN version: {torch.backends.cudnn.version()}'); \
+"
+
+CMD ["/bin/bash"]

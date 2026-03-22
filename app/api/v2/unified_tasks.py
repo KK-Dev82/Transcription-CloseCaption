@@ -1116,6 +1116,95 @@ async def resubmit_task(task_id: str) -> Dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.patch("/{task_id}/priority")
+async def change_task_priority(task_id: str, priority: bool = True) -> Dict:
+    """
+    ⬆️ **Change Task Priority**
+
+    เปลี่ยน priority ของ task ที่ยัง queued อยู่ โดยยกเลิก preprocess job เดิม
+    แล้ว re-enqueue ใน queue ที่มี priority สูงขึ้น (preprocess_video_record)
+
+    **Parameters:**
+    - `task_id`: Task ID
+    - `priority`: True = เพิ่ม priority (ใช้ video_record queue), False = ลด priority (ใช้ upload queue)
+
+    **Returns:**
+    - `success`: True ถ้าสำเร็จ
+    - `new_job_id`: Job ID ใหม่หลัง re-enqueue
+    """
+    try:
+        task_data = _get_task_from_storage(task_id)
+        if not task_data:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+        status = task_data.get("status", "")
+        if status not in ("queued", "pending"):
+            return {
+                "success": False,
+                "message": f"Task อยู่ในสถานะ {status} — เปลี่ยน priority ได้เฉพาะ queued/pending",
+                "status": status
+            }
+
+        from app.services.redis_queue_service import get_redis_queue_service
+
+        queue_service = get_redis_queue_service()
+
+        # ยกเลิก preprocess job เดิม (ถ้ายังอยู่ใน queue)
+        preprocess_job_id = f"{task_id}_preprocess"
+        try:
+            from rq.job import Job
+            job = Job.fetch(preprocess_job_id, connection=queue_service.redis_conn)
+            job_status = job.get_status()
+            if job_status in ("queued", "deferred"):
+                job.cancel()
+                logger.info(f"✅ Cancelled preprocess job {preprocess_job_id} for priority change")
+            elif job_status == "started":
+                return {
+                    "success": False,
+                    "message": "Preprocess job กำลังทำงานอยู่ ไม่สามารถเปลี่ยน priority ได้",
+                    "status": status
+                }
+        except Exception:
+            pass  # Job อาจไม่มีแล้ว
+
+        # Re-enqueue ด้วย source ที่เหมาะสม
+        new_source = "video_record" if priority else None
+        file_path = task_data.get("file_path", "")
+        language = task_data.get("language", "th")
+        model_size = task_data.get("model_size")
+        chunk_duration = task_data.get("chunk_duration", 150)
+
+        new_job_id = queue_service.enqueue_preprocess(
+            task_id=task_id,
+            file_path=file_path,
+            language=language,
+            model_size=model_size,
+            chunk_duration=chunk_duration,
+            source=new_source
+        )
+
+        # อัปเดต task data
+        from datetime import datetime, timezone
+        task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        sqlite_storage, _ = _get_storage()
+        sqlite_storage.save_transcription(task_id, task_data)
+
+        logger.info(f"✅ Changed priority for task {task_id} (priority={priority}, source={new_source})")
+        return {
+            "success": True,
+            "message": f"เปลี่ยน priority สำเร็จ ({'สูงขึ้น' if priority else 'ปกติ'})",
+            "task_id": task_id,
+            "priority": priority,
+            "new_job_id": new_job_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing priority for task {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/stats/available-dates")
 async def get_available_dates():
     """

@@ -212,9 +212,12 @@ class WebhookService:
             # Failed after all retries
             subscription["error_count"] += 1
             subscription["last_error"] = datetime.now()
-            
+
             logger.error(f"Webhook failed for {subscription_id}: {str(e)}")
-            
+
+            # บันทึกลง dead-letter table
+            self._save_to_dead_letter(subscription, payload, str(e))
+
             return {
                 "subscription_id": subscription_id,
                 "success": False,
@@ -222,6 +225,48 @@ class WebhookService:
                 "attempts": self.retry_attempts
             }
     
+    def _save_to_dead_letter(self, subscription: Dict, payload: Dict, error: str) -> None:
+        """บันทึก webhook failure ลง dead-letter table"""
+        try:
+            import sqlite3
+            import os
+            from pathlib import Path
+            db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+            Path(db_path).parent.mkdir(exist_ok=True)
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS webhook_dead_letter (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT,
+                    event_type TEXT,
+                    payload TEXT,
+                    webhook_url TEXT,
+                    failed_at TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    resolved INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                INSERT OR REPLACE INTO webhook_dead_letter
+                    (id, task_id, event_type, payload, webhook_url, failed_at, retry_count, last_error, resolved)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """, (
+                str(uuid.uuid4()),
+                payload.get("task_id"),
+                payload.get("event"),
+                json.dumps(payload),
+                subscription.get("url"),
+                datetime.now().isoformat(),
+                self.retry_attempts,
+                error[:500],
+            ))
+            conn.commit()
+            conn.close()
+            logger.info(f"📬 Saved webhook failure to dead-letter: {subscription.get('url')}")
+        except Exception as dl_err:
+            logger.warning(f"Could not save to dead-letter: {dl_err}")
+
     def _create_signature(self, payload: Dict, secret: str) -> str:
         """สร้าง HMAC signature สำหรับ webhook verification"""
         payload_str = json.dumps(payload, sort_keys=True, separators=(',', ':'))

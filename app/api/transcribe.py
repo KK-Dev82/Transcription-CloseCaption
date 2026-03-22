@@ -636,3 +636,160 @@ async def start_transcription(request: TranscriptionRequest):
         logger.error(f"Error starting transcription: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cleanup endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/cleanup")
+async def cleanup_transcription_workspace(
+    max_age_hours: int = 24,
+    dry_run: bool = False,
+):
+    """
+    🧹 **Cleanup Transcription Workspace**
+
+    ลบไฟล์ขยะที่ไม่จำเป็นออกจากระบบเพื่อคืน disk space และปรับปรุง performance
+
+    **สิ่งที่จะถูกลบ (ปลอดภัย — ไม่กระทบข้อมูลสำคัญ):**
+    - `temp/chunks/<task_id>/` — WAV chunk files ที่สร้างระหว่าง transcription (intermediate files)
+    - `storage/cc_temp/` — temp files ของ FE Close Caption
+    - `storage/cc_debug_audio/` — debug WAV files ของ FE CC
+    - Redis FinishedJobRegistry / FailedJobRegistry — metadata เก่าของ RQ jobs
+
+    **สิ่งที่ไม่แตะ (ข้อมูลสำคัญ):**
+    - SQLite task records — บันทึกการ transcription ทั้งหมด
+    - `uploads/` — audio ต้นฉบับที่อัปโหลด
+    - Final transcript text ใน storage
+
+    **Parameters:**
+    - `max_age_hours`: ลบเฉพาะไฟล์/folders ที่เก่ากว่า N ชั่วโมง (default: 24)
+    - `dry_run`: true = รายงานอย่างเดียว ไม่ลบจริง
+    """
+    import shutil
+    import time
+    from pathlib import Path
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    now = time.time()
+    cutoff = now - (max_age_hours * 3600)
+
+    report: dict = {
+        "started_at": started_at,
+        "max_age_hours": max_age_hours,
+        "dry_run": dry_run,
+        "temp_chunks": {"scanned": 0, "deleted": 0, "skipped_active": 0, "freed_bytes": 0},
+        "cc_temp": {"deleted": 0, "freed_bytes": 0},
+        "cc_debug_audio": {"deleted": 0, "freed_bytes": 0},
+        "redis_jobs": {"finished_cleaned": 0, "failed_cleaned": 0},
+        "total_freed_mb": 0.0,
+        "errors": [],
+    }
+
+    base_dir = Path(os.getenv("APP_BASE_DIR", "/workspace/transcription-service"))
+
+    # ── 1. temp/chunks/<task_id>/ ────────────────────────────────────────────
+    # ปลอดภัย: เป็น intermediate WAV ที่ chunked ระหว่าง preprocess
+    # หลัง transcription เสร็จ/ล้มเหลว ไม่จำเป็นแล้ว
+    chunks_dir = base_dir / "temp" / "chunks"
+    if chunks_dir.exists():
+        for folder in chunks_dir.iterdir():
+            if not folder.is_dir():
+                continue
+            report["temp_chunks"]["scanned"] += 1
+            try:
+                mtime = folder.stat().st_mtime
+                if mtime > cutoff:
+                    # folder ใหม่กว่า cutoff — อาจกำลัง active อยู่
+                    report["temp_chunks"]["skipped_active"] += 1
+                    continue
+                # คำนวณขนาดก่อนลบ
+                folder_bytes = sum(
+                    f.stat().st_size for f in folder.rglob("*") if f.is_file()
+                )
+                if not dry_run:
+                    shutil.rmtree(folder, ignore_errors=True)
+                report["temp_chunks"]["deleted"] += 1
+                report["temp_chunks"]["freed_bytes"] += folder_bytes
+            except Exception as e:
+                report["errors"].append(f"temp_chunks/{folder.name}: {e}")
+
+    # ── 2. storage/cc_temp/ ──────────────────────────────────────────────────
+    cc_temp_dir = base_dir / "storage" / "cc_temp"
+    if cc_temp_dir.exists():
+        for f in cc_temp_dir.iterdir():
+            try:
+                if f.stat().st_mtime > cutoff:
+                    continue
+                size = f.stat().st_size
+                if not dry_run:
+                    if f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+                    else:
+                        f.unlink(missing_ok=True)
+                report["cc_temp"]["deleted"] += 1
+                report["cc_temp"]["freed_bytes"] += size
+            except Exception as e:
+                report["errors"].append(f"cc_temp/{f.name}: {e}")
+
+    # ── 3. storage/cc_debug_audio/ ───────────────────────────────────────────
+    cc_debug_dir = base_dir / "storage" / "cc_debug_audio"
+    if cc_debug_dir.exists():
+        for f in cc_debug_dir.iterdir():
+            try:
+                if not f.is_file():
+                    continue
+                if f.stat().st_mtime > cutoff:
+                    continue
+                size = f.stat().st_size
+                if not dry_run:
+                    f.unlink(missing_ok=True)
+                report["cc_debug_audio"]["deleted"] += 1
+                report["cc_debug_audio"]["freed_bytes"] += size
+            except Exception as e:
+                report["errors"].append(f"cc_debug_audio/{f.name}: {e}")
+
+    # ── 4. Redis FinishedJobRegistry / FailedJobRegistry ────────────────────
+    # ปลอดภัย: เป็นแค่ metadata ของ RQ jobs ไม่ใช่ business data
+    try:
+        from app.services.redis_queue_service import get_redis_queue_service
+        queue_service = get_redis_queue_service()
+        if not dry_run:
+            redis_stats = queue_service.cleanup_all_jobs(max_age_hours=max_age_hours)
+            report["redis_jobs"]["finished_cleaned"] = (
+                redis_stats.get("finished", {}).get("cleaned", 0)
+            )
+            report["redis_jobs"]["failed_cleaned"] = (
+                redis_stats.get("failed", {}).get("cleaned", 0)
+            )
+        else:
+            report["redis_jobs"]["note"] = "skipped (dry_run=true)"
+    except Exception as e:
+        report["errors"].append(f"redis_cleanup: {e}")
+
+    # ── summary ──────────────────────────────────────────────────────────────
+    total_bytes = (
+        report["temp_chunks"]["freed_bytes"]
+        + report["cc_temp"]["freed_bytes"]
+        + report["cc_debug_audio"]["freed_bytes"]
+    )
+    report["total_freed_mb"] = round(total_bytes / (1024 ** 2), 2)
+
+    action = "would free" if dry_run else "freed"
+    logger.info(
+        f"🧹 Transcription cleanup ({'dry_run' if dry_run else 'actual'}): "
+        f"temp_chunks={report['temp_chunks']['deleted']} folders, "
+        f"{action} {report['total_freed_mb']} MB"
+    )
+
+    return {
+        "status": "dry_run" if dry_run else "ok",
+        "message": (
+            f"[dry_run] Would delete {report['temp_chunks']['deleted']} temp folders "
+            f"and free {report['total_freed_mb']} MB"
+            if dry_run else
+            f"Deleted {report['temp_chunks']['deleted']} temp folders, "
+            f"freed {report['total_freed_mb']} MB"
+        ),
+        "detail": report,
+    }

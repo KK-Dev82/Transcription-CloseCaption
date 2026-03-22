@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /workspace/transcription-service/app/api/*.py)",
+      "Bash(grep -r \"APIRouter\\\\|prefix=\" /workspace/transcription-service/app/api/*.py)",
+      "Bash(python -c \":*)",
+      "Bash(grep -E \"pytest|httpx|pytest-asyncio\" /workspace/transcription-service/requirements*.txt)",
+      "Bash(python -m pytest tests/test_management_endpoints.py --collect-only -q)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''scripts/load_test_capacity.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(/dev/null du:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''/workspace/transcription-service/app/api/transcribe.py''\\).read\\(\\)\\); print\\(''OK''\\)\")",
+      "Bash(curl -s http://localhost:8010/health)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:8010/api/monitoring/dashboard-summary)",
+      "Bash(python3 scripts/test_26_queue_reject.py --url http://localhost:8010 --timeout 30 --poll 5)",
+      "Bash(pkill -f \"test_26_queue_reject\")",
+      "Bash(pkill -f \"monitor_resources\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Workers: {d[workers]}''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Workers: busy={d[\"\"workers\"\"][\"\"busy\"\"]}, idle={d[\"\"workers\"\"][\"\"idle\"\"]}, queue_pre={d[\"\"queue\"\"][\"\"depth_preprocess\"\"]}, queue_gpu={d[\"\"queue\"\"][\"\"depth_transcription\"\"]}''''\\)\")",
+      "Bash(bash ./scripts/pod/restart-main-api.sh)",
+      "Bash(bash ./scripts/pod/restart-rq-workers.sh)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Workers: total={d[\"\"workers\"\"][\"\"total\"\"]}, busy={d[\"\"workers\"\"][\"\"busy\"\"]}, idle={d[\"\"workers\"\"][\"\"idle\"\"]}''''\\)\")",
+      "Bash(pkill -f monitor_resources)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Workers: total={d[\"\"workers\"\"][\"\"total\"\"]}, idle={d[\"\"workers\"\"][\"\"idle\"\"]}''''\\)\")"
+    ]
+  }
+}

@@ -228,6 +228,131 @@ async def verify_webhook_signature(
         logger.error(f"Failed to verify signature: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==================== Dead-Letter Queue Endpoints ====================
+
+def _get_db():
+    import sqlite3
+    import os
+    db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@router.get("/dead-letter")
+async def list_dead_letter(resolved: bool = False, limit: int = 100):
+    """📬 รายการ webhook deliveries ที่ล้มเหลวทั้งหมด (dead-letter queue)"""
+    try:
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT * FROM webhook_dead_letter WHERE resolved = ? ORDER BY failed_at DESC LIMIT ?",
+            (1 if resolved else 0, limit)
+        ).fetchall()
+        conn.close()
+        return {"items": [dict(r) for r in rows], "total": len(rows)}
+    except Exception as e:
+        logger.error(f"Error listing dead-letter: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/dead-letter/{item_id}/retry")
+async def retry_dead_letter(item_id: str):
+    """🔄 Retry webhook delivery 1 รายการ"""
+    try:
+        conn = _get_db()
+        row = conn.execute(
+            "SELECT * FROM webhook_dead_letter WHERE id = ? AND resolved = 0",
+            (item_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Dead-letter item not found or already resolved")
+
+        item = dict(row)
+        conn.close()
+
+        import json
+        payload = json.loads(item["payload"]) if item["payload"] else {}
+        event_type = item.get("event_type", "unknown")
+
+        result = await webhook_service.send_webhook(event_type=event_type, data=payload.get("data", payload))
+
+        if result.get("successful", 0) > 0:
+            conn2 = _get_db()
+            conn2.execute("UPDATE webhook_dead_letter SET resolved = 1 WHERE id = ?", (item_id,))
+            conn2.commit()
+            conn2.close()
+            return {"success": True, "message": "Retry successful — marked as resolved", "result": result}
+
+        return {"success": False, "message": "Retry failed", "result": result}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrying dead-letter {item_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/dead-letter/retry-all")
+async def retry_all_dead_letter():
+    """🔄 Retry ทุก webhook delivery ที่ยัง unresolved"""
+    try:
+        import json
+        conn = _get_db()
+        rows = conn.execute(
+            "SELECT * FROM webhook_dead_letter WHERE resolved = 0 ORDER BY failed_at ASC LIMIT 100"
+        ).fetchall()
+        conn.close()
+
+        results = []
+        for row in rows:
+            item = dict(row)
+            try:
+                payload = json.loads(item["payload"]) if item["payload"] else {}
+                event_type = item.get("event_type", "unknown")
+                result = await webhook_service.send_webhook(event_type=event_type, data=payload.get("data", payload))
+                success = result.get("successful", 0) > 0
+                if success:
+                    conn2 = _get_db()
+                    conn2.execute("UPDATE webhook_dead_letter SET resolved = 1 WHERE id = ?", (item["id"],))
+                    conn2.commit()
+                    conn2.close()
+                results.append({"id": item["id"], "success": success})
+            except Exception as e:
+                results.append({"id": item["id"], "success": False, "error": str(e)})
+
+        return {
+            "total": len(results),
+            "succeeded": sum(1 for r in results if r["success"]),
+            "failed": sum(1 for r in results if not r["success"]),
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Error in retry-all dead-letter: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/dead-letter/{item_id}")
+async def resolve_dead_letter(item_id: str):
+    """✅ Mark dead-letter item as resolved (จะไม่ retry อีก)"""
+    try:
+        conn = _get_db()
+        result = conn.execute(
+            "UPDATE webhook_dead_letter SET resolved = 1 WHERE id = ?", (item_id,)
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Dead-letter item not found")
+        conn.close()
+        return {"success": True, "message": "Marked as resolved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving dead-letter {item_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Webhook Events Documentation
 @router.get("/events")
 async def get_webhook_events():

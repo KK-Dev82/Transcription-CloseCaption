@@ -301,6 +301,14 @@ try:
 except ImportError as e:
     logger.warning(f"Queue router not available: {e}")
 
+# Include workers router
+try:
+    from app.api.workers import router as workers_router
+    app.include_router(workers_router, prefix="/api", tags=["workers"])
+    logger.info("✅ Workers router included")
+except ImportError as e:
+    logger.warning(f"Workers router not available: {e}")
+
 # Include logs router
 try:
     from app.api import logs

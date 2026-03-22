@@ -95,9 +95,28 @@ def ensure_sqlite_schema(db_path: str, connection: Optional[sqlite3.Connection] 
         ON segments(task_id, start_time)
     """)
     
+    # 4. Webhook dead-letter table (failed deliveries ที่ retries หมดแล้ว)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS webhook_dead_letter (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            event_type TEXT,
+            payload TEXT,
+            webhook_url TEXT,
+            failed_at TEXT,
+            retry_count INTEGER DEFAULT 0,
+            last_error TEXT,
+            resolved INTEGER DEFAULT 0
+        )
+    """)
+    connection.execute("""
+        CREATE INDEX IF NOT EXISTS idx_dead_letter_resolved
+        ON webhook_dead_letter(resolved, failed_at)
+    """)
+
     connection.commit()
     logger.debug(f"SQLite schema ensured for {db_path}")
-    
+
     return connection
 
 
