@@ -3,11 +3,13 @@
 .github
 .gitignore
 
-# Documentation
-README.md
-Deployment.md
-RABBITMQ_SETUP.md
-staging_checklist.md
+# Docker image output
+docker-image/
+
+# Documentation (ไม่ต้องอยู่ใน Docker image)
+docs/
+*.md
+!requirements*.txt
 
 # Test files
 test_*.py
@@ -23,8 +25,11 @@ staging-deploy.sh
 create_test_video.py
 run_worker.py
 
-# Examples
+# Examples & Samples
 examples/
+sample/
+test_results/
+dashboard/venv/
 
 # Scripts (exclude most, but keep pod scripts for Dockerfile.runpod-base)
 scripts/*
@@ -55,6 +60,7 @@ Thumbs.db
 
 # Docker
 Dockerfile
+Dockerfile.*
 docker-compose*.yml
 .dockerignore
 

@@ -231,3 +231,6 @@ Thumbs.db
 
 # Whisper.cpp
 whisper.cpp/ 
+
+# Claude
+settings.local.json
