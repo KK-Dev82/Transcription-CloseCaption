@@ -4,35 +4,51 @@
 
 ---
 
-## Deployment Environments
+## Deployment
 
-| Environment | Server | GPU | วิธีใช้งาน |
+| Environment | Server | Image | Update |
 |---|---|---|---|
-| Staging | Self-hosted (10.200.22.64) | 2x NVIDIA RTX PRO 4000 (24GB each) | Docker image + git pull |
-| Development | RunPod Cloud | RTX 4000 Ada (20GB) | git pull + pip install |
+| Staging | 10.200.22.64 (2x RTX PRO 4000) | kk-transcription:latest | CI/CD auto build → manual pull |
+| Development | RunPod Cloud | - | git pull + pip install |
+
+### Docker Images
+
+| Image | ขนาด | Build เมื่อ |
+|---|---|---|
+| `kk-base:ubuntu2404-cuda128-torch280` | 10.8 GB | Dependencies เปลี่ยน (นานๆ ครั้ง) |
+| `kk-transcription:release-v1.0.0` | ~3 MB | Code เปลี่ยน (CI/CD auto) |
+
+ดูรายละเอียด Build/Push/Deploy: [docker-pipeline.md](docker-pipeline.md)
 
 ---
 
 ## Architecture
 
 ```
-VM 64 (10.200.22.64) - GPU Transcription Server
-├── transcription-service (Docker)
-│   ├── Main API         :8010  (FastAPI)
-│   ├── Whisper API      :8002  (faster-whisper + CUDA)
-│   ├── RQ GPU Workers   (per GPU: priority, record, upload queues)
-│   ├── RQ Preprocess    (audio extraction + chunking)
-│   └── RQ CPU Workers   (aggregator jobs)
-├── redis (Docker)
-│   └── Redis            :6379  (RQ job queue)
+Server /deploy (10.200.22.64)
+├── docker-compose.yml
+├── .env.runpod
 │
-│  connects to:
-├── VM 61 RabbitMQ       :5672  (รับ task จาก senate-backend)
-└── VM 61 Redis          :6379  (shared cache ถ้าต้องการ)
+├── [Container] transcription-service
+│   ├── Image: kk-transcription (code)
+│   ├──   on: kk-base (OS + CUDA + dependencies)
+│   ├── Main API         :8010
+│   ├── Whisper API      :8002
+│   ├── RQ GPU Workers   (per GPU)
+│   ├── RQ Preprocess    (chunking)
+│   └── RQ CPU Workers   (aggregator)
+│
+├── [Container] redis
+│   └── Redis            :6379
+│
+├── [Volume] uploads/    → video/audio files
+├── [Volume] storage/    → transcription results
+├── [Volume] models/     → AI models
+└── [Volume] temp/       → temporary files
 
-Network:
-  senate-backend (VM 61) ── RabbitMQ ──> transcription (VM 64)
-  Frontend (VM 57) ── HTTP/WebSocket ──> transcription (VM 64)
+Connections:
+  VM 61 RabbitMQ :5672  → รับ task จาก senate-backend
+  VM 57 Frontend        → HTTP/WebSocket
 ```
 
 ---
@@ -41,7 +57,6 @@ Network:
 
 ```
 transcription-close-caption-service/
-│
 ├── app/                              # Application code
 │   ├── main.py                       # FastAPI entry point
 │   ├── api/                          # API endpoints
@@ -51,124 +66,49 @@ transcription-close-caption-service/
 │   │   ├── websocket.py              #   WebSocket connections
 │   │   ├── realtime_caption.py       #   Live caption streaming
 │   │   ├── monitoring.py             #   System monitoring
-│   │   ├── queue.py                  #   Queue management
-│   │   └── ...                       #   Other endpoints
+│   │   └── ...
 │   ├── services/                     # Business logic
-│   │   ├── transcription_service.py  #   Core transcription
-│   │   ├── redis_queue_service.py    #   RQ job management
-│   │   ├── whisper_providers/        #   Whisper engine providers
-│   │   │   ├── faster_whisper_provider.py
-│   │   │   ├── nemo_typhoon_provider.py
-│   │   │   └── ...
+│   │   ├── transcription_service.py
+│   │   ├── redis_queue_service.py
+│   │   ├── whisper_providers/        #   faster-whisper, nemo, etc.
 │   │   ├── typhoon_asr_service.py    #   TyPhoon ASR (live caption)
-│   │   ├── webhook_service.py        #   Webhook delivery
 │   │   └── ...
 │   ├── workers/                      # Background workers
-│   │   ├── video_worker.py           #   Video processing worker
-│   │   └── rq_worker.py              #   RQ worker entry point
+│   │   ├── video_worker.py
+│   │   └── rq_worker.py
 │   ├── models/                       # Pydantic models
-│   └── utils/                        # Utilities (storage, logging, etc.)
+│   └── utils/                        # Utilities
 │
 ├── whisper-service/                  # Whisper API (standalone)
-│   └── whisper_api.py                #   faster-whisper HTTP API
+│   └── whisper_api.py
 │
 ├── scripts/
 │   ├── pod/                          # Production scripts
 │   │   ├── start-pod.sh              #   Start all services
 │   │   ├── start-rq-workers.sh       #   Start RQ workers
-│   │   ├── restart-main-api.sh       #   Restart API only
-│   │   ├── restart-rq-workers.sh     #   Restart workers only
-│   │   ├── check-worker-health.sh    #   Health check
-│   │   └── check-gpu-usage.sh        #   GPU monitoring
+│   │   ├── restart-main-api.sh
+│   │   ├── restart-rq-workers.sh
+│   │   ├── check-worker-health.sh
+│   │   └── check-gpu-usage.sh
 │   └── utility/                      # Setup & diagnostic
-│       ├── setup-cudnn-env.sh        #   cuDNN environment setup
-│       ├── load-env-by-gpu.sh        #   Auto-load env by GPU count
-│       └── verify-ctranslate2-gpu.sh #   GPU verification
+│       ├── setup-cudnn-env.sh
+│       └── verify-ctranslate2-gpu.sh
 │
 ├── config/                           # Configuration
-│   ├── worker_config.yaml            #   Worker settings
-│   └── worker_config.py              #   Worker config loader
-│
-├── data/                             # Static data
-│   └── fuzzy_match/                  #   Name/vocabulary data
-│
-├── static/                           # Web UI
-│   ├── task-dashboard.html           #   Task monitoring dashboard
-│   ├── transcription-upload.html     #   Upload interface
-│   └── ...
-│
+├── data/                             # Static data (fuzzy match)
+├── static/                           # Web UI dashboards
 ├── tests/                            # Test suite
 │
-├── Dockerfile.base                   # Docker image (OS + CUDA + dependencies)
-├── docker-compose.prod.yml           # Production compose (self-hosted)
-├── .dockerignore                     # Docker build exclusions
+├── Dockerfile.base                   # kk-base image
+├── Dockerfile                        # kk-transcription image
+├── docker-compose.prod.yml           # Production compose
+├── .dockerignore
 ├── .env.runpod                       # Environment config
-├── requirements.txt   # Python dependencies
-├── Docker-Image.md                   # Build/Push/Deploy guide
-└── README.md                         # This file
-│
-│  Runtime directories (volume mounted, not in git):
-├── uploads/                          # Video/audio files
-├── storage/                          # Transcription results (SQLite/JSON)
-├── models/                           # AI models (auto-download)
-└── temp/                             # Temporary processing files
-```
-
----
-
-## Staging: Self-hosted (VM 64)
-
-### Setup
-
-```bash
-# 1. Pull Docker image
-az acr login --name kksenateacr
-docker pull kksenateacr.azurecr.io/kk-base:ubuntu2404-cuda128-torch280
-# หรือ: docker load -i kk-base-ubuntu2404-cuda128-torch280.tar.gz
-
-# 2. Clone code
-git clone <repo-url> /workspace/transcription-service
-cd /workspace/transcription-service
-mkdir -p uploads storage models temp
-
-# 3. Start
-docker compose -f docker-compose.prod.yml up -d
-
-# 4. Verify
-curl http://localhost:8010/health
-docker compose -f docker-compose.prod.yml logs -f transcription
-```
-
-### Update Code
-
-```bash
-cd /workspace/transcription-service
-git pull
-docker compose -f docker-compose.prod.yml restart transcription
-```
-
-### Docker Image Build/Push
-
-ดู [Docker-Image.md](Docker-Image.md)
-
----
-
-## Development: RunPod Cloud
-
-### First Setup
-
-```bash
-apt-get update && apt-get install -y ffmpeg && \
-pip install -r requirements.txt && \
-./scripts/utility/setup-cudnn-env.sh && \
-./scripts/pod/start-pod.sh && \
-./scripts/pod/start-rq-workers.sh
-```
-
-### Restart
-
-```bash
-./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh
+├── requirements.txt                  # Python dependencies
+├── .github/workflows/                # CI/CD
+│   └── build-push-acr.yml
+├── docker-pipeline.md                # Build/Push/Deploy guide
+└── README.md
 ```
 
 ---
@@ -194,10 +134,7 @@ WHISPER_PROVIDER=faster-whisper
 WHISPER_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
-
-# GPU
 NUM_GPUS=2
-CUDA_VISIBLE_DEVICES=0,1
 
 # FE Live Caption
 FE_CC_PROVIDER=typhoon
@@ -208,81 +145,48 @@ FE_CC_TYPHOON_MODEL=typhoon-ai/typhoon-asr-realtime
 
 ## API Endpoints
 
-### Main API (Port 8010)
-
 | Endpoint | Method | Description |
 |---|---|---|
 | `/health` | GET | Health check |
 | `/docs` | GET | Swagger UI |
 | `/api/transcribe/` | POST | เริ่ม transcription job |
-| `/api/v2/tasks/{task_id}` | GET | สถานะ task (format: full/progress/minimal) |
-| `/api/v2/tasks/` | GET | รายการ tasks (filter: status, date, limit, offset) |
+| `/api/v2/tasks/{task_id}` | GET | สถานะ task |
+| `/api/v2/tasks/` | GET | รายการ tasks |
 | `/api/v2/tasks/stats/summary` | GET | สถิติสรุป |
 | `/api/monitoring/` | GET | System monitoring |
-| `/api/queue/info` | GET | Queue information |
-
-### Transcription Request
-
-```bash
-curl -X POST "http://10.200.22.64:8010/api/transcribe/" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "file_path": "https://example.com/video.mp4",
-    "language": "th",
-    "callback_url": "http://10.200.22.61:5173/api/transcription/callback"
-  }'
-```
-
-### WebSocket
-
-- `WS /api/ws/ingest-audio` - FE Live Caption streaming
+| `WS /api/ws/ingest-audio` | WS | Live caption streaming |
 
 ---
 
 ## Maintenance
 
-### ตรวจสอบ (เข้า container)
-
 ```bash
+# Logs
+docker compose logs -f transcription
+
+# Restart
+docker compose restart transcription
+
+# เข้า container
 docker exec -it transcription-service bash
-
-bash scripts/pod/check-worker-health.sh   # Worker health
-bash scripts/pod/check-gpu-usage.sh       # GPU usage
-tail -f /tmp/main-api.log                 # API logs
-tail -f /tmp/rq-worker-*.log              # Worker logs
-```
-
-### Restart
-
-```bash
-# Restart ทั้งหมด (จากนอก container)
-docker compose -f docker-compose.prod.yml restart transcription
-
-# Restart เฉพาะ API (ใน container)
-bash scripts/pod/restart-main-api.sh
-
-# Restart เฉพาะ Workers (ใน container)
-bash scripts/pod/restart-rq-workers.sh
+bash scripts/pod/check-worker-health.sh
+bash scripts/pod/check-gpu-usage.sh
 ```
 
 ---
 
-## Troubleshooting
-
-### Workers ไม่ทำงาน
+## Development: RunPod Cloud
 
 ```bash
-bash scripts/pod/check-worker-health.sh
-python3 -c "import redis; r=redis.from_url('$REDIS_URL'); r.ping(); print('OK')"
-bash scripts/pod/restart-rq-workers.sh
-```
+# First setup
+apt-get update && apt-get install -y ffmpeg && \
+pip install -r requirements.txt && \
+./scripts/utility/setup-cudnn-env.sh && \
+./scripts/pod/start-pod.sh && \
+./scripts/pod/start-rq-workers.sh
 
-### GPU ไม่ทำงาน (Transcription ช้า)
-
-```bash
-nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
-bash scripts/utility/setup-cudnn-env.sh
-bash scripts/pod/restart-rq-workers.sh
+# Restart
+./scripts/pod/start-pod.sh && ./scripts/pod/start-rq-workers.sh
 ```
 
 ---

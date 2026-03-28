@@ -2,36 +2,37 @@
 # Production Docker Compose: Self-Hosted GPU Server (10.200.22.64)
 # CPU 14, RAM 30GB, 2x NVIDIA RTX PRO 4000 (24GB VRAM each)
 #
-# Setup:
-#   1. git clone <repo> /workspace/transcription-service
-#   2. docker load -i kk-transcription-release-v1.0.0.tar.gz
-#   3. docker compose -f docker-compose.prod.yml up -d
+# Images:
+#   kk-base:ubuntu2404-cuda128-torch280  → OS + CUDA + dependencies (10.8 GB, build นานๆ ครั้ง)
+#   kk-transcription:latest              → Application code (~3 MB, build เร็ว)
 #
-# Update code (ไม่ต้อง rebuild image):
-#   1. cd /workspace/transcription-service && git pull
-#   2. docker compose -f docker-compose.prod.yml restart transcription
+# Setup:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Update code:
+#   1. Build image ใหม่ (บน Mac หรือ CI/CD)
+#   2. docker compose -f docker-compose.prod.yml pull transcription
+#   3. docker compose -f docker-compose.prod.yml up -d
 # ============================================================================
 
 services:
   # ============================================================================
   # Transcription Service (API + Whisper + RQ Workers)
-  # Image มี: OS + CUDA + PyTorch + pip packages
-  # Code mount จาก host volume (git pull ได้เลย)
   # ============================================================================
   transcription:
-    image: kksenateacr.azurecr.io/kk-base:ubuntu2404-cuda128-torch280
+    image: kksenateacr.azurecr.io/kk-transcription:latest
     container_name: transcription-service
     ports:
       - "8010:8010"
       - "8002:8002"
     volumes:
-      # Application code (git pull แล้ว restart ได้เลย)
-      - .:/workspace/transcription-service
-      # Data ที่ต้อง persist
+      # Data volumes (persist ข้าม container restart)
       - ./uploads:/workspace/transcription-service/uploads
       - ./storage:/workspace/transcription-service/storage
       - ./models:/workspace/transcription-service/models
       - ./temp:/workspace/transcription-service/temp
+      # Environment config
+      - ./.env.runpod:/workspace/transcription-service/.env.runpod:ro
     restart: unless-stopped
     depends_on:
       - redis

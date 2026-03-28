@@ -1,0 +1,47 @@
+# Build kk-transcription image and push to Azure Container Registry
+# Trigger: push to production branch
+# Base image (kk-base) must already exist in ACR
+
+name: Build & Push to ACR
+
+on:
+  push:
+    branches:
+      - production
+
+env:
+  ACR_NAME: kksenateacr
+  IMAGE_NAME: kk-transcription
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: ACR Login
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build & Push image
+        run: |
+          # Tag with version + latest
+          VERSION=release-v${{ github.run_number }}
+
+          docker build \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${VERSION} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest \
+            .
+
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${VERSION}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+          echo "### Image pushed" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.IMAGE_NAME }}:${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
