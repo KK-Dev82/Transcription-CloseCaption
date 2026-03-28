@@ -18,7 +18,7 @@
 | `kk-base:ubuntu2404-cuda128-torch280` | 10.8 GB | Dependencies เปลี่ยน (นานๆ ครั้ง) |
 | `kk-transcription:release-v1.0.0` | ~3 MB | Code เปลี่ยน (CI/CD auto) |
 
-ดูรายละเอียด Build/Push/Deploy: [docker-pipeline.md](docker-pipeline.md)
+ดูรายละเอียด Build/Push/Deploy: [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ---
 
@@ -107,7 +107,7 @@ transcription-close-caption-service/
 ├── requirements.txt                  # Python dependencies
 ├── .github/workflows/                # CI/CD
 │   └── build-push-acr.yml
-├── docker-pipeline.md                # Build/Push/Deploy guide
+├── DEPLOYMENT.md                # Build/Push/Deploy guide
 └── README.md
 ```
 
