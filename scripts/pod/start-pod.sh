@@ -136,51 +136,23 @@ else
 fi
 echo ""
 
-# Install Python dependencies if needed
-print_status "Checking Python dependencies..."
+# Verify Python dependencies (baked into Docker image)
+print_status "Verifying Python dependencies..."
 MISSING_DEPS=()
-
-# Check critical dependencies
-for dep in aiofiles fastapi uvicorn pydantic requests aiohttp redis pika; do
+for dep in fastapi uvicorn redis pika ctranslate2; do
     if ! python3 -c "import ${dep//-/_}" 2>/dev/null; then
         MISSING_DEPS+=("$dep")
     fi
 done
 
-# Check python-dotenv separately (import name is 'dotenv')
-if ! python3 -c "import dotenv" 2>/dev/null; then
-    MISSING_DEPS+=("python-dotenv")
-fi
-
-if [ ${#MISSING_DEPS[@]} -gt 0 ] || [ ! -f ".deps_installed" ]; then
-    print_status "Installing Python dependencies..."
-    if [ -f "requirements.txt" ]; then
-        pip3 install --no-cache-dir -r requirements.txt 2>&1 | tail -5 || {
-            print_warning "⚠️  Failed to install from requirements.txt, installing core dependencies..."
-            pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv || true
-        }
-    else
-        print_warning "⚠️  requirements.txt not found, installing core dependencies..."
-        pip3 install --no-cache-dir fastapi uvicorn pydantic requests aiohttp aiofiles redis pika python-dotenv || true
-    fi
-    
-    # Verify critical dependencies
-    print_status "Verifying dependencies..."
-    for dep in aiofiles fastapi uvicorn; do
-        if python3 -c "import ${dep//-/_}" 2>/dev/null; then
-            print_success "   ✅ $dep"
-        else
-            print_error "   ❌ $dep (missing)"
-        fi
-    done
-    
-    touch .deps_installed
-    print_success "✅ Dependencies installed"
-    echo ""
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    print_warning "Missing: ${MISSING_DEPS[*]}"
+    print_status "Installing from requirements.txt..."
+    pip3 install --no-cache-dir -r requirements.txt 2>&1 | tail -5 || true
 else
-    print_success "✅ All dependencies are installed"
-    echo ""
+    print_success "✅ All dependencies OK"
 fi
+echo ""
 
 # Redis: Using Redis Cloud (external)
 # REDIS_URL configured in .env.runpod (redis://default:...@redis-12598.c252.ap-southeast-1-1.ec2.cloud.redislabs.com:12598)

@@ -47,7 +47,7 @@ class NeMoTyphoonProvider(WhisperProvider):
         if not _TYPHOON_AVAILABLE:
             raise ImportError(
                 "typhoon-asr / NeMo is not installed. "
-                "Install with: pip install typhoon-asr (or use requirements.runpod-unified.txt)"
+                "Install with: pip install typhoon-asr (or use requirements.txt)"
             )
 
         # Config สำหรับ file transcription (แยกจาก FE Live Caption)

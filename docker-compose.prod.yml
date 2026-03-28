@@ -1,40 +1,37 @@
 # ============================================================================
-# Production Docker Compose: Self-Hosted Server
-# Server: CPU 14, RAM 30GB, 2x NVIDIA RTX PRO 4000 (24GB VRAM each)
+# Production Docker Compose: Self-Hosted GPU Server (10.200.22.64)
+# CPU 14, RAM 30GB, 2x NVIDIA RTX PRO 4000 (24GB VRAM each)
 #
-# ใช้งาน:
-#   docker compose -f docker-compose.prod.yml up -d
-#   docker compose -f docker-compose.prod.yml logs -f
-#   docker compose -f docker-compose.prod.yml down
+# Setup:
+#   1. git clone <repo> /workspace/transcription-service
+#   2. docker load -i kk-transcription-release-v1.0.0.tar.gz
+#   3. docker compose -f docker-compose.prod.yml up -d
 #
-# Image ต้อง load ก่อน (ถ้ายังไม่ได้ pull จาก ACR):
-#   docker load -i kk-transcription-release-v1.0.0.tar.gz
-# หรือ pull จาก ACR:
-#   az acr login --name kksenateacr
-#   docker pull kksenateacr.azurecr.io/kk-transcription:release-v1.0.0
+# Update code (ไม่ต้อง rebuild image):
+#   1. cd /workspace/transcription-service && git pull
+#   2. docker compose -f docker-compose.prod.yml restart transcription
 # ============================================================================
 
 services:
   # ============================================================================
-  # Transcription Service (All-in-One: API + Whisper + RQ Workers)
-  # start-pod.sh  → Main API (8010) + Whisper API (8002) + Video Worker
-  # start-rq-workers.sh → GPU workers (per GPU) + Preprocess + CPU workers
+  # Transcription Service (API + Whisper + RQ Workers)
+  # Image มี: OS + CUDA + PyTorch + pip packages
+  # Code mount จาก host volume (git pull ได้เลย)
   # ============================================================================
   transcription:
-    image: kksenateacr.azurecr.io/kk-transcription:release-v1.0.0
+    image: kksenateacr.azurecr.io/kk-base:ubuntu2404-cuda128-torch280
     container_name: transcription-service
     ports:
-      - "8010:8010"   # Main API (FastAPI)
-      - "8002:8002"   # Whisper API (faster-whisper)
+      - "8010:8010"
+      - "8002:8002"
     volumes:
-      # Data ที่ต้อง persist (หายไม่ได้)
+      # Application code (git pull แล้ว restart ได้เลย)
+      - .:/workspace/transcription-service
+      # Data ที่ต้อง persist
       - ./uploads:/workspace/transcription-service/uploads
       - ./storage:/workspace/transcription-service/storage
       - ./models:/workspace/transcription-service/models
-      # ไฟล์ชั่วคราว + logs (หายได้ แต่ mount ไว้ debug ง่าย)
       - ./temp:/workspace/transcription-service/temp
-      # Environment config (mount จาก host เพื่อแก้ไขได้โดยไม่ต้อง rebuild)
-      - ./.env.runpod:/workspace/transcription-service/.env.runpod:ro
     restart: unless-stopped
     depends_on:
       - redis
@@ -43,20 +40,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s   # นานกว่าปกติ เพราะต้อง start หลาย services + load models
+      start_period: 120s
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all       # ใช้ GPU ทั้ง 2 ตัว
+              count: all
               capabilities: [gpu]
         limits:
-          memory: 28G          # เหลือ 2G สำหรับ OS + Redis
-          cpus: '13'           # เหลือ 1 core สำหรับ OS + Redis
+          memory: 28G
+          cpus: '13'
 
   # ============================================================================
-  # Redis สำหรับ RQ job queue + caching
+  # Redis (RQ job queue + caching)
   # ============================================================================
   redis:
     image: redis:7-alpine

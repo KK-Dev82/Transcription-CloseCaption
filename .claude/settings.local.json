@@ -83,7 +83,8 @@
       "WebFetch(domain:hub.docker.com)",
       "WebSearch",
       "Bash(docker save:*)",
-      "Bash(gzip)"
+      "Bash(gzip)",
+      "Bash(docker tag:*)"
     ]
   }
 }

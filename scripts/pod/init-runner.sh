@@ -58,13 +58,13 @@ else
 fi
 
 # Step 2: pip install requirements
-print_step "Step 2/5: Installing Python dependencies (requirements.runpod-unified.txt)"
-if [ ! -f "requirements.runpod-unified.txt" ]; then
-    print_error "requirements.runpod-unified.txt not found"
+print_step "Step 2/5: Installing Python dependencies (requirements.txt)"
+if [ ! -f "requirements.txt" ]; then
+    print_error "requirements.txt not found"
     exit 1
 fi
 print_progress "Running pip install (อาจใช้เวลานาน)..."
-pip install -r requirements.runpod-unified.txt
+pip install -r requirements.txt
 print_success "Python dependencies installed"
 
 # Step 3: setup cuDNN
