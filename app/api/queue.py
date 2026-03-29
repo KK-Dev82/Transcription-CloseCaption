@@ -63,6 +63,47 @@ def get_rabbitmq_service():
     """Get queue service (for backward compatibility)"""
     return get_queue_service()
 
+@router.get("/slot-info")
+async def get_slot_info():
+    """
+    ดึงข้อมูล slot availability สำหรับ Backend Queue Dispatcher
+    ใช้ RateLimiter (Redis atomic counter) เพื่อดูจำนวน concurrent requests
+
+    Returns:
+        - current_count: จำนวน concurrent requests ปัจจุบัน
+        - max_concurrent: จำนวนสูงสุดที่รับได้ (Upload)
+        - available_slots: จำนวน slot ที่ว่าง
+        - can_accept: True ถ้ายังรับ request ได้
+    """
+    try:
+        from ..services.rate_limiter import get_rate_limiter
+        rate_limiter = get_rate_limiter()
+        current_count = rate_limiter.get_current_count()
+        max_concurrent = rate_limiter.max_concurrent
+        available_slots = max(0, max_concurrent - current_count)
+
+        # เช็ค global pause state
+        paused = False
+        try:
+            from ..services.redis_queue_service import get_redis_queue_service
+            rq_svc = get_redis_queue_service()
+            pause_state = rq_svc.get_global_pause_state()
+            paused = pause_state.get("paused", False)
+        except Exception:
+            pass
+
+        return {
+            "current_count": current_count,
+            "max_concurrent": max_concurrent,
+            "available_slots": 0 if paused else available_slots,
+            "can_accept": (not paused) and (available_slots > 0),
+            "paused": paused,
+        }
+    except Exception as e:
+        logger.error(f"Error getting slot info: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting slot info: {str(e)}")
+
+
 @router.get("/info")
 async def get_queue_info():
     """ดึงข้อมูล queue ทั้งหมด (รองรับทั้ง RabbitMQ และ Redis)"""

@@ -121,8 +121,8 @@ class RateLimiter:
             with rate_limiter.acquire(source="fe_cc"):
                 # process FE CC request (always accepted)
         """
-        # FE CC: รับได้ตลอด ไม่นับ limit
-        if source == "fe_cc":
+        # FE CC / Backend dispatch: รับได้ตลอด ไม่นับ limit
+        if source in ("fe_cc", "backend"):
             try:
                 yield 0
             finally:
