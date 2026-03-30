@@ -272,7 +272,7 @@ async def get_dashboard_summary():
         try:
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from ..utils.sqlite_storage import SQLiteStorage
+                from ..utils.storage_factory import get_storage
                 storage = SQLiteStorage()
             else:
                 from ..utils.json_storage import JSONStorage
@@ -374,7 +374,7 @@ async def get_prometheus_metrics():
         try:
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from ..utils.sqlite_storage import SQLiteStorage
+                from ..utils.storage_factory import get_storage
                 storage = SQLiteStorage()
             else:
                 from ..utils.json_storage import JSONStorage

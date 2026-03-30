@@ -163,7 +163,7 @@ async def _update_task_stage_and_webhook(
 ):
     """
     Helper function สำหรับอัปเดต stage และส่ง webhook progress
-    
+
     Args:
         task_id: Task ID
         progress: Overall progress (0-100)
@@ -171,88 +171,42 @@ async def _update_task_stage_and_webhook(
         stage: Current stage (e.g., "extracting_audio", "transcribing", "merging")
         stage_description: Stage description in Thai
         stage_progress: Progress within current stage (0-100), optional
-        json_storage: JSONStorage instance (will create if None) - สำหรับ backward compatibility
+        json_storage: deprecated, ignored — ใช้ storage factory แทน
     """
     try:
-        # FIX: ใช้ SQLiteStorage เป็นหลัก (ตาม STORAGE_TYPE)
-        # Note: os is already imported at module level (line 8)
         from datetime import datetime, timezone
-        
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        
-        if storage_type == 'sqlite':
-            # ใช้ SQLiteStorage
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
-            
-            # โหลด task data
-            task_data = storage.load_transcription(task_id, skip_migration=True)
-            if not task_data:
-                task_data = {}
-            
-            # FIX: Completed/Failed status guard - ห้าม overwrite status ที่เสร็จแล้วด้วย processing
-            # แก้ race condition: chunk completion อาจ save ทับ aggregator ที่ save completed แล้ว
-            existing_status = task_data.get("status", "")
-            if existing_status in ("completed", "failed", "cancelled") and status in ("processing", "queued", "pending", "on_hold"):
-                logger.debug(f"⏭️ Skip stage update for {task_id}: existing status={existing_status} (final), new={status}")
-                return
-            
-            # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
-            old_progress = task_data.get("progress", 0)
-            if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
-                # Progress ย้อนกลับ → ใช้ค่าสูงสุดระหว่าง old กับ new (ป้องกัน progress เด้งกลับ)
-                logger.warning(f"⚠️  Progress would decrease from {old_progress}% to {progress}% for {task_id}, keeping {old_progress}%")
-                progress = old_progress
-            
-            # อัปเดต stage information
-            task_data["progress"] = progress
-            task_data["status"] = status
-            task_data["current_stage"] = stage
-            task_data["current_stage_description"] = stage_description
-            if stage_progress is not None:
-                task_data["stage_progress"] = stage_progress
-            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            
-            # บันทึก
-            storage.save_transcription(task_id, task_data)
-        else:
-            # Fallback to JSONStorage
-            if json_storage is None:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
-            
-            # โหลด task data
-            task_dir = json_storage.storage_dir / "transcriptions" / task_id
-            metadata_path = task_dir / "metadata.json"
-            if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    task_data = json.load(f)
-            else:
-                task_data = {}
-            
-            # FIX: Completed/Failed status guard - ห้าม overwrite status ที่เสร็จแล้วด้วย processing
-            existing_status = task_data.get("status", "")
-            if existing_status in ("completed", "failed", "cancelled") and status in ("processing", "queued", "pending", "on_hold"):
-                logger.debug(f"⏭️ Skip stage update for {task_id}: existing status={existing_status} (final), new={status}")
-                return
-            
-            # FIX: Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
-            old_progress = task_data.get("progress", 0)
-            if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
-                # Progress ย้อนกลับ → ใช้ค่าสูงสุดระหว่าง old กับ new (ป้องกัน progress เด้งกลับ)
-                logger.warning(f"⚠️  Progress would decrease from {old_progress}% to {progress}% for {task_id}, keeping {old_progress}%")
-                progress = old_progress
-            
-            # อัปเดต stage information
-            task_data["progress"] = progress
-            task_data["status"] = status
-            task_data["current_stage"] = stage
-            task_data["current_stage_description"] = stage_description
-            if stage_progress is not None:
-                task_data["stage_progress"] = stage_progress
-            
-            # บันทึก
-            json_storage.save_transcription(task_id, task_data)
+        from app.utils.storage_factory import get_storage
+
+        storage = get_storage()
+
+        # โหลด task data
+        task_data = storage.load_transcription(task_id)
+        if not task_data:
+            task_data = {}
+
+        # Completed/Failed status guard - ห้าม overwrite status ที่เสร็จแล้วด้วย processing
+        existing_status = task_data.get("status", "")
+        if existing_status in ("completed", "failed", "cancelled") and status in ("processing", "queued", "pending", "on_hold"):
+            logger.debug(f"⏭️ Skip stage update for {task_id}: existing status={existing_status} (final), new={status}")
+            return
+
+        # Monotonic progress guard - ห้าม progress ย้อนกลับ (ยกเว้น failed หรือ task ใหม่)
+        old_progress = task_data.get("progress", 0)
+        if progress < old_progress and status not in ["failed", "cancelled", "stopped"]:
+            logger.warning(f"⚠️  Progress would decrease from {old_progress}% to {progress}% for {task_id}, keeping {old_progress}%")
+            progress = old_progress
+
+        # อัปเดต stage information
+        task_data["progress"] = progress
+        task_data["status"] = status
+        task_data["current_stage"] = stage
+        task_data["current_stage_description"] = stage_description
+        if stage_progress is not None:
+            task_data["stage_progress"] = stage_progress
+        task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        # บันทึก
+        storage.save_transcription(task_id, task_data)
         
         # ส่ง webhook progress (ถ้ามี callback_url)
         callback_url = task_data.get("callback_url")
@@ -436,17 +390,9 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
         from datetime import datetime, timezone
         # os already imported at module level (line 8)
         
-        # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        
-        if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
-            task_data = storage.load_transcription(task_id, skip_migration=True)
-        else:
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
-            task_data = json_storage.load_transcription(task_id)
+        from app.utils.storage_factory import get_storage
+        storage = get_storage()
+        task_data = storage.load_transcription(task_id)
         
         if not task_data:
             logger.warning(f"⚠️  Task data not found for {task_id}")
@@ -821,15 +767,15 @@ def process_transcription_job(
             
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
-            # FIX: ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE (ไม่ใช้ JSONStorage ถ้าใช้ SQLite)
+            # ใช้ storage factory
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
                 json_storage = None  # ไม่ใช้ JSONStorage
             else:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
+                from app.utils.storage_factory import get_storage
+                json_storage = get_storage()
                 storage = None
             
             conn = get_redis_connection(decode_responses=True)
@@ -867,8 +813,8 @@ def process_transcription_job(
             # ตรวจสอบ progress ปัจจุบันก่อน
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
                 existing_task = storage.load_transcription(main_task_id, skip_migration=True)
             else:
                 existing_task = json_storage.load_transcription(main_task_id)
@@ -1148,14 +1094,14 @@ def process_transcription_job(
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
                 task_data = storage.load_transcription(main_task_id, skip_migration=True)
                 if not task_data:
                     task_data = {}
             else:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
+                from app.utils.storage_factory import get_storage
+                json_storage = get_storage()
                 task_dir = json_storage.storage_dir / "transcriptions" / main_task_id
                 metadata_path = task_dir / "metadata.json"
                 if metadata_path.exists():
@@ -1437,8 +1383,8 @@ def process_transcription_job(
             # สำหรับ chunk job ไม่ต้อง mark main task เป็น failed (เรา record empty chunk แล้ว)
             if "_chunk_" not in task_id:
                 if storage_type == 'sqlite':
-                    from app.utils.sqlite_storage import SQLiteStorage
-                    storage = SQLiteStorage()
+                    from app.utils.storage_factory import get_storage
+                    storage = get_storage()
                     task_data = storage.load_transcription(task_id, skip_migration=True) or {}
                     task_data["status"] = "failed"
                     task_data["error_message"] = str(e)
@@ -1447,8 +1393,8 @@ def process_transcription_job(
                     task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
                     storage.save_transcription(task_id, task_data)
                 else:
-                    from app.utils.json_storage import JSONStorage
-                    json_storage = JSONStorage()
+                    from app.utils.storage_factory import get_storage
+                    json_storage = get_storage()
                     task_data = json_storage.load_transcription(task_id) or {}
                     task_data["status"] = "failed"
                     task_data["error_message"] = str(e)
@@ -1521,15 +1467,15 @@ def process_preprocess_job(
         # FIX: ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE (ไม่ใช้ JSONStorage ถ้าใช้ SQLite)
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
             json_storage = None  # ไม่ใช้ JSONStorage
             task_data = storage.load_transcription(task_id, skip_migration=True)
             if not task_data:
                 task_data = {}
         else:
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
+            from app.utils.storage_factory import get_storage
+            json_storage = get_storage()
             storage = None
             task_dir = json_storage.storage_dir / "transcriptions" / task_id
             metadata_path = task_dir / "metadata.json"
@@ -1852,8 +1798,8 @@ def process_preprocess_job(
         # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
             storage.save_transcription(task_id, task_data)
         else:
             json_storage.save_transcription(task_id, task_data)
@@ -1892,28 +1838,16 @@ def process_preprocess_job(
         logger.error(f"❌ RQ Worker: Error in preprocess job {task_id}: {e}", exc_info=True)
         # อัปเดต task status เป็น failed
         try:
-            # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                from datetime import datetime, timezone
-                storage = SQLiteStorage()
-                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                storage.save_transcription(task_id, task_data)
-            else:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
-                task_data = {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                json_storage.save_transcription(task_id, task_data)
+            from app.utils.storage_factory import get_storage
+            from datetime import datetime, timezone
+            storage = get_storage()
+            task_data = storage.load_transcription(task_id) or {}
+            task_data["status"] = "failed"
+            task_data["error_message"] = str(e)
+            task_data["current_stage"] = "failed"
+            task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            storage.save_transcription(task_id, task_data)
             
             # ส่ง failure callback (webhook + WebSocket)
             # _send_completion_callback จะส่งทั้ง WebSocket notification และ webhook callback
@@ -1951,15 +1885,15 @@ def process_preprocess_job_chunk_group(
         
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
             json_storage = None
             task_data = storage.load_transcription(task_id, skip_migration=True)
             if not task_data:
                 task_data = {}
         else:
-            from app.utils.json_storage import JSONStorage
-            json_storage = JSONStorage()
+            from app.utils.storage_factory import get_storage
+            json_storage = get_storage()
             storage = None
             task_dir = json_storage.storage_dir / "transcriptions" / task_id
             metadata_path = task_dir / "metadata.json"
@@ -2132,8 +2066,8 @@ def process_preprocess_job_chunk_group(
         try:
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
                 task_data = storage.load_transcription(task_id, skip_migration=True) or {}
                 task_data["status"] = "failed"
                 task_data["error_message"] = str(e)
@@ -2142,8 +2076,8 @@ def process_preprocess_job_chunk_group(
                 task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
                 storage.save_transcription(task_id, task_data)
             else:
-                from app.utils.json_storage import JSONStorage
-                json_storage = JSONStorage()
+                from app.utils.storage_factory import get_storage
+                json_storage = get_storage()
                 task_data = {}
                 task_data["status"] = "failed"
                 task_data["error_message"] = str(e)

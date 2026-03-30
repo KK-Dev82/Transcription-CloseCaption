@@ -40,13 +40,8 @@ class StuckTaskMonitor:
         self.check_interval_seconds = int(os.getenv('STUCK_TASK_CHECK_INTERVAL_SECONDS', '30'))
         
         # Storage
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            self.storage = SQLiteStorage()
-        else:
-            from app.utils.json_storage import JSONStorage
-            self.storage = JSONStorage()
+        from app.utils.storage_factory import get_storage
+        self.storage = get_storage()
     
     def is_task_really_stuck(self, task_id: str, task_data: Dict) -> tuple[bool, Optional[str]]:
         """

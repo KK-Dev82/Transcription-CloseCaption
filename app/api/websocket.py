@@ -17,6 +17,8 @@ import tempfile
 import wave
 from datetime import datetime, timezone
 
+import httpx
+
 from ..services.websocket_service import websocket_manager
 from ..services.close_caption_config import CloseCaptionConfig
 from ..utils.cc_temp_storage import ensure_cc_temp_dir
@@ -56,6 +58,89 @@ _FE_CC_SKIP_POSTPROCESS = os.getenv("FE_CC_REALTIME_LOW_LATENCY", "false").lower
 
 _last_emitted_text_by_meeting: dict[str, str] = {}
 _last_silence_time_by_meeting: dict[str, float] = {}  # ✅ เก็บเวลาที่มีเสียงล่าสุด
+
+# Backend API URL สำหรับ save caption segments ลง DB
+_BACKEND_API_BASE_URL = (
+    os.getenv("BACKEND_API_BASE_URL")
+    or os.getenv("BACKEND_URL")
+    or "http://localhost:5173"
+).rstrip("/")
+
+# Shared httpx client (reuse connection pool)
+_httpx_client: httpx.AsyncClient | None = None
+
+
+def _get_httpx_client() -> httpx.AsyncClient:
+    global _httpx_client
+    if _httpx_client is None or _httpx_client.is_closed:
+        _httpx_client = httpx.AsyncClient(timeout=10.0)
+    return _httpx_client
+
+
+async def _save_caption_segment_to_db(
+    meeting_id: str,
+    session_id: str,
+    chunk_index: int,
+    chunk_start_ms: int,
+    chunk_duration_ms: int,
+    text: str,
+    segments_json: str | None,
+    language: str,
+    model: str | None,
+) -> None:
+    """POST caption segment ไป backend เพื่อบันทึกลง FeLiveCaptionSegments"""
+    url = f"{_BACKEND_API_BASE_URL}/api/internal/fe-caption-segments"
+    payload = {
+        "meetingId": meeting_id,
+        "sessionId": session_id,
+        "chunkIndex": chunk_index,
+        "chunkStartMs": chunk_start_ms,
+        "chunkDurationMs": chunk_duration_ms,
+        "text": text,
+        "segmentsJson": segments_json,
+        "language": language,
+        "model": model,
+    }
+    try:
+        client = _get_httpx_client()
+        resp = await client.post(url, json=payload)
+        if resp.status_code == 200:
+            logger.debug(f"[WS ingest] 💾 Saved segment to DB: chunk_index={chunk_index}")
+        else:
+            logger.warning(
+                f"[WS ingest] ⚠️ Save segment failed: status={resp.status_code}, "
+                f"body={resp.text[:200]}"
+            )
+    except Exception as e:
+        logger.warning(f"[WS ingest] ⚠️ Save segment error: {e}")
+
+
+async def _heartbeat_producer_to_backend(meeting_id: str, session_id: str) -> None:
+    """PUT heartbeat ไป backend เพื่ออัปเดต LastHeartbeatAt"""
+    url = (
+        f"{_BACKEND_API_BASE_URL}/api/internal/fe-caption-producer"
+        f"/{meeting_id}/heartbeat?sessionId={session_id}"
+    )
+    try:
+        client = _get_httpx_client()
+        await client.put(url)
+    except Exception as e:
+        logger.debug(f"[WS ingest] heartbeat to backend error: {e}")
+
+
+async def _deactivate_producer_on_backend(meeting_id: str, session_id: str) -> None:
+    """PUT deactivate ไป backend เมื่อ WS disconnect"""
+    url = (
+        f"{_BACKEND_API_BASE_URL}/api/internal/fe-caption-producer"
+        f"/{meeting_id}/deactivate?sessionId={session_id}"
+    )
+    try:
+        client = _get_httpx_client()
+        await client.put(url)
+        logger.info(f"[WS ingest] 🔌 Deactivated producer on backend: meeting_id={meeting_id}")
+    except Exception as e:
+        logger.warning(f"[WS ingest] ⚠️ Deactivate producer error: {e}")
+
 
 _whisper_service_singleton = None
 
@@ -526,11 +611,15 @@ async def websocket_audio_ingest_endpoint(
     if meeting_id in _debug_audio_save_count:
         _debug_audio_save_count[meeting_id] = 0
 
+    # ✅ Recording start time — ใช้เป็น reference สำหรับ relative time index (playback sync)
+    recording_start_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
     await _safe_send_json(websocket, {
         "type": "status",
         "meeting_id": meeting_id,
         "session_id": producer_session_id,
         "status": "producer_connected",
+        "recording_start_ms": recording_start_ms,
         "message": "Audio ingest connected. Send JSON init then PCM16 binary frames."
     })
 
@@ -559,9 +648,9 @@ async def websocket_audio_ingest_endpoint(
 
     ring = bytearray()
     seq_counter = 1
-    total_bytes_received = 0  # ✅ เพิ่มตัวแปรสำหรับนับ bytes ที่รับมา
-    total_frames_received = 0  # ✅ เพิ่มตัวแปรสำหรับนับ frames ที่รับมา
-    last_frame_time = 0.0  # ✅ เพิ่มตัวแปรสำหรับเก็บเวลาที่รับ frame ล่าสุด
+    total_bytes_received = 0
+    total_frames_received = 0
+    last_frame_time = 0.0
 
     min_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _MIN_WINDOW_SECONDS)
     window_bytes = int(_pcm16_bytes_per_second(sample_rate, channels) * _WINDOW_SECONDS)
@@ -624,6 +713,8 @@ async def websocket_audio_ingest_endpoint(
                     # ✅ ถ้ามี pending text และ silence นานพอ → ส่ง final
                     if pending_text and silence_duration >= _SILENCE_THRESHOLD_SECONDS:
                         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                        chunk_start = pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000))
+                        chunk_dur = max(1, now_ms - chunk_start)
                         event = {
                             "type": "final",
                             "meeting_id": meeting_id,
@@ -631,8 +722,9 @@ async def websocket_audio_ingest_endpoint(
                             "seq": seq_counter,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                             "chunk_index": seq_counter,
-                            "chunk_start_ms": pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)),
-                            "chunk_duration_ms": max(1, now_ms - (pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)))),
+                            "chunk_start_ms": chunk_start,
+                            "chunk_duration_ms": chunk_dur,
+                            "recording_start_ms": recording_start_ms,
                             "language": language,
                             "model": model_size,
                             "provider": _get_fe_cc_provider_name(),
@@ -640,7 +732,7 @@ async def websocket_audio_ingest_endpoint(
                             "segments": [
                                 {
                                     "id": f"seg-{seq_counter}-0",
-                                    "t0_ms": pending_start_ms or (now_ms - int(_WINDOW_SECONDS * 1000)),
+                                    "t0_ms": chunk_start,
                                     "t1_ms": now_ms,
                                     "text": pending_text,
                                     "confidence": 0.0,
@@ -654,6 +746,20 @@ async def websocket_audio_ingest_endpoint(
                             f"[WS ingest] 📤 Broadcast final: meeting_id={meeting_id}, "
                             f"text_length={len(pending_text)}, seq={seq_counter}, text={pending_text[:50]}"
                         )
+
+                        # ✅ Save final segment to backend DB (non-blocking)
+                        asyncio.create_task(_save_caption_segment_to_db(
+                            meeting_id=meeting_id,
+                            session_id=producer_session_id,
+                            chunk_index=seq_counter,
+                            chunk_start_ms=event["chunk_start_ms"],
+                            chunk_duration_ms=event["chunk_duration_ms"],
+                            text=pending_text,
+                            segments_json=json.dumps(event["segments"], ensure_ascii=False),
+                            language=language,
+                            model=model_size,
+                        ))
+
                         _last_emitted_text_by_meeting[meeting_id] = pending_text
                         pending_text = ""
                         pending_start_ms = None
@@ -852,6 +958,10 @@ async def websocket_audio_ingest_endpoint(
                     )
                 elif msg_type == "heartbeat":
                     _acquire_or_refresh_producer_lock(meeting_id, producer_session_id)
+                    # ✅ Forward heartbeat to backend DB
+                    asyncio.create_task(
+                        _heartbeat_producer_to_backend(meeting_id, producer_session_id)
+                    )
                 elif msg_type == "stop":
                     break
             elif "bytes" in message and message["bytes"] is not None:
@@ -902,6 +1012,8 @@ async def websocket_audio_ingest_endpoint(
         except Exception:
             pass
         _release_producer_lock_if_owner(meeting_id, producer_session_id)
+        # ✅ Deactivate producer on backend DB
+        await _deactivate_producer_on_backend(meeting_id, producer_session_id)
         logger.info(
             f"[WS ingest] 🧹 Cleanup: meeting_id={meeting_id}, "
             f"session_id={producer_session_id}, "

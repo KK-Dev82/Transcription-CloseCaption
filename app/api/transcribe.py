@@ -32,11 +32,11 @@ async def cancel_transcription(task_id: str):
         
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
         else:
-            from app.utils.json_storage import JSONStorage
-            storage = JSONStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
         
         task = storage.load_transcription(task_id)
         if not task:
@@ -333,11 +333,11 @@ async def start_transcription(request: TranscriptionRequest):
             
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
             else:
-                from app.utils.json_storage import JSONStorage
-                storage = JSONStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
             
             from app.services.close_caption_config import get_transcription_model_display
             _raw = (request.model_size or "").strip().lower()
@@ -407,11 +407,11 @@ async def start_transcription(request: TranscriptionRequest):
         # ใช้ storage ตาม STORAGE_TYPE (SQLite หรือ JSON)
         storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
         if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
         else:
-            from app.utils.json_storage import JSONStorage
-            storage = JSONStorage()
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
         
         file_service = FileService()
         

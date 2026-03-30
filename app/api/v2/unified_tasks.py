@@ -24,83 +24,22 @@ router = APIRouter(prefix="/api/v2/tasks", tags=["Tasks V2 (Unified)"])
 # ==================== Helper Functions ====================
 
 def _get_storage():
-    """Get storage instance (SQLite primary, JSON fallback)"""
-    from app.utils.sqlite_storage import SQLiteStorage
-    from app.utils.json_storage import JSONStorage
-    
-    sqlite_storage = SQLiteStorage()
-    json_storage = JSONStorage()
-    
-    return sqlite_storage, json_storage
+    """Get storage instance via factory (Postgres, SQLite, or JSON)"""
+    from app.utils.storage_factory import get_storage
+    return get_storage()
 
 
 def _get_task_from_storage(task_id: str) -> Optional[Dict]:
-    """Get task from storage (try SQLite first, fallback to JSON)"""
-    sqlite_storage, json_storage = _get_storage()
-    
-    # Try SQLite first
-    task = sqlite_storage.load_transcription(task_id)
-    if not task:
-        task = json_storage.get_transcription(task_id)
-    
-    # ถ้าใช้ SQLite storage และ task มีอยู่แล้ว ให้ลองดึง segments จาก segments table
-    if task:
-        try:
-            # Check if segments table exists and has data
-            conn = sqlite_storage._get_connection()
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='segments'"
-            )
-            if cursor.fetchone():
-                # ดึง segments จาก segments table
-                cursor = conn.execute(
-                    "SELECT idx, start_time, end_time, text, confidence FROM segments WHERE task_id = ? ORDER BY idx",
-                    (task_id,)
-                )
-                segments_rows = cursor.fetchall()
-                
-                # ถ้าพบ segments ใน segments table ให้ใช้แทน chunks
-                if segments_rows:
-                    segments = []
-                    for row in segments_rows:
-                        # row format: (idx, start_time, end_time, text, confidence)
-                        # Use dict-like access if Row factory, else index access
-                        if hasattr(row, 'keys'):
-                            # sqlite3.Row with row_factory
-                            segments.append({
-                                "start_time": float(row['start_time']) if row['start_time'] is not None else 0.0,
-                                "end_time": float(row['end_time']) if row['end_time'] is not None else 0.0,
-                                "text": str(row['text']) if row['text'] is not None else "",
-                                "confidence": float(row['confidence']) if row['confidence'] is not None else None
-                            })
-                        else:
-                            # Tuple access (fallback)
-                            segments.append({
-                                "start_time": float(row[1]) if len(row) > 1 and row[1] is not None else 0.0,
-                                "end_time": float(row[2]) if len(row) > 2 and row[2] is not None else 0.0,
-                                "text": str(row[3]) if len(row) > 3 and row[3] is not None else "",
-                                "confidence": float(row[4]) if len(row) > 4 and row[4] is not None else None
-                            })
-                    # เพิ่ม segments เข้า task (ใช้แทน chunks หรือ segments เดิม)
-                    if segments:
-                        task["segments"] = segments
-                        task["chunks"] = segments  # เก็บ chunks ด้วยเพื่อ backward compatibility
-                        logger.debug(f"✅ Loaded {len(segments)} segments from segments table for {task_id}")
-        except Exception as e:
-            logger.debug(f"Could not load segments from segments table for {task_id}: {e}")
-    
+    """Get task from storage"""
+    storage = _get_storage()
+    task = storage.load_transcription(task_id)
     return task
 
 
 def _get_all_tasks() -> List[Dict]:
     """Get all tasks from storage"""
-    sqlite_storage, json_storage = _get_storage()
-    
-    all_tasks = sqlite_storage.list_all_transcriptions()
-    if not all_tasks:
-        all_tasks = json_storage.list_all_transcriptions()
-    
-    return all_tasks or []
+    storage = _get_storage()
+    return storage.list_all_transcriptions() or []
 
 
 def _parse_datetime(dt_str: Any) -> Optional[datetime]:
@@ -712,8 +651,8 @@ async def pause_task(task_id: str) -> Dict:
         task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         task_data["current_stage"] = "paused"
         task_data["current_stage_description"] = "หยุดชั่วคราว (รอ Resume)"
-        sqlite_storage, _ = _get_storage()
-        sqlite_storage.save_transcription(task_id, task_data)
+        storage = _get_storage()
+        storage.save_transcription(task_id, task_data)
         return {"success": True, "message": "หยุดชั่วคราวแล้ว", "task_id": task_id, "status": "paused"}
     except HTTPException:
         raise
@@ -758,8 +697,8 @@ async def resume_task(task_id: str) -> Dict:
             task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
             task_data["current_stage"] = "transcribing"
             task_data["current_stage_description"] = "กำลังแปลงเสียงเป็นข้อความ (ต่อจาก Resume)"
-            sqlite_storage, _ = _get_storage()
-            sqlite_storage.save_transcription(task_id, task_data)
+            storage = _get_storage()
+            storage.save_transcription(task_id, task_data)
             return {"success": True, "message": "ดำเนินการต่อแล้ว", "task_id": task_id, "status": "processing"}
         return {"success": True, "message": "ไม่มี chunk ถัดไป (อาจเสร็จหมดแล้ว)", "task_id": task_id, "status": status}
     except HTTPException:
@@ -807,8 +746,7 @@ async def cancel_task(task_id: str) -> Dict:
         
         # ใช้ logic จาก transcribe.py
         from datetime import datetime, timezone
-        sqlite_storage, json_storage = _get_storage()
-        storage = sqlite_storage
+        storage = _get_storage()
         
         # Cancel Redis jobs
         cancelled_jobs = 0
@@ -891,8 +829,7 @@ async def retry_task(task_id: str) -> Dict:
             from app.services.redis_queue_service import get_redis_queue_service
             from app.services.close_caption_config import get_transcription_model_display
             
-            sqlite_storage, json_storage = _get_storage()
-            storage = sqlite_storage
+            storage = _get_storage()
             
             # ล้าง Redis keys ของ task
             redis_url = os.getenv('REDIS_URL')
@@ -1044,8 +981,7 @@ async def resubmit_task(task_id: str) -> Dict:
         source = task_data.get("source") if task_data.get("source") == "video_record" else None
         
         # สร้าง task และบันทึกลง storage
-        sqlite_storage, json_storage = _get_storage()
-        storage = sqlite_storage  # ใช้ SQLite เป็นหลัก
+        storage = _get_storage()  # ใช้ SQLite เป็นหลัก
         task_dict = {
             "task_id": new_task_id,
             "status": "queued",
@@ -1186,8 +1122,8 @@ async def change_task_priority(task_id: str, priority: bool = True) -> Dict:
         # อัปเดต task data
         from datetime import datetime, timezone
         task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sqlite_storage, _ = _get_storage()
-        sqlite_storage.save_transcription(task_id, task_data)
+        storage = _get_storage()
+        storage.save_transcription(task_id, task_data)
 
         logger.info(f"✅ Changed priority for task {task_id} (priority={priority}, source={new_source})")
         return {

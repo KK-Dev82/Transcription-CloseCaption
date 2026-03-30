@@ -59,11 +59,11 @@ async def get_workers_status() -> Dict:
                     try:
                         storage_type = os.getenv("STORAGE_TYPE", "sqlite").lower()
                         if storage_type == "sqlite":
-                            from app.utils.sqlite_storage import SQLiteStorage
-                            storage = SQLiteStorage()
+                            from app.utils.storage_factory import get_storage
+                            storage = get_storage()
                         else:
-                            from app.utils.json_storage import JSONStorage
-                            storage = JSONStorage()
+                            from app.utils.storage_factory import get_storage
+                            storage = get_storage()
                         task_data = storage.load_transcription(current_task_id)
                         if task_data:
                             current_task_source = task_data.get("source")

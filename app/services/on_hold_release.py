@@ -117,20 +117,11 @@ def _do_claim_and_enqueue_next_chunk(conn, main_task_id: str, queue_svc, ttl_sec
 def _update_task_stage(task_id: str):
     """อัปเดต task status เป็น processing"""
     try:
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
-            from app.utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
-        else:
-            from app.utils.json_storage import JSONStorage
-            storage = JSONStorage()
-        
+        from app.utils.storage_factory import get_storage
+        storage = get_storage()
+
         from datetime import datetime, timezone
-        from app.utils.sqlite_storage import SQLiteStorage
-        if isinstance(storage, SQLiteStorage):
-            task = storage.load_transcription(task_id, skip_migration=True)
-        else:
-            task = storage.load_transcription(task_id)
+        task = storage.load_transcription(task_id)
         if not task:
             return
         task["status"] = "processing"

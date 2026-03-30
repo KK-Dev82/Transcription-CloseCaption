@@ -526,11 +526,11 @@ class RedisQueueService:
         try:
             storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             if storage_type == 'sqlite':
-                from app.utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
             else:
-                from app.utils.json_storage import JSONStorage
-                storage = JSONStorage()
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
             all_tasks = storage.list_all_transcriptions()
             active_record = sum(
                 1 for t in all_tasks

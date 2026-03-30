@@ -10,31 +10,20 @@ from pydantic import BaseModel
 import json
 import asyncio
 
-from ..utils.json_storage import JSONStorage
-from ..utils.sqlite_storage import SQLiteStorage
+from ..utils.storage_factory import get_storage
 from ..services.websocket_service import websocket_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/history", tags=["History"])
 
-# Use SQLite instead of JSON storage
-# Lazy initialization เพื่อไม่ให้ hang ตอน import
-json_storage = None
-sqlite_storage = None
-
-def get_json_storage():
-    """Get JSONStorage instance (lazy init)"""
-    global json_storage
-    if json_storage is None:
-        json_storage = JSONStorage()
-    return json_storage
 
 def get_sqlite_storage():
-    """Get SQLiteStorage instance (lazy init)"""
-    global sqlite_storage
-    if sqlite_storage is None:
-        sqlite_storage = SQLiteStorage()
-    return sqlite_storage
+    """Get storage instance via factory (backward-compatible name)"""
+    return get_storage()
+
+def get_json_storage():
+    """Get storage instance via factory (backward-compatible name)"""
+    return get_storage()
 
 class HistoryFilter(BaseModel):
     status: Optional[str] = None  # completed, failed, processing
