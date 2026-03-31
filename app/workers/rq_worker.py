@@ -1107,26 +1107,12 @@ def process_transcription_job(
             phase_timings['t_merge_end'] = datetime.now(timezone.utc).isoformat()
             phase_timings['merge_time'] = t_merge_end - t_merge_start
             
-            # อัปเดต main task จาก storage (รองรับทั้ง SQLite และ JSON)
-            # Note: os is already imported at module level (line 8)
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            
-            if storage_type == 'sqlite':
-                from app.utils.storage_factory import get_storage
-                storage = get_storage()
-                task_data = storage.load_transcription(main_task_id, skip_migration=True)
-                if not task_data:
-                    task_data = {}
-            else:
-                from app.utils.storage_factory import get_storage
-                json_storage = get_storage()
-                task_dir = json_storage.storage_dir / "transcriptions" / main_task_id
-                metadata_path = task_dir / "metadata.json"
-                if metadata_path.exists():
-                    with open(metadata_path, 'r', encoding='utf-8') as f:
-                        task_data = json.load(f)
-                else:
-                    task_data = {}
+            # อัปเดต main task จาก storage (ใช้ storage factory)
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
+            task_data = storage.load_transcription(main_task_id)
+            if not task_data:
+                task_data = {}
             
             # FIX: บันทึก phase timings และคำนวณ total time
             t_aggregator_end = time.time()
@@ -1482,27 +1468,12 @@ def process_preprocess_job(
         import json
         from redis import Redis
         
-        # FIX: ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE (ไม่ใช้ JSONStorage ถ้าใช้ SQLite)
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
-            from app.utils.storage_factory import get_storage
-            storage = get_storage()
-            json_storage = None  # ไม่ใช้ JSONStorage
-            task_data = storage.load_transcription(task_id, skip_migration=True)
-            if not task_data:
-                task_data = {}
-        else:
-            from app.utils.storage_factory import get_storage
-            json_storage = get_storage()
-            storage = None
-            task_dir = json_storage.storage_dir / "transcriptions" / task_id
-            metadata_path = task_dir / "metadata.json"
-            if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    task_data = json.load(f)
-            else:
-                task_data = {}
-        
+        from app.utils.storage_factory import get_storage
+        storage = get_storage()
+        task_data = storage.load_transcription(task_id)
+        if not task_data:
+            task_data = {}
+
         video_service = VideoService()
         queue_service = get_redis_queue_service()
         
@@ -1901,26 +1872,12 @@ def process_preprocess_job_chunk_group(
         import json
         from redis import Redis
         
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
-            from app.utils.storage_factory import get_storage
-            storage = get_storage()
-            json_storage = None
-            task_data = storage.load_transcription(task_id, skip_migration=True)
-            if not task_data:
-                task_data = {}
-        else:
-            from app.utils.storage_factory import get_storage
-            json_storage = get_storage()
-            storage = None
-            task_dir = json_storage.storage_dir / "transcriptions" / task_id
-            metadata_path = task_dir / "metadata.json"
-            if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    task_data = json.load(f)
-            else:
-                task_data = {}
-        
+        from app.utils.storage_factory import get_storage
+        storage = get_storage()
+        task_data = storage.load_transcription(task_id)
+        if not task_data:
+            task_data = {}
+
         video_service = VideoService()
         queue_service = get_redis_queue_service()
         
