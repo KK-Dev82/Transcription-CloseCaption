@@ -786,8 +786,6 @@ def process_transcription_job(
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
             # ใช้ storage factory
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
                 from app.utils.storage_factory import get_storage
                 storage = get_storage()
                 json_storage = None  # ไม่ใช้ JSONStorage
@@ -829,8 +827,6 @@ def process_transcription_job(
             
             # FIX: อัปเดต stage: transcribing (ไม่ hardcode progress=40 ถ้า DB ตอนนั้นสูงกว่าแล้ว)
             # ตรวจสอบ progress ปัจจุบันก่อน
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
                 from app.utils.storage_factory import get_storage
                 storage = get_storage()
                 existing_task = storage.load_transcription(main_task_id, skip_migration=True)
@@ -909,7 +905,7 @@ def process_transcription_job(
             # Diarization: โหลด task + diarization ถ้าเปิด
             enable_diarization = False
             diarization_segments = None
-            _td = (storage.load_transcription(main_task_id, skip_migration=True) if (storage_type == 'sqlite' and storage) else (json_storage.load_transcription(main_task_id) if json_storage else None)) or {}
+            _td = (storage.load_transcription(main_task_id) if storage else {}) or {}
             enable_diarization = bool(_td.get("enable_diarization", False))
             if enable_diarization:
                 ds = conn.get(f"task:{main_task_id}:diarization")
@@ -931,8 +927,6 @@ def process_transcription_job(
             # os already imported at top level
             
             # Check if using SQLite storage
-            storage_type = os.getenv('STORAGE_TYPE', 'json').lower()
-            if storage_type == 'sqlite':
                 db_path = os.getenv('SQLITE_DB_PATH', 'storage/database.db')
                 # Use centralized schema initialization
                 sqlite_conn = ensure_sqlite_schema(db_path)
@@ -1157,7 +1151,6 @@ def process_transcription_job(
             # FIX: ไม่เก็บ segments ใน task_data (เก็บใน SQLite แล้ว)
             # ถ้าใช้ SQLite: segments อยู่ใน segments table แล้ว
             # ถ้าใช้ JSON: ยังต้องเก็บ chunks (backward compatibility)
-            if storage_type != 'sqlite':
                 # Fallback: ถ้ายังใช้ JSON storage ต้องเก็บ chunks (แต่ไม่ควรใช้)
                 logger.warning(f"⚠️  Using JSON storage - segments not stored in SQLite")
             
@@ -1167,7 +1160,6 @@ def process_transcription_job(
             task_data['phase_timings']['aggregator'] = phase_timings
             
             # บันทึกกลับไป storage (ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE)
-            if storage_type == 'sqlite':
                 storage.save_transcription(main_task_id, task_data)
             else:
                 json_storage.save_transcription(main_task_id, task_data)
@@ -1297,7 +1289,7 @@ def process_transcription_job(
                 "task_id": main_task_id,
                 "text": task_data.get("full_text", ""),
                 "total_duration": task_data.get("total_duration", 0),
-                "segments_stored_in": "sqlite" if storage_type == 'sqlite' else "json"
+                "segments_stored_in": "postgres"
             }
         else:
             # Full job: ใช้ _process_transcription (จะ chunking เอง) - สำหรับ backward compatibility
@@ -1383,10 +1375,8 @@ def process_transcription_job(
         try:
             from datetime import datetime, timezone
             # os already imported at module level (line 8)
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
             # สำหรับ chunk job ไม่ต้อง mark main task เป็น failed (เรา record empty chunk แล้ว)
             if "_chunk_" not in task_id:
-                if storage_type == 'sqlite':
                     from app.utils.storage_factory import get_storage
                     storage = get_storage()
                     task_data = storage.load_transcription(task_id, skip_migration=True) or {}
@@ -1492,10 +1482,7 @@ def process_preprocess_job(
         
         # FIX: บันทึก task_data ลง storage ทันที (รวม model_size) เพื่อป้องกัน fallback เป็น "base"
         # กรณี transcription_enhanced บันทึกไว้แค่ JSON แต่ STORAGE_TYPE=sqlite
-        if storage_type == 'sqlite' and storage:
-            storage.save_transcription(task_id, task_data)
-        elif storage_type != 'sqlite' and json_storage:
-            json_storage.save_transcription(task_id, task_data)
+        storage.save_transcription(task_id, task_data)
         
         # อัปเดต stage: preprocessing
         _update_task_stage_sync(
@@ -1504,8 +1491,7 @@ def process_preprocess_job(
             status="processing",
             stage="preprocessing",
             stage_description="กำลังเตรียมไฟล์และแยกเสียง",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         
         # 1. Extract audio
@@ -1517,8 +1503,7 @@ def process_preprocess_job(
             status="processing",
             stage="extracting_audio",
             stage_description="กำลังแยกเสียงจากวิดีโอ",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         audio_path = video_service.extract_audio(file_path, task_id=task_id)
         t_extract_end = time.time()
@@ -1532,8 +1517,7 @@ def process_preprocess_job(
             t_diar_start = time.time()
             _update_task_stage_sync(
                 task_id=task_id, progress=20, status="processing", stage="diarization",
-                stage_description="กำลังแยกผู้พูด", stage_progress=0,
-                json_storage=json_storage if storage_type != 'sqlite' else None
+                stage_description="กำลังแยกผู้พูด", stage_progress=0
             )
             try:
                 from app.services.diarization_service import diarize
@@ -1565,8 +1549,7 @@ def process_preprocess_job(
             status="processing",
             stage="chunking",
             stage_description="กำลังแบ่งไฟล์เป็นส่วนๆ" if use_chunking else "ใช้ไฟล์เต็ม (ไม่แบ่ง)",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         chunks = video_service.create_chunks(audio_path, chunk_duration, task_id=task_id)
         total_chunks = len(chunks)
@@ -1582,8 +1565,7 @@ def process_preprocess_job(
             status="processing",
             stage="enqueueing",
             stage_description=f"กำลังส่ง {total_chunks} ส่วนไปประมวลผล",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         
         # 3. Enqueue chunk jobs ไปยัง GPU queues (Fan-out)
@@ -1637,8 +1619,7 @@ def process_preprocess_job(
                     status="on_hold",
                     stage="on_hold",
                     stage_description="รอ Record เสร็จก่อน",
-                    stage_progress=0,
-                    json_storage=json_storage if storage_type != 'sqlite' else None
+                    stage_progress=0
                 )
                 chunk_data = []
                 # ข้ามไปยัง aggregator enqueue (ยังต้อง enqueue aggregator)
@@ -1785,8 +1766,6 @@ def process_preprocess_job(
         task_data['phase_timings']['preprocess'] = phase_timings
         
         # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
             from app.utils.storage_factory import get_storage
             storage = get_storage()
             storage.save_transcription(task_id, task_data)
@@ -1894,10 +1873,7 @@ def process_preprocess_job_chunk_group(
         if "status" not in task_data:
             task_data["status"] = "processing"
         
-        if storage_type == 'sqlite' and storage:
-            storage.save_transcription(task_id, task_data)
-        elif storage_type != 'sqlite' and json_storage:
-            json_storage.save_transcription(task_id, task_data)
+        storage.save_transcription(task_id, task_data)
         
         _update_task_stage_sync(
             task_id=task_id,
@@ -1905,8 +1881,7 @@ def process_preprocess_job_chunk_group(
             status="processing",
             stage="preprocessing_chunk_group",
             stage_description=f"กำลังเตรียม {len(file_paths)} ไฟล์",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         
         # Convert เป็น 16k mono ถ้าจำเป็น (ข้ามถ้าเป็น WAV 16k แล้ว)
@@ -1929,8 +1904,7 @@ def process_preprocess_job_chunk_group(
             status="processing",
             stage="enqueueing",
             stage_description=f"กำลังส่ง {total_chunks} ส่วนไปประมวลผล",
-            stage_progress=0,
-            json_storage=json_storage if storage_type != 'sqlite' else None
+            stage_progress=0
         )
         
         num_gpus = int(os.getenv('NUM_GPUS', '0'))
@@ -2011,10 +1985,7 @@ def process_preprocess_job_chunk_group(
         for i in range(enqueued_count):
             conn.setex(f"{enqueued_guard_prefix}:{i}", ttl_seconds, '1')
         
-        if storage_type == 'sqlite' and storage:
-            storage.save_transcription(task_id, task_data)
-        elif storage_type != 'sqlite' and json_storage:
-            json_storage.save_transcription(task_id, task_data)
+        storage.save_transcription(task_id, task_data)
         
         try:
             from app.services.websocket_service import websocket_manager
@@ -2039,8 +2010,6 @@ def process_preprocess_job_chunk_group(
     except Exception as e:
         logger.error(f"❌ Chunk group preprocess job {task_id} failed: {e}", exc_info=True)
         try:
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
                 from app.utils.storage_factory import get_storage
                 storage = get_storage()
                 task_data = storage.load_transcription(task_id, skip_migration=True) or {}
