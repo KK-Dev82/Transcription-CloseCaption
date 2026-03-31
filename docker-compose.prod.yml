@@ -25,13 +25,15 @@ services:
     ports:
       - "8010:8010"
       - "8002:8002"
+    env_file:
+      - .env.runpod  # Docker จะ export env vars เข้า container ทุก process โดยตรง
     volumes:
       # Data volumes (persist ข้าม container restart)
       - ./uploads:/workspace/transcription-service/uploads
       - ./storage:/workspace/transcription-service/storage
       - ./models:/workspace/transcription-service/models
       - ./temp:/workspace/transcription-service/temp
-      # Environment config
+      # Environment config (ยังเก็บไว้สำหรับ start-pod.sh source)
       - ./.env.runpod:/workspace/transcription-service/.env.runpod:ro
     restart: unless-stopped
     depends_on:
