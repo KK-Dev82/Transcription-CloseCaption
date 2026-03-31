@@ -270,13 +270,8 @@ async def get_dashboard_summary():
         tasks_by_source: Dict = {}
         completed_today = 0
         try:
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
-                from ..utils.storage_factory import get_storage
-                storage = SQLiteStorage()
-            else:
-                from ..utils.json_storage import JSONStorage
-                storage = JSONStorage()
+            from ..utils.storage_factory import get_storage
+            storage = get_storage()
             all_tasks = storage.list_all_transcriptions()
             today = datetime.utcnow().date()
             for t in all_tasks:
@@ -372,13 +367,8 @@ async def get_prometheus_metrics():
 
         # Tasks by status
         try:
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
-                from ..utils.storage_factory import get_storage
-                storage = SQLiteStorage()
-            else:
-                from ..utils.json_storage import JSONStorage
-                storage = JSONStorage()
+            from ..utils.storage_factory import get_storage
+            storage = get_storage()
             all_tasks = storage.list_all_transcriptions()
             status_counts: Dict = {}
             source_status_counts: Dict = {}

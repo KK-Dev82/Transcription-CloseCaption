@@ -10,12 +10,12 @@ import json
 
 from ..services.transcription_service import TranscriptionService
 from ..services.websocket_service import websocket_manager
-from ..utils.json_storage import JSONStorage
+from ..utils.storage_factory import get_storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/polling", tags=["Polling"])
 
-json_storage = JSONStorage()
+json_storage = get_storage()
 transcription_service = TranscriptionService()
 
 @router.get("/task/{task_id}")
@@ -77,7 +77,7 @@ async def poll_task_status(task_id: str):
             return response_data
         
         # ถ้าไม่มีใน memory ให้ดึงจาก storage
-        task_data = json_storage.get_transcription(task_id)
+        task_data = json_storage.load_transcription(task_id)
         if task_data:
             # ดึงข้อมูล transcription ที่มีอยู่
             partial_text = ""

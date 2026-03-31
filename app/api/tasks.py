@@ -8,12 +8,12 @@ from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 
 from ..services.transcription_service import TranscriptionService
-from ..utils.json_storage import JSONStorage
+from ..utils.storage_factory import get_storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["Tasks"])
 
-json_storage = JSONStorage()
+json_storage = get_storage()
 
 def parse_date(date_str: str) -> datetime.date:
     """Parse date string to date object"""
@@ -263,7 +263,7 @@ async def get_task_by_id(task_id: str):
     """
     try:
         # ดึงข้อมูลจาก storage
-        task_data = json_storage.get_transcription(task_id)
+        task_data = json_storage.load_transcription(task_id)
         
         if not task_data:
             raise HTTPException(status_code=404, detail=f"Task {task_id} not found")

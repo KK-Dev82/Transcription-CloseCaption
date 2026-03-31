@@ -8,13 +8,12 @@ from typing import Dict, List
 import logging
 import json
 
-from ..utils.json_storage import JSONStorage
+from ..utils.storage_factory import get_storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/progress", tags=["progress-tracking"])
 
-# ใช้ JSONStorage โดยตรงแทน TranscriptionService
-json_storage = JSONStorage()
+json_storage = get_storage()
 
 @router.get("/transcription/{task_id}")
 async def get_transcription_progress(task_id: str):
@@ -27,7 +26,7 @@ async def get_transcription_progress(task_id: str):
     """
     try:
         # ดึงข้อมูลจาก storage โดยตรง
-        task_dict = json_storage.get_transcription(task_id)
+        task_dict = json_storage.load_transcription(task_id)
         
         if not task_dict:
             raise HTTPException(status_code=404, detail="ไม่พบ task")

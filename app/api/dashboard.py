@@ -32,8 +32,8 @@ async def dashboard_home(request: Request):
 async def get_recent_tasks():
     """ดึงรายการ tasks ล่าสุด"""
     try:
-        from ..utils.json_storage import JSONStorage
-        json_storage = JSONStorage()
+        from ..utils.storage_factory import get_storage
+        json_storage = get_storage()
         
         # ดึง tasks ล่าสุด 10 รายการ
         all_tasks = json_storage.list_all_transcriptions()

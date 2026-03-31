@@ -80,14 +80,9 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
             from app.services.chunk_group_validator import validate_chunk_group_request
             validate_chunk_group_request(request.file_paths)
             
-            storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-            if storage_type == 'sqlite':
-                from ..utils.sqlite_storage import SQLiteStorage
-                storage = SQLiteStorage()
-            else:
-                from ..utils.json_storage import JSONStorage
-                storage = JSONStorage()
-            
+            from ..utils.storage_factory import get_storage
+            storage = get_storage()
+
             from ..services.close_caption_config import get_transcription_model_display
             _raw = (request.model_size or "").strip().lower()
             if _raw in ("", "default", "base"):
@@ -188,14 +183,8 @@ async def start_enhanced_transcription(request: EnhancedTranscriptionRequest):
         # สร้าง task_id
         task_id = str(uuid.uuid4())
         
-        # สร้าง task และบันทึกลง storage (ใช้ storage ตาม STORAGE_TYPE เหมือน transcribe.py)
-        storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
-        if storage_type == 'sqlite':
-            from ..utils.sqlite_storage import SQLiteStorage
-            storage = SQLiteStorage()
-        else:
-            from ..utils.json_storage import JSONStorage
-            storage = JSONStorage()
+        from ..utils.storage_factory import get_storage
+        storage = get_storage()
         task_dict = {
             "task_id": task_id,
             "status": "queued",
@@ -380,8 +369,8 @@ async def _apply_thai_processing_to_task(task_id: str, task: Dict) -> Dict:
         enhanced_task["text"] = corrected_text
         enhanced_task["original_text"] = task.get("text", "")
         
-        # บันทึกกลับ (อัปเดต JSON storage)
-        transcription_service.json_storage.save_transcription(task_id, enhanced_task)
+        # บันทึกกลับ (ผ่าน storage factory)
+        transcription_service.storage.save_transcription(task_id, enhanced_task)
         
         logger.info(f"Thai processing completed for task {task_id}: {enhanced_task['thai_processing_stats']}")
         return enhanced_task
