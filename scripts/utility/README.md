@@ -232,3 +232,33 @@ python3 scripts/utility/check-pending-tasks.py
 - **GPU 4080:** ใช้ `medium` (เทียบเท่า Groq API) ⭐
 - **Best Accuracy:** ใช้ `large-v3`
 
+---
+
+### `generate_backfill_sql.py`
+**สร้างไฟล์ SQL สำหรับ backfill segments จาก SQLite ไป Postgres**
+
+ใช้เมื่อ: มีข้อมูลเก่าใน SQLite ที่ Postgres ยังมี `SegmentsJson = "[]"`
+
+```bash
+# รันบน transcription server (10.200.22.64)
+python3 scripts/utility/generate_backfill_sql.py
+
+# กำหนด output path
+python3 scripts/utility/generate_backfill_sql.py -o /tmp/backfill.sql
+```
+
+Output: ไฟล์ `.sql` → copy ไปรันใน **pgAdmin** (Database: Senate, Server: 10.200.22.59)
+
+---
+
+### `check_storage_status.py`
+**ตรวจสอบสถานะข้อมูลใน SQLite และ Transcription Service**
+
+```bash
+# ดูภาพรวม
+python3 scripts/utility/check_storage_status.py
+
+# ตรวจ task เฉพาะ
+python3 scripts/utility/check_storage_status.py --task-id abc123-def456
+```
+

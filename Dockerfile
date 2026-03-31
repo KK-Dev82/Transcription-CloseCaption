@@ -20,6 +20,9 @@ FROM kksenateacr.azurecr.io/kk-base:ubuntu2404-cuda128-torch280
 COPY . /workspace/transcription-service
 WORKDIR /workspace/transcription-service
 
+# ติดตั้ง packages ที่ base image ยังไม่มี (psycopg2 สำหรับ PostgreSQL storage)
+RUN pip install --no-cache-dir psycopg2-binary>=2.9.9 2>/dev/null || true
+
 RUN chmod +x scripts/pod/*.sh scripts/utility/*.sh 2>/dev/null || true
 
 EXPOSE 8010 8002
