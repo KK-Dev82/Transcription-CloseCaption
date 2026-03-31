@@ -431,6 +431,23 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                 # สร้าง TranscriptionResponse object สำหรับ _send_callback
                 from app.services.close_caption_config import get_transcription_model_display
                 model_size_val = task_data.get("model_size") or get_transcription_model_display()
+                # ดึง chunks จาก task_data (อาจอยู่ใน "chunks" หรือ "segments")
+                chunks_data = task_data.get("chunks") or task_data.get("segments") or []
+                # แปลงเป็น TranscriptionChunk objects ถ้าจำเป็น
+                from app.models.transcription import TranscriptionChunk
+                parsed_chunks = []
+                for c in chunks_data:
+                    if isinstance(c, dict):
+                        try:
+                            parsed_chunks.append(TranscriptionChunk(
+                                start_time=c.get("start_time", 0),
+                                end_time=c.get("end_time", 0),
+                                text=c.get("text", ""),
+                                confidence=c.get("confidence"),
+                            ))
+                        except Exception:
+                            pass
+
                 task = TranscriptionResponse(
                     task_id=task_id,
                     status=status,
@@ -442,7 +459,8 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                     progress=task_data.get("progress", 100 if status == "completed" else 0),
                     full_text=task_data.get("full_text", "") or task_data.get("text", ""),
                     total_duration=task_data.get("total_duration", 0),
-                    source=task_data.get("source"),  # "upload" | "video_record" | "fe_cc" — ส่งใน callback
+                    source=task_data.get("source"),
+                    chunks=parsed_chunks if parsed_chunks else None,
                 )
                 
                 if status == "completed":
