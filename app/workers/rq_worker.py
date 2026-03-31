@@ -786,14 +786,9 @@ def process_transcription_job(
             logger.info(f"📊 Processing aggregator job (using Redis atomic counter)")
             
             # ใช้ storage factory
-                from app.utils.storage_factory import get_storage
-                storage = get_storage()
-                json_storage = None  # ไม่ใช้ JSONStorage
-            else:
-                from app.utils.storage_factory import get_storage
-                json_storage = get_storage()
-                storage = None
-            
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
+
             conn = get_redis_connection(decode_responses=True)
             
             # ดึง main task_id (เอา _aggregator ออก)
@@ -827,11 +822,7 @@ def process_transcription_job(
             
             # FIX: อัปเดต stage: transcribing (ไม่ hardcode progress=40 ถ้า DB ตอนนั้นสูงกว่าแล้ว)
             # ตรวจสอบ progress ปัจจุบันก่อน
-                from app.utils.storage_factory import get_storage
-                storage = get_storage()
-                existing_task = storage.load_transcription(main_task_id, skip_migration=True)
-            else:
-                existing_task = json_storage.load_transcription(main_task_id)
+            existing_task = storage.load_transcription(main_task_id)
             
             # ใช้ progress สูงสุดระหว่าง 40 กับ progress ที่มีอยู่ (ป้องกัน progress ย้อนกลับ)
             current_progress = existing_task.get("progress", 0) if existing_task else 0
@@ -926,21 +917,19 @@ def process_transcription_job(
             from app.utils.sqlite_schema import ensure_sqlite_schema
             # os already imported at top level
             
-            # Check if using SQLite storage
+            # SQLite segments table (เฉพาะ SQLite mode — Postgres เก็บใน TranscriptionResults.SegmentsJson)
+            sqlite_conn = None
+            segments_batch = None
+            _storage_type = os.getenv('STORAGE_TYPE', 'sqlite').lower()
+            if _storage_type == 'sqlite':
                 db_path = os.getenv('SQLITE_DB_PATH', 'storage/database.db')
-                # Use centralized schema initialization
                 sqlite_conn = ensure_sqlite_schema(db_path)
-                
-                # Prepare bulk insert statement
                 insert_stmt = """
                     INSERT INTO segments (task_id, idx, start_time, end_time, text, confidence)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """
                 segments_batch = []
-                batch_size = 100  # Insert in batches
-            else:
-                sqlite_conn = None
-                segments_batch = None
+                batch_size = 100
             
             # Process chunks ทีละตัว (sorted by index)
             processed_count = 0
@@ -1148,21 +1137,13 @@ def process_transcription_job(
             task_data["current_stage_description"] = "เสร็จสิ้น"
             task_data["stage_progress"] = 100
             
-            # FIX: ไม่เก็บ segments ใน task_data (เก็บใน SQLite แล้ว)
-            # ถ้าใช้ SQLite: segments อยู่ใน segments table แล้ว
-            # ถ้าใช้ JSON: ยังต้องเก็บ chunks (backward compatibility)
-                # Fallback: ถ้ายังใช้ JSON storage ต้องเก็บ chunks (แต่ไม่ควรใช้)
-                logger.warning(f"⚠️  Using JSON storage - segments not stored in SQLite")
-            
             # บันทึก aggregator phase timings
             if 'phase_timings' not in task_data:
                 task_data['phase_timings'] = {}
             task_data['phase_timings']['aggregator'] = phase_timings
-            
-            # บันทึกกลับไป storage (ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE)
-                storage.save_transcription(main_task_id, task_data)
-            else:
-                json_storage.save_transcription(main_task_id, task_data)
+
+            # บันทึกกลับไป storage
+            storage.save_transcription(main_task_id, task_data)
             
             # ส่ง completion callback (webhook + WebSocket)
             # _send_completion_callback จะส่งทั้ง WebSocket notification และ webhook callback
@@ -1377,24 +1358,15 @@ def process_transcription_job(
             # os already imported at module level (line 8)
             # สำหรับ chunk job ไม่ต้อง mark main task เป็น failed (เรา record empty chunk แล้ว)
             if "_chunk_" not in task_id:
-                    from app.utils.storage_factory import get_storage
-                    storage = get_storage()
-                    task_data = storage.load_transcription(task_id, skip_migration=True) or {}
-                    task_data["status"] = "failed"
-                    task_data["error_message"] = str(e)
-                    task_data["current_stage"] = "failed"
-                    task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                    task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    storage.save_transcription(task_id, task_data)
-                else:
-                    from app.utils.storage_factory import get_storage
-                    json_storage = get_storage()
-                    task_data = json_storage.load_transcription(task_id) or {}
-                    task_data["status"] = "failed"
-                    task_data["error_message"] = str(e)
-                    task_data["current_stage"] = "failed"
-                    task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
-                    json_storage.save_transcription(task_id, task_data)
+                from app.utils.storage_factory import get_storage
+                storage = get_storage()
+                task_data = storage.load_transcription(task_id) or {}
+                task_data["status"] = "failed"
+                task_data["error_message"] = str(e)
+                task_data["current_stage"] = "failed"
+                task_data["current_stage_description"] = f"เกิดข้อผิดพลาด: {str(e)}"
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                storage.save_transcription(task_id, task_data)
                 # ส่ง failure callback (webhook + WebSocket)
                 loop = get_event_loop()
                 loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
@@ -1765,12 +1737,8 @@ def process_preprocess_job(
             task_data['phase_timings'] = {}
         task_data['phase_timings']['preprocess'] = phase_timings
         
-        # ใช้ storage ที่ถูกต้องตาม STORAGE_TYPE
-            from app.utils.storage_factory import get_storage
-            storage = get_storage()
-            storage.save_transcription(task_id, task_data)
-        else:
-            json_storage.save_transcription(task_id, task_data)
+        # บันทึกลง storage
+        storage.save_transcription(task_id, task_data)
         
         logger.info(f"✅ Aggregator job enqueued: {aggregator_job_id}")
         logger.info(f"✅ Preprocess job {task_id} completed")
@@ -2010,25 +1978,15 @@ def process_preprocess_job_chunk_group(
     except Exception as e:
         logger.error(f"❌ Chunk group preprocess job {task_id} failed: {e}", exc_info=True)
         try:
-                from app.utils.storage_factory import get_storage
-                storage = get_storage()
-                task_data = storage.load_transcription(task_id, skip_migration=True) or {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = str(e)
-                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                storage.save_transcription(task_id, task_data)
-            else:
-                from app.utils.storage_factory import get_storage
-                json_storage = get_storage()
-                task_data = {}
-                task_data["status"] = "failed"
-                task_data["error_message"] = str(e)
-                task_data["current_stage"] = "failed"
-                task_data["current_stage_description"] = str(e)
-                task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                json_storage.save_transcription(task_id, task_data)
+            from app.utils.storage_factory import get_storage
+            storage = get_storage()
+            task_data = storage.load_transcription(task_id) or {}
+            task_data["status"] = "failed"
+            task_data["error_message"] = str(e)
+            task_data["current_stage"] = "failed"
+            task_data["current_stage_description"] = str(e)
+            task_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            storage.save_transcription(task_id, task_data)
             loop = get_event_loop()
             loop.run_until_complete(_send_completion_callback(task_id, "failed", str(e)))
         except Exception as save_error:
