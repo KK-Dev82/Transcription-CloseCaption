@@ -43,19 +43,26 @@ def _get_all_tasks() -> List[Dict]:
 
 
 def _parse_datetime(dt_str: Any) -> Optional[datetime]:
-    """Parse datetime string to datetime object"""
+    """Parse datetime string to timezone-aware datetime object"""
+    from datetime import timezone as tz
     if isinstance(dt_str, datetime):
+        if dt_str.tzinfo is None:
+            return dt_str.replace(tzinfo=tz.utc)
         return dt_str
-    
+
     if isinstance(dt_str, str):
         try:
-            return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz.utc)
+            return dt
         except:
             try:
-                return datetime.strptime(dt_str.split('T')[0], "%Y-%m-%d")
+                dt = datetime.strptime(dt_str.split('T')[0], "%Y-%m-%d")
+                return dt.replace(tzinfo=tz.utc)
             except:
                 return None
-    
+
     return None
 
 
@@ -602,7 +609,8 @@ async def get_tasks_summary():
             language_counts[lang] = language_counts.get(lang, 0) + 1
         
         # Recent activity (last 24 hours)
-        cutoff_24h = datetime.now() - timedelta(hours=24)
+        from datetime import timezone
+        cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
         recent_tasks = [
             t for t in all_tasks
             if _parse_datetime(t.get("created_at")) and _parse_datetime(t.get("created_at")) >= cutoff_24h
