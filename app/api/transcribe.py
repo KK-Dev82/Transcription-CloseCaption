@@ -234,7 +234,12 @@ class TranscriptionRequest(BaseModel):
     use_chunking: bool = False
     callback_url: Optional[str] = None
     enable_diarization: Optional[bool] = None  # None = ใช้ ENABLE_DIARIZATION_DEFAULT
-    source: Optional[str] = None  # "video_record" = Record (+5), "fe_cc" = FE CC (รับได้ตลอด)
+    source: Optional[str] = None  # "backend_dispatch" | "video_record" | "fe_cc" | "upload"
+    # Backend context (ส่งมาจาก TranscriptionQueueDispatcher)
+    job_id: Optional[int] = None
+    meeting_id: Optional[str] = None
+    chapter_id: Optional[str] = None
+    file_name: Optional[str] = None
     # Chunk Group: หลายไฟล์ pre-chunked
     file_paths: Optional[List[str]] = None
     chunk_group: bool = False
@@ -371,10 +376,14 @@ async def start_transcription(request: TranscriptionRequest):
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "callback_url": request.callback_url,
                 "enable_diarization": enable_diarization,
-                "source": "video_record" if request.source == "video_record" else "upload",
+                "source": request.source or "upload",
+                "job_id": request.job_id,
+                "meeting_id": request.meeting_id,
+                "chapter_id": request.chapter_id,
+                "file_name": request.file_name or (os.path.basename(request.file_paths[0]) if request.file_paths else None),
             }
             storage.save_transcription(task_id, task_dict)
-            
+
             from app.services.redis_queue_service import get_redis_queue_service, QueueFullError
             queue_service = get_redis_queue_service()
             source = request.source if request.source == 'video_record' else None
@@ -512,7 +521,11 @@ async def start_transcription(request: TranscriptionRequest):
             "created_at": task.created_at.isoformat(),
             "callback_url": request.callback_url,
             "enable_diarization": enable_diarization,
-            "source": "video_record" if request.source == "video_record" else "upload",
+            "source": request.source or "upload",
+            "job_id": request.job_id,
+            "meeting_id": request.meeting_id,
+            "chapter_id": request.chapter_id,
+            "file_name": request.file_name or (os.path.basename(file_path) if file_path else None),
         }
         storage.save_transcription(task_id, task_dict)
         
