@@ -504,10 +504,18 @@ def process_transcription_job(
     Returns:
         Transcription result dictionary
     """
+    # Fix: fallback model_size ที่ไม่ใช่ standard name เป็น env WHISPER_MODEL
+    _standard = {"tiny", "base", "small", "medium", "large", "large-v1", "large-v2", "large-v3", "turbo", "large-v3-turbo"}
+    if model_size and model_size.lower() not in _standard and not model_size.startswith("models--") and "/" not in model_size:
+        from app.services.close_caption_config import get_transcription_model_display
+        original = model_size
+        model_size = get_transcription_model_display()
+        logger.info(f"🔄 Model override: '{original}' → '{model_size}' (from env)")
+
     logger.info(f"🚀 RQ Worker: Starting transcription job {task_id}")
     logger.info(f"   File: {file_path}")
     logger.info(f"   Model: {model_size}, Language: {language}, Chunk: {chunk_duration}s")
-    
+
     try:
         # ใช้ persistent service (ไม่ init ใหม่)
         transcription_service = get_transcription_service()
