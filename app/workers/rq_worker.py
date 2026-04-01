@@ -1170,17 +1170,22 @@ def process_transcription_job(
             task_data['phase_timings']['aggregator'] = phase_timings
 
             # บันทึกกลับไป storage
+            logger.info(f"💾 Saving completed task {main_task_id} to storage...")
             storage.save_transcription(main_task_id, task_data)
-            
+            logger.info(f"💾 Saved. Now sending completion callback...")
+
             # ส่ง completion callback (webhook + WebSocket)
-            # ใช้ event loop ใหม่เพื่อหลีกเลี่ยง "Invalid file descriptor" จาก loop เก่าที่เสีย
             import asyncio
             try:
                 _loop = asyncio.new_event_loop()
+                logger.info(f"📡 Calling _send_completion_callback for {main_task_id}...")
                 _loop.run_until_complete(_send_completion_callback(main_task_id, "completed"))
                 _loop.close()
+                logger.info(f"📡 Completion callback sent successfully for {main_task_id}")
             except Exception as cb_err:
-                logger.warning(f"⚠️ Completion callback error: {cb_err}")
+                logger.warning(f"⚠️ Completion callback error for {main_task_id}: {cb_err}")
+                import traceback
+                logger.warning(traceback.format_exc())
             
             # FIX: ลบ merged_result หลังบันทึกแล้ว เพื่อลด memory
             # (ไม่ต้องลบ segments เพราะไม่ได้เก็บใน memory แล้ว)
