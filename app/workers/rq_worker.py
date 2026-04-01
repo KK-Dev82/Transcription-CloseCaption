@@ -1173,9 +1173,14 @@ def process_transcription_job(
             storage.save_transcription(main_task_id, task_data)
             
             # ส่ง completion callback (webhook + WebSocket)
-            # _send_completion_callback จะส่งทั้ง WebSocket notification และ webhook callback
-            loop = get_event_loop()
-            loop.run_until_complete(_send_completion_callback(main_task_id, "completed"))
+            # ใช้ event loop ใหม่เพื่อหลีกเลี่ยง "Invalid file descriptor" จาก loop เก่าที่เสีย
+            import asyncio
+            try:
+                _loop = asyncio.new_event_loop()
+                _loop.run_until_complete(_send_completion_callback(main_task_id, "completed"))
+                _loop.close()
+            except Exception as cb_err:
+                logger.warning(f"⚠️ Completion callback error: {cb_err}")
             
             # FIX: ลบ merged_result หลังบันทึกแล้ว เพื่อลด memory
             # (ไม่ต้องลบ segments เพราะไม่ได้เก็บใน memory แล้ว)
