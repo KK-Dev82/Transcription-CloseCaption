@@ -417,6 +417,7 @@ class TranscriptionService:
         try:
             # เตรียม payload (ให้ตรงกับข้อมูลที่ Backend ต้องการ)
             payload = {
+                "job_id": getattr(task, 'job_id', None),
                 "task_id": task.task_id,
                 "status": status,
                 "progress": getattr(task, 'progress', 100 if status == "completed" else 0),

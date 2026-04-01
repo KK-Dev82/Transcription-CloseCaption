@@ -1205,6 +1205,7 @@ def process_transcription_job(
                         logger.warning(f"⚠️ Failed to load segments: {seg_err}")
 
                     payload = {
+                        "job_id": task_data.get("job_id"),
                         "task_id": main_task_id,
                         "status": "completed",
                         "progress": 100,
