@@ -301,35 +301,58 @@ class PostgresStorage:
                 if confidences:
                     avg_confidence = sum(confidences) / len(confidences)
 
-                # UPSERT TranscriptionResults
-                conn.execute(
-                    text('''
-                        INSERT INTO "TranscriptionResults" (
-                            "TranscriptionJobId", "FullText", "SegmentsJson",
-                            "AudioDurationSeconds", "WordCount", "AverageConfidence",
-                            "CreatedAt"
-                        ) VALUES (
-                            :job_id, :full_text, :segments_json::jsonb,
-                            :audio_duration, :word_count, :avg_confidence,
-                            :created_at
+                # UPSERT TranscriptionResults — ใช้ check exists ก่อนเพื่อหลีกเลี่ยง constraint errors
+                try:
+                    existing_result = conn.execute(
+                        text('SELECT "Id" FROM "TranscriptionResults" WHERE "TranscriptionJobId" = :job_id'),
+                        {"job_id": job_id}
+                    ).fetchone()
+
+                    if existing_result:
+                        conn.execute(
+                            text('''
+                                UPDATE "TranscriptionResults" SET
+                                    "FullText" = :full_text,
+                                    "SegmentsJson" = :segments_json::jsonb,
+                                    "AudioDurationSeconds" = :audio_duration,
+                                    "WordCount" = :word_count,
+                                    "AverageConfidence" = :avg_confidence
+                                WHERE "TranscriptionJobId" = :job_id
+                            '''),
+                            {
+                                "job_id": job_id,
+                                "full_text": full_text,
+                                "segments_json": segments_json,
+                                "audio_duration": transcription_data.get("total_duration"),
+                                "word_count": word_count,
+                                "avg_confidence": avg_confidence,
+                            }
                         )
-                        ON CONFLICT ("TranscriptionJobId") DO UPDATE SET
-                            "FullText" = EXCLUDED."FullText",
-                            "SegmentsJson" = EXCLUDED."SegmentsJson",
-                            "AudioDurationSeconds" = EXCLUDED."AudioDurationSeconds",
-                            "WordCount" = EXCLUDED."WordCount",
-                            "AverageConfidence" = EXCLUDED."AverageConfidence"
-                    '''),
-                    {
-                        "job_id": job_id,
-                        "full_text": full_text,
-                        "segments_json": segments_json,
-                        "audio_duration": transcription_data.get("total_duration"),
-                        "word_count": word_count,
-                        "avg_confidence": avg_confidence,
-                        "created_at": now_utc,
-                    }
-                )
+                    else:
+                        conn.execute(
+                            text('''
+                                INSERT INTO "TranscriptionResults" (
+                                    "TranscriptionJobId", "FullText", "SegmentsJson",
+                                    "AudioDurationSeconds", "WordCount", "AverageConfidence",
+                                    "CreatedAt"
+                                ) VALUES (
+                                    :job_id, :full_text, :segments_json::jsonb,
+                                    :audio_duration, :word_count, :avg_confidence,
+                                    :created_at
+                                )
+                            '''),
+                            {
+                                "job_id": job_id,
+                                "full_text": full_text,
+                                "segments_json": segments_json,
+                                "audio_duration": transcription_data.get("total_duration"),
+                                "word_count": word_count,
+                                "avg_confidence": avg_confidence,
+                                "created_at": now_utc,
+                            }
+                        )
+                except Exception as result_err:
+                    logger.warning(f"PostgresStorage: Failed to save TranscriptionResult for job {job_id}: {result_err}")
 
             conn.commit()
 
