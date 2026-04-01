@@ -432,21 +432,27 @@ class TranscriptionService:
             
             # เพิ่มข้อมูลตาม status
             if status == "completed":
+                full_text = getattr(task, 'full_text', '') or ''
+                chunks_list = getattr(task, 'chunks', None) or []
+                chunks_serialized = []
+                if chunks_list:
+                    try:
+                        chunks_serialized = [chunk.dict() if hasattr(chunk, 'dict') else chunk for chunk in chunks_list]
+                    except:
+                        pass
                 payload.update({
-                    "full_text": getattr(task, 'full_text', ''),
-                    "chunks_count": len(getattr(task, 'chunks', None) or []),
+                    "full_text": full_text,
+                    "text": full_text,  # webhook/completed ใช้ field "text"
+                    "chunks": chunks_serialized,
+                    "segments": chunks_serialized,  # webhook/completed ใช้ field "segments"
+                    "chunks_count": len(chunks_serialized),
                     "total_duration": getattr(task, 'total_duration', 0),
+                    "audioDuration": getattr(task, 'total_duration', 0),  # webhook/completed field
+                    "wordCount": len(full_text.split()) if full_text else 0,
                     "error_message": None,
                     "current_stage": None,
                     "current_stage_description": None,
                 })
-                # เพิ่ม chunks ถ้ามี
-                if hasattr(task, 'chunks') and task.chunks:
-                    try:
-                        chunks = [chunk.dict() if hasattr(chunk, 'dict') else chunk for chunk in task.chunks]
-                        payload["chunks"] = chunks
-                    except:
-                        pass
             elif status == "failed":
                 payload.update({
                     "full_text": getattr(task, 'full_text', ''),
