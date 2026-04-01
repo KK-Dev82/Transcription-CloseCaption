@@ -434,7 +434,7 @@ class TranscriptionService:
             if status == "completed":
                 payload.update({
                     "full_text": getattr(task, 'full_text', ''),
-                    "chunks_count": len(getattr(task, 'chunks', [])),
+                    "chunks_count": len(getattr(task, 'chunks', None) or []),
                     "total_duration": getattr(task, 'total_duration', 0),
                     "error_message": None,
                     "current_stage": None,

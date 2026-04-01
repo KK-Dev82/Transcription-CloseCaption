@@ -431,8 +431,27 @@ async def _send_completion_callback(task_id: str, status: str = "completed", err
                 # สร้าง TranscriptionResponse object สำหรับ _send_callback
                 from app.services.close_caption_config import get_transcription_model_display
                 model_size_val = task_data.get("model_size") or get_transcription_model_display()
-                # ดึง chunks จาก task_data (อาจอยู่ใน "chunks" หรือ "segments")
+                # ดึง chunks จาก task_data หรือ SQLite segments table
                 chunks_data = task_data.get("chunks") or task_data.get("segments") or []
+                # ถ้า chunks ว่าง → ลองดึงจาก SQLite segments table
+                if not chunks_data:
+                    try:
+                        import sqlite3
+                        _db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+                        _conn = sqlite3.connect(_db_path)
+                        _rows = _conn.execute(
+                            "SELECT start_time, end_time, text, confidence FROM segments WHERE task_id = ? ORDER BY idx",
+                            (task_id,)
+                        ).fetchall()
+                        if _rows:
+                            chunks_data = [
+                                {"start_time": float(r[0] or 0), "end_time": float(r[1] or 0), "text": r[2] or "", **({"confidence": float(r[3])} if r[3] is not None else {})}
+                                for r in _rows
+                            ]
+                            logger.info(f"📦 Loaded {len(chunks_data)} segments from SQLite segments table for callback")
+                        _conn.close()
+                    except Exception as seg_err:
+                        logger.warning(f"⚠️ Failed to load segments from SQLite: {seg_err}")
                 # แปลงเป็น TranscriptionChunk objects ถ้าจำเป็น
                 from app.models.transcription import TranscriptionChunk
                 parsed_chunks = []
