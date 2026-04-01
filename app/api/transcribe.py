@@ -341,7 +341,9 @@ async def start_transcription(request: TranscriptionRequest):
             
             from app.services.close_caption_config import get_transcription_model_display
             _raw = (request.model_size or "").strip().lower()
-            if _raw in ("", "default", "base"):
+            # ใช้ env WHISPER_MODEL ถ้า model_size ว่าง, เป็น default/base, หรือเป็น display name ที่ Faster-Whisper ไม่รู้จัก
+            _standard_models = {"tiny", "base", "small", "medium", "large", "large-v1", "large-v2", "large-v3", "turbo", "large-v3-turbo"}
+            if _raw in ("", "default", "base") or (_raw and not _raw.startswith("models--") and "/" not in _raw and _raw not in _standard_models):
                 model_size = get_transcription_model_display()
             else:
                 model_size = request.model_size
