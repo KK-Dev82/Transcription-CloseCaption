@@ -1174,18 +1174,65 @@ def process_transcription_job(
             storage.save_transcription(main_task_id, task_data)
             logger.info(f"💾 Saved. Now sending completion callback...")
 
-            # ส่ง completion callback (webhook + WebSocket)
-            import asyncio
+            # ส่ง webhook callback แบบ synchronous (ไม่ใช้ async event loop ที่มีปัญหา)
             try:
-                _loop = asyncio.new_event_loop()
-                logger.info(f"📡 Calling _send_completion_callback for {main_task_id}...")
-                _loop.run_until_complete(_send_completion_callback(main_task_id, "completed"))
-                _loop.close()
-                logger.info(f"📡 Completion callback sent successfully for {main_task_id}")
+                callback_url = task_data.get("callback_url")
+                if callback_url:
+                    import json as _json
+                    from urllib.request import Request, urlopen
+                    from urllib.error import HTTPError
+
+                    full_text = task_data.get("full_text", "") or ""
+
+                    # ดึง segments จาก SQLite segments table
+                    chunks_data = []
+                    try:
+                        import sqlite3
+                        _db_path = os.getenv("SQLITE_DB_PATH", "storage/database.db")
+                        _conn = sqlite3.connect(_db_path)
+                        _rows = _conn.execute(
+                            "SELECT start_time, end_time, text, confidence FROM segments WHERE task_id = ? ORDER BY idx",
+                            (main_task_id,)
+                        ).fetchall()
+                        if _rows:
+                            chunks_data = [
+                                {"start_time": float(r[0] or 0), "end_time": float(r[1] or 0), "text": r[2] or "", **({"confidence": float(r[3])} if r[3] is not None else {})}
+                                for r in _rows
+                            ]
+                        _conn.close()
+                        logger.info(f"📦 Loaded {len(chunks_data)} segments from SQLite for webhook")
+                    except Exception as seg_err:
+                        logger.warning(f"⚠️ Failed to load segments: {seg_err}")
+
+                    payload = {
+                        "task_id": main_task_id,
+                        "status": "completed",
+                        "progress": 100,
+                        "full_text": full_text,
+                        "text": full_text,
+                        "chunks": chunks_data,
+                        "segments": chunks_data,
+                        "total_duration": task_data.get("total_duration", 0),
+                        "language": task_data.get("language", "th"),
+                        "wordCount": len(full_text.split()) if full_text else 0,
+                        "audioDuration": task_data.get("total_duration", 0),
+                    }
+
+                    req = Request(
+                        callback_url,
+                        data=_json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    resp = urlopen(req, timeout=30)
+                    resp_body = resp.read().decode()
+                    logger.info(f"📡 Webhook sent: {resp.status} {resp_body[:200]}")
+                else:
+                    logger.info(f"📡 No callback_url — skipping webhook")
+            except HTTPError as http_err:
+                logger.warning(f"⚠️ Webhook HTTP error: {http_err.code} {http_err.read().decode()[:200]}")
             except Exception as cb_err:
-                logger.warning(f"⚠️ Completion callback error for {main_task_id}: {cb_err}")
-                import traceback
-                logger.warning(traceback.format_exc())
+                logger.warning(f"⚠️ Webhook error: {cb_err}")
             
             # FIX: ลบ merged_result หลังบันทึกแล้ว เพื่อลด memory
             # (ไม่ต้องลบ segments เพราะไม่ได้เก็บใน memory แล้ว)
