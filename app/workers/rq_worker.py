@@ -843,7 +843,7 @@ def process_transcription_job(
                 stage="transcribing",
                 stage_description=f"กำลังแปลงเสียงเป็นข้อความ (0/{total_chunks} ส่วนเสร็จ)",
                 stage_progress=0,
-                json_storage=json_storage
+                
             )
             
             # รอ chunks เสร็จด้วย atomic counter (ไม่ polling jobs)
@@ -867,7 +867,7 @@ def process_transcription_job(
                         stage="transcribing",
                         stage_description=f"กำลังแปลงเสียงเป็นข้อความ ({done_count}/{total_chunks} ส่วนเสร็จ)",
                         stage_progress=int((done_count / total_chunks) * 100),
-                        json_storage=json_storage
+                        
                     )
                     last_progress_update = current_progress
                 
@@ -895,7 +895,7 @@ def process_transcription_job(
                 stage="merging",
                 stage_description="กำลังรวมผลลัพธ์",
                 stage_progress=0,
-                json_storage=json_storage
+                
             )
             
             # FIX: Streaming Merge to SQLite - ไม่เก็บ segments ใน memory
