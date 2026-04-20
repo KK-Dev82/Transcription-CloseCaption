@@ -458,19 +458,15 @@ class SQLiteStorage:
         return task_id
     
     def _notify_websocket_sync(self, task_id: str, task_data: dict, is_new_task: bool):
-        """Helper method สำหรับส่ง WebSocket notification (sync wrapper)"""
+        """Helper method สำหรับส่ง WebSocket notification (sync wrapper)
+
+        ทำงานใน background thread ที่ spawn ใหม่ทุกครั้ง (ดู _notify_websocket_sync caller)
+        → ใช้ asyncio.run() เพื่อสร้าง event loop ที่ถูกปิดอัตโนมัติเมื่อจบ
+        ป้องกัน fd leak (eventfd / eventpoll / pipes) จาก loop ที่ไม่ได้ close
+        """
         try:
             import asyncio
-            
-            # สร้าง event loop ใหม่สำหรับ thread นี้
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # รัน async function
-            loop.run_until_complete(self._notify_websocket(task_id, task_data, is_new_task))
+            asyncio.run(self._notify_websocket(task_id, task_data, is_new_task))
         except Exception as e:
             logger.debug(f"WebSocket notification error: {e}")
     

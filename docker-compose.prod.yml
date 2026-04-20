@@ -36,6 +36,12 @@ services:
       # Environment config (ยังเก็บไว้สำหรับ start-pod.sh source)
       - ./.env.runpod:/workspace/transcription-service/.env.runpod:ro
     restart: unless-stopped
+    # แก้ "Too many open files" — aiohttp/RQ workers เปิด socket จำนวนมาก
+    # default = 1024 ไม่พอเมื่อ download/process audio พร้อมกันหลาย job
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     depends_on:
       - redis
     healthcheck:
