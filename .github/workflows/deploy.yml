@@ -6,7 +6,7 @@
 #   ACR_USERNAME  → ACR admin username
 #   ACR_PASSWORD  → ACR admin password
 #
-# Version bump: แก้ค่า VERSION ด้านล่าง แล้ว push เข้า production branch
+# Version bump: แก้ค่า IMAGE_VERSION ด้านล่าง แล้ว push เข้า production branch
 
 name: Build & Push to ACR — Transcription
 
@@ -18,7 +18,7 @@ on:
 env:
   ACR_REGISTRY: kksenateacr.azurecr.io
   IMAGE_NAME: kk-transcription
-  VERSION: v1.1.0
+  IMAGE_VERSION: v1.1.0
 
 jobs:
   build-and-push:
@@ -44,7 +44,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_VERSION }}
             ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -53,7 +53,7 @@ jobs:
       - name: Summary
         run: |
           echo "### Image pushed" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.IMAGE_NAME }}:${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.IMAGE_NAME }}:${{ env.IMAGE_VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Pull: \`docker pull ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
