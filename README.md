@@ -8,7 +8,7 @@
 
 | Environment | Server | Image | Update |
 |---|---|---|---|
-| Staging | 10.200.22.64 (2x RTX PRO 4000) | kk-transcription:latest | CI/CD auto build → manual pull |
+| Production | 10.200.22.64 (2x RTX PRO 4000) | kk-transcription:latest | CI/CD auto build → manual pull |
 | Development | RunPod Cloud | - | git pull + pip install |
 
 ### Docker Images
@@ -16,7 +16,7 @@
 | Image | ขนาด | Build เมื่อ |
 |---|---|---|
 | `kk-base:ubuntu2404-cuda128-torch280` | 10.8 GB | Dependencies เปลี่ยน (นานๆ ครั้ง) |
-| `kk-transcription:release-v1.0.0` | ~3 MB | Code เปลี่ยน (CI/CD auto) |
+| `kk-transcription:v1.1.0` | ~3 MB | Code เปลี่ยน (CI/CD auto) |
 
 ดูรายละเอียด Build/Push/Deploy: [DEPLOYMENT.md](DEPLOYMENT.md)
 
@@ -106,7 +106,7 @@ transcription-close-caption-service/
 ├── .env.runpod                       # Environment config
 ├── requirements.txt                  # Python dependencies
 ├── .github/workflows/                # CI/CD
-│   └── build-push-acr.yml
+│   └── deploy.yml
 ├── DEPLOYMENT.md                # Build/Push/Deploy guide
 └── README.md
 ```
@@ -116,7 +116,7 @@ transcription-close-caption-service/
 ## Environment Config (.env.runpod)
 
 ```bash
-ENVIRONMENT=runpod
+ENVIRONMENT=production
 STORAGE_TYPE=sqlite
 SQLITE_DB_PATH=/workspace/transcription-service/storage/database.db
 
@@ -191,4 +191,4 @@ pip install -r requirements.txt && \
 
 ---
 
-Last Updated: 2026-03-28
+Last Updated: 2026-05-14

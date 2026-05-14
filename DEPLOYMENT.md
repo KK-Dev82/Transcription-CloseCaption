@@ -5,7 +5,7 @@
 ```
 ACR (kksenateacr.azurecr.io)
 ├── kk-base:ubuntu2404-cuda128-torch280    10.8 GB  (OS + CUDA + dependencies)
-└── kk-transcription:release-v1.0.0       ~3 MB    (application code only)
+└── kk-transcription:v1.1.0                ~3 MB    (application code only)
 
 Server /deploy
 ├── docker-compose.yml
@@ -64,7 +64,7 @@ Build ~20-40 นาที (QEMU emulation บน Mac)
 
 ### CI/CD: Push to `production` branch -> Auto build + push
 
-Workflow: `.github/workflows/build-push-acr.yml`
+Workflow: `.github/workflows/deploy.yml`
 
 ```
 git push production → GitHub Actions → build kk-transcription → push ACR
@@ -73,27 +73,43 @@ git push production → GitHub Actions → build kk-transcription → push ACR
 
 #### Setup GitHub Secrets
 
+ต้องตั้ง 2 secrets ใน GitHub repo (Settings → Secrets and variables → Actions):
+
+| Secret | ค่า |
+|---|---|
+| `ACR_USERNAME` | ACR admin username (จาก Azure portal → Container Registry → Access keys) |
+| `ACR_PASSWORD` | ACR admin password |
+
+ดึงค่า admin credentials ผ่าน CLI:
+
 ```bash
-# สร้าง Service Principal
-az ad sp create-for-rbac \
-  --name "github-actions-transcription" \
-  --role contributor \
-  --scopes /subscriptions/<subscription-id>/resourceGroups/<resource-group> \
-  --json-auth
+az acr credential show --name kksenateacr
 ```
 
-เพิ่ม JSON output เป็น secret `AZURE_CREDENTIALS` ใน GitHub repo Settings → Secrets → Actions
+> หมายเหตุ: workflow ใช้ ACR admin user trực ตรง — ไม่ได้ใช้ Service Principal
+
+### Version Bump
+
+Image tag ผูกอยู่กับตัวแปร `IMAGE_VERSION` ใน workflow — ต้องแก้ค่าเองทุกครั้งที่จะ release version ใหม่:
+
+```yaml
+# .github/workflows/deploy.yml
+env:
+  IMAGE_VERSION: v1.1.0   # ← bump ค่านี้แล้ว push เข้า production
+```
+
+ถ้าไม่ bump → tag เดิมจะถูก overwrite (rollback ไม่ได้)
 
 ### Manual Build (ทางเลือก)
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  -t kksenateacr.azurecr.io/kk-transcription:release-v1.0.0 \
+  -t kksenateacr.azurecr.io/kk-transcription:v1.1.0 \
   -t kksenateacr.azurecr.io/kk-transcription:latest \
   --load .
 
 az acr login --name kksenateacr
-docker push kksenateacr.azurecr.io/kk-transcription:release-v1.0.0
+docker push kksenateacr.azurecr.io/kk-transcription:v1.1.0
 docker push kksenateacr.azurecr.io/kk-transcription:latest
 ```
 
@@ -153,10 +169,13 @@ docker compose up -d
 
 ```bash
 # แก้ docker-compose.yml → เปลี่ยน tag กลับ version เดิม
-# image: kksenateacr.azurecr.io/kk-transcription:release-v1.0.0
+# image: kksenateacr.azurecr.io/kk-transcription:v1.0.0
 docker compose pull transcription
 docker compose up -d
 ```
+
+> ⚠️ Rollback จะใช้ได้เฉพาะ version ที่เคย bump `IMAGE_VERSION` ใน workflow แล้ว push เท่านั้น —
+> ถ้าหลาย commit ใช้ tag `v1.1.0` ทับกัน จะ rollback กลับไป commit ก่อนหน้าไม่ได้
 
 ---
 
