@@ -20,7 +20,7 @@ services:
   # Transcription Service (API + Whisper + RQ Workers)
   # ============================================================================
   transcription:
-    image: kksenateacr.azurecr.io/kk-transcription:latest
+    image: kksenateacr.azurecr.io/kk-transcription:v1.1.0
     container_name: transcription-service
     ports:
       - "8010:8010"
